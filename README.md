@@ -1,32 +1,58 @@
-# Fluxo Royale ERP — React (Vite)
+# Fluxo Royale 5.0 — Frontend
 
-Sistema ERP multi-módulo do Fluxo Royale, empacotado como um projeto **React + Vite** rodável.
+Interface web do ERP **Fluxo Royale 5.0** — multi-módulo: Estoque, Produção, Produção 3D,
+RH, Compras, Assistência Técnica e Financeiro. Empacotado como **React + Vite** e consome a
+API do [Fluxo5.0-Backend](https://github.com/Corrar/Fluxo5.0-Backend).
 
-## Como rodar
+## Stack
+- **React 18**
+- **Vite 5** (dev server + build)
+- **Axios** (HTTP) e **Socket.IO client** (tempo real)
+- UI própria: componentes com estilos inline (arquitetura window-globals; sem framework CSS)
 
-Requer **Node.js 18+**.
+## Pré-requisitos
+- **Node.js 18+** e npm
+- O **backend rodando** (por padrão em `http://localhost:3000`) — sem ele o login não conecta
 
-```bash
-cd fluxo-royale-react
-npm install
-npm run dev      # abre http://localhost:5173
-```
+## Setup
+1. Clone e entre na pasta:
+   ```bash
+   git clone https://github.com/Corrar/Fluxo5.0-Front.git
+   cd Fluxo5.0-Front
+   ```
+2. Instale as dependências:
+   ```bash
+   npm install
+   ```
+3. Aponte para a API criando **`.env.local`** na raiz:
+   ```env
+   VITE_API_URL=http://localhost:3000
+   ```
+   > `.env.local` é **gitignored** (via `*.local`) — não vai para o repositório.
+   > `VITE_API_URL` não é segredo, mas fica fora do versionamento. Se omitido, o app usa
+   > o fallback `http://localhost:3000` quando aberto em `localhost`.
+4. Rode em desenvolvimento:
+   ```bash
+   npm run dev      # http://localhost:5173
+   ```
 
 Build de produção:
-
 ```bash
 npm run build    # gera ./dist
 npm run preview  # serve o build para conferência
 ```
 
-## Login (dados de exemplo)
+> ⚠️ Garanta que o **backend esteja rodando na porta 3000** (ou ajuste `VITE_API_URL`)
+> **antes de fazer login** — caso contrário as requisições de login/dados falham.
 
-O sistema abre com uma animação, depois a tela de login e o seletor de módulos.
-Use as contas de exemplo listadas no próprio dropdown da tela de login (atalho "contas
-demo"). Cada usuário enxerga apenas os módulos a que tem acesso.
+## Scripts
+| Comando | O que faz |
+|---|---|
+| `npm run dev` | Vite dev server (porta **5173**) |
+| `npm run build` | Build de produção em `dist/` |
+| `npm run preview` | Serve localmente o build de produção |
 
 ## Estrutura
-
 ```
 fluxo-royale-react/
 ├─ index.html            # shell: fontes, CSS global, window.__asset, #root
@@ -37,6 +63,7 @@ fluxo-royale-react/
 └─ src/
    ├─ globals.js         # injeta window.React / window.ReactDOM (1º import)
    ├─ image-slot.js      # web component <image-slot>
+   ├─ lib/               # api.js (axios/FRApi), auth.js (FRAuth), socket.js, adapters, products…
    ├─ main.jsx           # ponto de entrada — importa os parts na ordem
    └─ parts/             # todos os componentes/telas (.jsx)
 ```
@@ -51,10 +78,12 @@ Para manter a conversão **segura e fiel**, o padrão original foi preservado:
   (ui.jsx). Utilitários de tema vêm do `sidebar.jsx` (`window.frTokens`, `window.frHexToRgba`).
 - Os demais arquivos **referenciam esses símbolos como variáveis globais** (ex.: `<Icon .../>`,
   `frTokens(...)`), resolvidos via `window`.
-- Por isso `src/main.jsx` importa os parts **em ordem** (utilitários → telas → `app.jsx`).
-  `app.jsx` é o último: ele monta a raiz com `ReactDOM.createRoot`.
+- Por isso `src/main.jsx` importa os parts **em ordem** (utilitários → integração → telas →
+  `app.jsx`). `app.jsx` é o último: ele monta a raiz com `ReactDOM.createRoot`.
 - `src/globals.js` é o **primeiro** import e define `window.React`/`window.ReactDOM`
   antes dos parts (imports ESM são avaliados em ordem).
+- A camada de integração fica em `src/lib/`: `api.js` expõe `window.FRApi` (axios com Bearer
+  e tratamento de 401) e `auth.js` expõe `window.FRAuth` (login/logout reais via `POST /auth/login`).
 
 ### Se você quiser modernizar para `import`/`export` idiomáticos
 
@@ -74,17 +103,8 @@ Imagens/vídeo ficam em `public/assets/`. No código são referenciados por
 (o Vite serve `public/` na raiz). Para adicionar um asset novo: solte o arquivo em
 `public/assets/` e use `window.__asset('assets/<nome>')` no `src`.
 
-## Observações
-
-- **O build não foi executado no ambiente onde este pacote foi gerado.** A conversão
-  preserva 1:1 o runtime do protótipo (mesmos arquivos, mesma ordem, mesmo
-  compartilhamento via `window`), mas rode `npm install && npm run dev` e confira o
-  console na primeira execução.
-- O `@vitejs/plugin-react` usa o *automatic JSX runtime*, então o JSX é transpilado
-  sem precisar de `import React` em cada arquivo — mas as chamadas explícitas
-  (`React.useState`, `React.useRef`) usam o `window.React` do `globals.js`.
-- Persistência de sessão/estado usa `localStorage` (chave `fr_session_v1`).
-- Pendência conhecida: havia um pedido para trocar a fonte do login para **Inter**
-  (não aplicado — a conversão para React foi priorizada). Para aplicar: adicione a
-  família Inter no `<link>` de fontes do `index.html` e ajuste a `fontFamily` em
-  `src/parts/auth.jsx`.
+## Notas
+- O `@vitejs/plugin-react` usa o *automatic JSX runtime*, então o JSX é transpilado sem
+  precisar de `import React` em cada arquivo — mas as chamadas explícitas (`React.useState`,
+  `React.useRef`) usam o `window.React` definido em `globals.js`.
+- Sessão e navegação persistem em `localStorage` (token/perfil da sessão, módulo e página ativos).
