@@ -64,6 +64,31 @@ function PageConferencia({ t, setActive }) {
   // Captura global do leitor Elgin (keyboard-wedge): o aparelho digita o código
   // em rajada e finaliza com Enter. Detectamos a rajada mesmo sem o campo focado.
   const wedge = useRefCf({ buf: '', last: 0 });
+
+  // Ordens aprovadas aguardando conferência (status a-separar), com bipado derivado do estado local.
+  const pend = solic.filter((o) => o.status === 'a-separar' && o.tipo !== 'devolucao')
+    .map((o) => ({ ...o, itens: o.itens.map((it, idx) => {
+      const b = biped[o.id + ':' + idx];
+      const confQtd = b ? b.qtd : '';
+      const nq = parseInt(confQtd);
+      const parcial = b && confQtd !== '' && nq < it.qtd;
+      const completo = !!b && confQtd !== '' && nq >= 1 && (nq >= it.qtd || (b.just || '').trim().length > 0);
+      return { ...it, bipado: !!b, confQtd, just: b ? b.just : '', parcial, completo, key: o.id + ':' + idx };
+    }) }));
+
+  const codeMap = useMemoCf(() => {
+    const m = {};
+    pend.forEach((o) => o.itens.forEach((it, idx) => { m[cfItemCode(o.req, idx)] = { orderId: o.id, idx }; }));
+    return m;
+  }, [solic, biped]);
+
+  // mapa de etiquetas de solicitação (volume) → bipar primeiro para escolher a solicitação
+  const reqMap = useMemoCf(() => {
+    const m = {};
+    pend.forEach((o) => { m[String(o.req).toUpperCase()] = o.id; });
+    return m;
+  }, [solic]);
+
   useEffectCf(() => {
     const onKey = (e) => {
       const el = e.target;
@@ -85,33 +110,10 @@ function PageConferencia({ t, setActive }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [codeMap, reqMap, activeId]);
 
-  // Ordens aprovadas aguardando conferência (status a-separar), com bipado derivado do estado local.
-  const pend = solic.filter((o) => o.status === 'a-separar' && o.tipo !== 'devolucao')
-    .map((o) => ({ ...o, itens: o.itens.map((it, idx) => {
-      const b = biped[o.id + ':' + idx];
-      const confQtd = b ? b.qtd : '';
-      const nq = parseInt(confQtd);
-      const parcial = b && confQtd !== '' && nq < it.qtd;
-      const completo = !!b && confQtd !== '' && nq >= 1 && (nq >= it.qtd || (b.just || '').trim().length > 0);
-      return { ...it, bipado: !!b, confQtd, just: b ? b.just : '', parcial, completo, key: o.id + ':' + idx };
-    }) }));
   const enviadas = solic.filter((o) => o.status === 'em-transito' || o.status === 'concluido');
 
   const setConfQtd = (key, v) => setBiped((b) => ({ ...b, [key]: { ...(b[key] || { just: '' }), qtd: v.replace(/[^0-9]/g, '') } }));
   const setJustB = (key, v) => setBiped((b) => ({ ...b, [key]: { ...(b[key] || { qtd: '' }), just: v } }));
-
-  const codeMap = useMemoCf(() => {
-    const m = {};
-    pend.forEach((o) => o.itens.forEach((it, idx) => { m[cfItemCode(o.req, idx)] = { orderId: o.id, idx }; }));
-    return m;
-  }, [solic, biped]);
-
-  // mapa de etiquetas de solicitação (volume) → bipar primeiro para escolher a solicitação
-  const reqMap = useMemoCf(() => {
-    const m = {};
-    pend.forEach((o) => { m[String(o.req).toUpperCase()] = o.id; });
-    return m;
-  }, [solic]);
 
   const doFlash = (type, msg) => {
     setFlash({ type, msg });

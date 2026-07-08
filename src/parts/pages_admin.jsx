@@ -647,7 +647,33 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
   const [h1, h2] = SOL_HEAD[m.kind];
   const pending = s.status === 'em-analise';
   const av = s.sol.split(' ').map((x) => x[0]).slice(0, 2).join('');
-  const totalUn = s.itens.reduce((a, it) => a + it.qtd, 0);
+  // qtd pedida robusta: dados reais usam qtdPedida; mock/'mine' ainda usam qtd.
+  const pedidaOf = (it) => (it.qtdPedida != null ? it.qtdPedida : it.qtd) || 0;
+  const canConfer = !mine && pending;   // fluxo do almoxarife: confere qtd por item + recusa com motivo
+  const [conf, setConf] = useStateA(() => { const m = {}; s.itens.forEach((it, i) => { m[it.id != null ? it.id : i] = String(pedidaOf(it)); }); return m; });
+  const [motivo, setMotivo] = useStateA('');
+  const [rejectOpen, setRejectOpen] = useStateA(false);
+  const [enviando, setEnviando] = useStateA(false);
+  const [erro, setErro] = useStateA('');
+  const confRaw = (it, i) => { const k = it.id != null ? it.id : i; return conf[k] != null ? conf[k] : String(pedidaOf(it)); };
+  const setConfVal = (it, i) => (raw) => { const k = it.id != null ? it.id : i; const max = pedidaOf(it); const n = parseInt(String(raw).replace(/\D/g, ''), 10); const v = isNaN(n) ? 0 : Math.max(0, Math.min(max, n)); setConf((c) => ({ ...c, [k]: String(v) })); };
+  const confVal = (it, i) => { const n = parseInt(confRaw(it, i), 10); return isNaN(n) ? 0 : n; };
+  const handleApprove = async () => {
+    if (enviando) return;
+    // adjusted_items = SÓ os itens cuja qtd conferida difere da pedida (chaveado pelo ri.id REAL).
+    const adjusted = s.itens.map((it, i) => ({ it: it, v: confVal(it, i) })).filter((x) => x.v !== pedidaOf(x.it)).map((x) => ({ id: x.it.id, quantity_delivered: x.v }));
+    setErro(''); setEnviando(true);
+    try { await onApprove(adjusted); }
+    catch (e) { const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage; setErro(gm ? gm(e) : 'Não foi possível aprovar.'); setEnviando(false); }
+  };
+  const handleReject = async () => {
+    if (enviando) return;
+    if (!motivo.trim()) { setErro('Informe o motivo da recusa.'); return; }   // feedback imediato, não envia
+    setErro(''); setEnviando(true);
+    try { await onReject(motivo.trim()); }
+    catch (e) { const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage; setErro(gm ? gm(e) : 'Não foi possível recusar.'); setEnviando(false); }
+  };
+  const totalUn = s.itens.reduce((a, it) => a + pedidaOf(it), 0);
   const pct = { 'em-analise': 25, 'a-separar': 55, 'em-transito': 80, 'concluido': 100, 'recusado': 30 }[s.status];
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
@@ -738,10 +764,22 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                   <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text, textTransform: 'uppercase' }}>{it.nome}</div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' }}><Badge t={t} kind="gray">SKU {it.sku}</Badge><Badge t={t} kind="accent">OP {s.op}</Badge></div>
                 </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>QTD PEDIDA</div>
-                  <div style={{ fontSize: 19, fontWeight: 850, color: t.text }}>{it.qtd} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>un</span></div>
-                </div>
+                {canConfer ? (
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>PEDIDO: {pedidaOf(it)} {it.un || 'un'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7, marginTop: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>Conferido</span>
+                      <input value={confRaw(it, i)} onChange={(e) => setConfVal(it, i)(e.target.value)} inputMode="numeric" disabled={enviando}
+                        style={{ width: 62, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 15, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+                      <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>QTD PEDIDA</div>
+                    <div style={{ fontSize: 19, fontWeight: 850, color: t.text }}>{pedidaOf(it)} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -751,15 +789,34 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
           </div>
         </div>
         {pending && (
-          <div style={{ display: 'flex', gap: 12, flexShrink: 0, padding: '16px 26px', borderTop: `1px solid ${t.border}` }}>
+          <div style={{ flexShrink: 0, padding: '16px 26px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {mine ? (
               <button onClick={onCancel} style={{ all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={17} /> Cancelar pedido</button>
             ) : (
               <React.Fragment>
-                <button onClick={onReject} style={{ all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={17} /> Recusar</button>
-                <button onClick={onApprove} style={{ all: 'unset', cursor: 'pointer', flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` }}><Icon name="check" size={18} /> Conferir &amp; Aprovar</button>
+                {rejectOpen && (
+                  <div>
+                    <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Motivo da recusa <span style={{ color: uiTone(t, 'red').fg }}>*</span></label>
+                    <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={3} disabled={enviando} placeholder="Explique por que a solicitação está sendo recusada…"
+                      style={{ boxSizing: 'border-box', width: '100%', borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '11px 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none', resize: 'vertical' }} />
+                  </div>
+                )}
+                {erro && <div style={{ fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg, padding: '9px 12px', borderRadius: 10 }}>{erro}</div>}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  {rejectOpen ? (
+                    <React.Fragment>
+                      <button onClick={() => { if (!enviando) { setRejectOpen(false); setErro(''); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: t.muted, border: `1px solid ${t.border}`, opacity: enviando ? 0.6 : 1 }}>Voltar</button>
+                      <button onClick={handleReject} disabled={enviando || !motivo.trim()} style={{ all: 'unset', cursor: (enviando || !motivo.trim()) ? 'not-allowed' : 'pointer', flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 800, background: (enviando || !motivo.trim()) ? t.elevated : uiTone(t, 'red').fg, color: (enviando || !motivo.trim()) ? t.faint : '#fff' }}><Icon name="x" size={17} /> {enviando ? 'Recusando…' : 'Confirmar recusa'}</button>
+                    </React.Fragment>
+                  ) : (
+                    <React.Fragment>
+                      <button onClick={() => { if (!enviando) { setErro(''); setRejectOpen(true); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}`, opacity: enviando ? 0.6 : 1 }}
+                        onMouseEnter={(e) => { if (!enviando) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={17} /> Recusar</button>
+                      <button onClick={handleApprove} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}`, opacity: enviando ? 0.7 : 1 }}><Icon name="check" size={18} /> {enviando ? 'Aprovando…' : 'Conferir & Aprovar'}</button>
+                    </React.Fragment>
+                  )}
+                </div>
               </React.Fragment>
             )}
           </div>
@@ -769,18 +826,131 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
   );
 }
 
+// ===== Integração REAL das Solicitações (Estoque) — GET /requests + PUT status =====
+// Espelha 1:1 os helpers locais de pedidos.jsx (rótulo estável do uuid + mapa de status
+// backend→vocabulário da tela). NÃO usa window.frReqLabel/window.frMapReqStatus porque
+// esses helpers são locais do pedidos.jsx (não expostos no window) e o pedidos.jsx só
+// carrega DEPOIS deste arquivo. store.jsx (useFRSolic) fica INTOCADO — é compartilhado
+// por Conferência/Recebimento.
+const FR_REQ_STATUS_MAP_ADMIN = { aberto: 'em-analise', aprovado: 'a-separar', entregue: 'concluido', rejeitado: 'recusado', devolvido: 'concluido' };
+function frMapReqStatusLocal(be) { return FR_REQ_STATUS_MAP_ADMIN[be] || 'em-analise'; }
+function frReqLabelLocal(id) { return 'PED-' + String(id || '').replace(/-/g, '').slice(0, 6).toUpperCase(); }
+
+// created_at → tempo relativo pt-BR, sem libs. Cópia verbatim do frRelTime de pedidos.jsx
+// (helper local de lá, não exposto no window) — bate 1:1 com o histórico de Meus Pedidos.
+function frRelTimeLocal(iso) {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  const min = Math.floor((Date.now() - then) / 60000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h} h`;
+  const d = Math.floor(h / 24);
+  if (d === 1) return 'ontem';
+  return `há ${d} dias`;
+}
+
+function frRequestToCard(r) {
+  const its = Array.isArray(r.request_items) ? r.request_items : [];
+  return {
+    id: r.id,
+    req: frReqLabelLocal(r.id),
+    sol: (r.requester && r.requester.name) || '—',
+    setor: r.sector || '—',
+    op: r.op_code || '—',                    // null = isento (EPI/ferramenta/insumo)
+    status: frMapReqStatusLocal(r.status),
+    time: frRelTimeLocal(r.created_at),      // corrige o {s.time} do card (relógio ficava sem texto)
+    itens: its.map((ri) => ({
+      id: ri.id,                             // ri.id REAL — adjusted_items chaveia por ele
+      sku: (ri.products && ri.products.sku) || '',
+      nome: (ri.products && ri.products.name) || ri.custom_product_name || 'Item',
+      qtdPedida: Number(ri.quantity_requested) || 0,
+      un: (ri.products && ri.products.unit) || 'un',
+    })),
+  };
+}
+
+// GET /requests adaptado; mantém só as PENDENTES DE ACEITE (status backend 'aberto').
+function useFRRequests() {
+  const [items, setItems] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const mounted = React.useRef(true);
+  const load = React.useCallback(function () {
+    setLoading(true); setError(null);
+    window.FRApi.get('/requests', { skipLoading: true })
+      .then(function (res) {
+        if (!mounted.current) return;
+        const rows = Array.isArray(res && res.data) ? res.data : [];
+        setItems(rows.filter(function (r) { return r && r.status === 'aberto'; }).map(frRequestToCard));
+        setLoading(false);
+      })
+      .catch(function (e) {
+        if (!mounted.current) return;
+        const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+        setError(gm ? gm(e) : 'Não foi possível carregar as solicitações.');
+        setLoading(false);
+      });
+  }, []);
+  React.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+
+  // Tempo real: nova solicitação ('new_request') ou mudança de status ('request_updated') → recarrega.
+  // FRSocket pode estar null no mount (conecta async) e trocar de instância em reconexão — por isso
+  // usamos subscribe() p/ (re)anexar os listeners ao socket vigente. Sem socket, app segue por F5.
+  React.useEffect(function () {
+    const FRS = window.FRSocket;
+    if (!FRS) return undefined;
+
+    // Throttle leve: no máx. 1 reload por janela de 500ms (coalesce de rajadas), com chamada de arrasto.
+    let lastRun = 0;
+    let timer = null;
+    const scheduleReload = function () {
+      if (!mounted.current || timer) return;
+      const since = Date.now() - lastRun;
+      const wait = since >= 500 ? 0 : 500 - since;
+      timer = setTimeout(function () {
+        timer = null;
+        lastRun = Date.now();
+        if (mounted.current) load();
+      }, wait);
+    };
+
+    let attached = null;   // socket que está com os listeners no momento
+    const attach = function (sock) {
+      if (sock === attached) return;
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      attached = sock || null;
+      if (attached) { attached.on('new_request', scheduleReload); attached.on('request_updated', scheduleReload); }
+    };
+
+    attach(FRS.socket);   // socket já conectado (ex.: sessão restaurada no F5)
+    const unsub = FRS.subscribe(function (snap) { attach(snap && snap.socket); });   // conexões/reconexões futuras
+
+    return function () {
+      if (timer) clearTimeout(timer);
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      if (typeof unsub === 'function') unsub();
+    };
+  }, [load]);
+
+  return { items: items, loading: loading, error: error, reload: load };
+}
+
 function PageSolicitacoes({ t }) {
-  const [items, setItems] = useFRSolic();
+  const { items, loading, error, reload } = useFRRequests();
   const [filter, setFilter] = useStateA('todas');
   const [search, setSearch] = useStateA('');
   const [openId, setOpenId] = useStateA(null);
   const [tipo, setTipo] = useStateA('todos');
-  const setStatus = (id, status) => setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status } : x)));
-  const remove = (id) => setItems((xs) => xs.filter((x) => x.id !== id));
+  const [dismissed, setDismissed] = useStateA(() => new Set());   // dispensa LOCAL do botão "Remover" (sem endpoint de exclusão no escopo)
+  const remove = (id) => setDismissed((h) => { const n = new Set(h); n.add(id); return n; });
+  const setStatus = () => {};   // no-op: bloco de Devoluções é mock e não renderiza com dados reais (/requests não traz tipo devolução)
   const tabs = [['todas', 'Todas'], ['em-analise', 'Em Análise'], ['a-separar', 'A Separar'], ['em-transito', 'Em Trânsito'], ['concluido', 'Concluído'], ['recusado', 'Recusado']];
   const count = (k) => (k === 'todas' ? items.length : items.filter((x) => x.status === k).length);
   const q = search.trim().toLowerCase();
-  const view = items.filter((x) => (tipo === 'todos' || (tipo === 'devolucao' ? x.tipo === 'devolucao' : x.tipo !== 'devolucao')) && (filter === 'todas' || x.status === filter) && (!q || x.sol.toLowerCase().includes(q) || x.setor.toLowerCase().includes(q) || x.op.includes(q) || x.itens.some((it) => it.sku.includes(q) || it.nome.toLowerCase().includes(q))));
+  const view = items.filter((x) => !dismissed.has(x.id) && (tipo === 'todos' || (tipo === 'devolucao' ? x.tipo === 'devolucao' : x.tipo !== 'devolucao')) && (filter === 'todas' || x.status === filter) && (!q || x.sol.toLowerCase().includes(q) || x.setor.toLowerCase().includes(q) || x.op.includes(q) || x.itens.some((it) => it.sku.includes(q) || it.nome.toLowerCase().includes(q))));
   const cur = items.find((x) => x.id === openId);
 
   const Pill = ({ status }) => {
@@ -815,6 +985,25 @@ function PageSolicitacoes({ t }) {
         })}
       </div>
 
+      {/* Estados de carga da lista REAL (GET /requests) */}
+      {loading && (
+        <Card t={t} style={{ padding: 26, textAlign: 'center' }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: t.muted }}>Carregando solicitações…</div>
+        </Card>
+      )}
+      {!loading && error && (
+        <Card t={t} style={{ padding: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>Não foi possível carregar</div>
+              <div style={{ fontSize: 12.5, color: t.muted, marginTop: 2 }}>{error}</div>
+            </div>
+            <Btn t={t} icon="refresh" onClick={reload}>Tentar novamente</Btn>
+          </div>
+        </Card>
+      )}
+
+      {!loading && !error && (<React.Fragment>
       {/* Devoluções da Produção — destacadas e separadas */}
       {view.some((s) => s.tipo === 'devolucao') && (
         <div style={{ marginBottom: 24 }}>
@@ -908,10 +1097,18 @@ function PageSolicitacoes({ t }) {
           );
         })}
       </div>
+      </React.Fragment>)}
 
       {cur && <SolicitacaoDetail t={t} s={cur} onClose={() => setOpenId(null)}
-        onApprove={() => { FRSolicActions.aprovar(cur.id, (window.USER && window.USER.name) || 'Almoxarife'); }}
-        onReject={() => { FRSolicActions.recusar(cur.id); }} />}
+        onApprove={async (adjustedItems) => {
+          // status SEMPRE 'aprovado' (vocabulário do backend, não da tela). MEXE EM ESTOQUE.
+          await window.FRApi.put(`/requests/${cur.id}/status`, { status: 'aprovado', adjusted_items: adjustedItems });
+          setOpenId(null); reload();   // sai de 'aberto' → some daqui, vai p/ Conferência
+        }}
+        onReject={async (motivo) => {
+          await window.FRApi.put(`/requests/${cur.id}/status`, { status: 'rejeitado', rejection_reason: motivo });
+          setOpenId(null); reload();
+        }} />}
     </div>
   );
 }
