@@ -832,7 +832,7 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
 // esses helpers são locais do pedidos.jsx (não expostos no window) e o pedidos.jsx só
 // carrega DEPOIS deste arquivo. store.jsx (useFRSolic) fica INTOCADO — é compartilhado
 // por Conferência/Recebimento.
-const FR_REQ_STATUS_MAP_ADMIN = { aberto: 'em-analise', aprovado: 'a-separar', entregue: 'concluido', rejeitado: 'recusado', devolvido: 'concluido' };
+const FR_REQ_STATUS_MAP_ADMIN = { aberto: 'em-analise', aprovado: 'a-separar', conferido: 'em-transito', entregue: 'concluido', rejeitado: 'recusado', devolvido: 'concluido' };
 function frMapReqStatusLocal(be) { return FR_REQ_STATUS_MAP_ADMIN[be] || 'em-analise'; }
 function frReqLabelLocal(id) { return 'PED-' + String(id || '').replace(/-/g, '').slice(0, 6).toUpperCase(); }
 
@@ -872,7 +872,9 @@ function frRequestToCard(r) {
   };
 }
 
-// GET /requests adaptado; mantém só as PENDENTES DE ACEITE (status backend 'aberto').
+// GET /requests adaptado; mantém a GESTÃO ATIVA — 'aberto' (pendente de aceite), 'aprovado'
+// (aguardando conferência) e 'conferido' (pronto p/ enviar). Finalizados (entregue/rejeitado/
+// devolvido) NÃO ficam nesta tela — isso é histórico, outra coisa.
 function useFRRequests() {
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -884,7 +886,7 @@ function useFRRequests() {
       .then(function (res) {
         if (!mounted.current) return;
         const rows = Array.isArray(res && res.data) ? res.data : [];
-        setItems(rows.filter(function (r) { return r && r.status === 'aberto'; }).map(frRequestToCard));
+        setItems(rows.filter(function (r) { return r && (r.status === 'aberto' || r.status === 'aprovado' || r.status === 'conferido'); }).map(frRequestToCard));
         setLoading(false);
       })
       .catch(function (e) {
