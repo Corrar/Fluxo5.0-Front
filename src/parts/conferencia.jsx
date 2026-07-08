@@ -45,8 +45,88 @@ function CfBarcode({ code, height = 56 }) {
   );
 }
 
+// ===== Integração REAL da Conferência — GET /requests (status backend 'aprovado') =====
+// Troca só a FONTE (antes: useFRSolic mock) mantendo o contrato do 'pend' intacto — o scanner
+// (codeMap/reqMap/cfItemCode/SKU) casa por o.req e it.sku, que agora vêm do real. Helper de
+// rótulo espelhado do pages_admin (local; não exposto no window). store.jsx fica INTOCADO.
+function frReqLabelLocal(id) { return 'PED-' + String(id || '').replace(/-/g, '').slice(0, 6).toUpperCase(); }
+
+function frConfRequestToCard(r) {
+  const its = Array.isArray(r.request_items) ? r.request_items : [];
+  return {
+    id: r.id,
+    req: frReqLabelLocal(r.id),
+    sol: (r.requester && r.requester.name) || '—',
+    setor: r.sector || '—',
+    op: r.op_code || '—',
+    cliente: r.client_name || 'Sem cliente',   // real: getRequests JOIN clients (NULL → 'Sem cliente')
+    armazem: '',                       // /requests não fornece o nome do armazém por ora
+    status: 'a-separar',               // vocabulário da tela p/ backend 'aprovado' (o 'pend' filtra por isto)
+    itens: its.map((ri) => ({
+      id: ri.id,                       // ri.id REAL — chave do conference_notes
+      nome: (ri.products && ri.products.name) || ri.custom_product_name || 'Item',
+      sku: (ri.products && ri.products.sku) || '',
+      qtd: Number(ri.quantity_requested) || 0,
+      un: (ri.products && ri.products.unit) || 'un',
+    })),
+  };
+}
+
+// GET /requests adaptado; mantém só o status backend 'aprovado' (aguardando conferência).
+function useFRConferencia() {
+  const [items, setItems] = useStateCf([]);
+  const [loading, setLoading] = useStateCf(true);
+  const [error, setError] = useStateCf(null);
+  const mounted = useRefCf(true);
+  const load = React.useCallback(function () {
+    setLoading(true); setError(null);
+    window.FRApi.get('/requests', { skipLoading: true })
+      .then(function (res) {
+        if (!mounted.current) return;
+        const rows = Array.isArray(res && res.data) ? res.data : [];
+        setItems(rows.filter(function (r) { return r && r.status === 'aprovado'; }).map(frConfRequestToCard));
+        setLoading(false);
+      })
+      .catch(function (e) {
+        if (!mounted.current) return;
+        const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+        setError(gm ? gm(e) : 'Não foi possível carregar as ordens para conferência.');
+        setLoading(false);
+      });
+  }, []);
+  useEffectCf(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  // Tempo real: 'request_updated'/'new_request' → recarrega (aprovado novo aparece, concluído sai).
+  useEffectCf(function () {
+    const FRS = window.FRSocket;
+    if (!FRS) return undefined;
+    let lastRun = 0; let timer = null;
+    const scheduleReload = function () {
+      if (!mounted.current || timer) return;
+      const since = Date.now() - lastRun;
+      const wait = since >= 500 ? 0 : 500 - since;
+      timer = setTimeout(function () { timer = null; lastRun = Date.now(); if (mounted.current) load(); }, wait);
+    };
+    let attached = null;
+    const attach = function (sock) {
+      if (sock === attached) return;
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      attached = sock || null;
+      if (attached) { attached.on('new_request', scheduleReload); attached.on('request_updated', scheduleReload); }
+    };
+    attach(FRS.socket);
+    const unsub = FRS.subscribe(function (snap) { attach(snap && snap.socket); });
+    return function () {
+      if (timer) clearTimeout(timer);
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      if (typeof unsub === 'function') unsub();
+    };
+  }, [load]);
+  return { items: items, loading: loading, error: error, reload: load };
+}
+
 function PageConferencia({ t, setActive }) {
-  const [solic] = useFRSolic();
+  const { items: solic, loading, error, reload } = useFRConferencia();
+  const [enviando, setEnviando] = useStateCf(false);
   const [biped, setBiped] = useStateCf({});       // { 'id:idx': { qtd:'', just:'' } }
   const [feed, setFeed] = useStateCf([]);
   const [last, setLast] = useStateCf(null);
@@ -163,10 +243,25 @@ function PageConferencia({ t, setActive }) {
 
   const submitScan = () => { handleScan(scanVal); setScanVal(''); focusInput(); };
 
-  const concluir = (o) => {
-    FRSolicActions.confirmarEnvio(o.id, (window.USER && window.USER.name) || 'Almoxarife');
-    if (activeId === o.id) setActiveId(null);
-    doFlash('ok', 'Envio confirmado · ' + o.req + ' → ' + o.armazem);
+  const concluir = async (o) => {
+    if (enviando) return;   // guard: o PUT muda status no backend
+    // Justificativas por item já coletadas inline (setJustB) — envia só as preenchidas.
+    const conference_notes = (o.itens || [])
+      .filter((it) => (it.just || '').trim() !== '')
+      .map((it) => ({ id: it.id, note: it.just.trim() }));
+    setEnviando(true);
+    try {
+      // NÃO enviar adjusted_items aqui — a qtd finaliza no ACEITE, não na conferência.
+      await window.FRApi.put(`/requests/${o.id}/status`, { status: 'conferido', conference_notes });
+      if (activeId === o.id) setActiveId(null);
+      doFlash('ok', 'Conferência concluída · ' + o.req);
+      reload();   // sai da lista (deixa de ser 'aprovado'); o socket também recarrega
+    } catch (e) {
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      doFlash('error', gm ? gm(e) : 'Não foi possível concluir a conferência.');
+    } finally {
+      setEnviando(false);
+    }
   };
 
   const totalItens = pend.reduce((s, o) => s + o.itens.length, 0);
@@ -357,7 +452,19 @@ function PageConferencia({ t, setActive }) {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
-            {view.length === 0 && <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhuma ordem pendente neste filtro." /></Card>}
+            {loading && <Card t={t} style={{ padding: 22, textAlign: 'center' }}><div style={{ fontSize: 13, fontWeight: 600, color: t.muted }}>Carregando ordens…</div></Card>}
+            {!loading && error && (
+              <Card t={t} style={{ padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>Não foi possível carregar</div>
+                    <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>{error}</div>
+                  </div>
+                  <Btn t={t} icon="refresh" onClick={reload}>Tentar novamente</Btn>
+                </div>
+              </Card>
+            )}
+            {!loading && !error && view.length === 0 && <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhuma ordem pendente neste filtro." /></Card>}
             {view.map((o) => {
               const done = o.itens.filter((it) => it.completo).length;
               const ready = o.itens.every((it) => it.completo);
@@ -390,8 +497,8 @@ function PageConferencia({ t, setActive }) {
                   <div style={{ height: 4, background: t.subtle }}><div style={{ height: '100%', width: pct + '%', background: ready ? '#10b981' : CF_ACCENT, transition: 'width .3s' }} /></div>
                   <div style={{ display: 'flex', gap: 8, padding: '11px 16px', borderTop: `1px solid ${t.border}` }}>
                     <Btn t={t} variant="ghost" icon="barcode" onClick={() => setLabelsId(o.id)}>Etiquetas</Btn>
-                    <button disabled={!ready} onClick={() => concluir(o)} style={{ all: 'unset', marginLeft: 'auto', cursor: ready ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 16px', borderRadius: 10, fontWeight: 800, fontSize: 13.5, color: '#fff', background: ready ? '#10b981' : t.faint, opacity: ready ? 1 : .55 }}>
-                      <Icon name="truck" size={16} /> Confirmar envio
+                    <button disabled={!ready || enviando} onClick={() => concluir(o)} style={{ all: 'unset', marginLeft: 'auto', cursor: (ready && !enviando) ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 16px', borderRadius: 10, fontWeight: 800, fontSize: 13.5, color: '#fff', background: ready ? '#10b981' : t.faint, opacity: (ready && !enviando) ? 1 : .55 }}>
+                      <Icon name="truck" size={16} /> {enviando ? 'Concluindo…' : 'Confirmar envio'}
                     </button>
                   </div>
                 </Card>
@@ -416,7 +523,7 @@ function PageConferencia({ t, setActive }) {
         </div>
       </div>
 
-      {labelOrder && <CfLabelsModal t={t} order={labelOrder} onClose={() => { setLabelsId(null); focusInput(); }} onSim={(code) => handleScan(code)} />}
+      {labelOrder && <CfLabelsModal t={t} order={labelOrder} onClose={() => { setLabelsId(null); focusInput(); }} onSim={(code) => handleScan(code)} onFlash={doFlash} />}
     </div>
   );
 }
@@ -473,53 +580,81 @@ function cfPrintIdentificacao(items) {
   if (w) { w.document.open(); w.document.write(html); w.document.close(); }
 }
 
-function cfPrintVolumes(order, qtd) {
-  const cliente = cfClienteDaOP(order.op) || order.cliente || 'Cliente da OP';
-  const chefe = cfChefe(order.setor);
-  const logo = (window.__asset ? window.__asset('assets/logo-royale.png') : 'assets/logo-royale.png');
-  const code = order.req;
-  const barsHtml = (window.frBarcode128 ? window.frBarcode128(code) : []).map((b) => `<i style="display:inline-block;width:${b.w * 1.4}px;height:62px;background:${b.on ? '#000' : '#fff'}"></i>`).join('');
-  const labels = [];
-  for (let k = 1; k <= qtd; k++) {
-    labels.push(`<div class="lbl"><div class="frame">
-      <div class="brand"><img src="${logo}" alt=""/><span>Fluxo Royale · Separação</span></div>
-      <div class="cli">${String(cliente).replace(/</g, '&lt;')}</div>
-      <div class="rows">
-        <div><span>OP</span><b>${String(order.op)}</b></div>
-        <div><span>Destino</span><b>${chefe}</b></div>
-        <div><span>Armazém</span><b>${order.setor}</b></div>
-        <div><span>Volume</span><b>${k} / ${qtd}</b></div>
-      </div>
-      <div class="bars">${barsHtml}</div>
-      <div class="bcode">${code}</div>
-    </div></div>`);
-  }
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiquetas · ${order.req}</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:Arial,Helvetica,sans-serif;background:#eee;padding:10px}
-    .sheet{display:flex;flex-wrap:wrap;gap:8px}
-    .lbl{width:300px;height:200px;background:#fff;border-radius:6px;padding:8px;page-break-inside:avoid}
-    .frame{width:100%;height:100%;border:1px solid #222;border-radius:5px;padding:10px 12px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;text-align:center}
-    .brand{display:flex;align-items:center;gap:6px;opacity:.85}
-    .brand img{width:16px;height:16px;object-fit:contain}
-    .brand span{font-size:10px;font-weight:800;letter-spacing:.5px;color:#1a1f4d;text-transform:uppercase}
-    .cli{font-size:21px;font-weight:850;line-height:1.1;max-height:46px;overflow:hidden}
-    .rows{display:flex;gap:13px;justify-content:center;font-size:11px;color:#444}
-    .rows span{display:block;font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:#888}
-    .rows b{font-size:13px;color:#0b0b0b}
-    .bars{display:flex;align-items:flex-end;justify-content:center;flex-wrap:nowrap;height:64px;max-width:100%;overflow:hidden;background:#fff}
-    .bcode{font-size:11px;letter-spacing:3px;font-family:monospace}
-    @media print{body{background:#fff;padding:0}.frame{border:1px solid #000}}
-  </style></head><body>
-  <div class="sheet">${labels.join('')}</div>
-  <script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script>
-  </body></html>`;
-  const w = window.open('', '_blank');
-  if (w) { w.document.open(); w.document.write(html); w.document.close(); }
+// Sanitiza texto p/ campo ^FD (remove os control chars ^ e ~ do ZPL).
+function frZplField(s) { return String(s == null ? '' : s).replace(/[\^~]/g, ' ').trim(); }
+
+// Envia UM ZPL pro Browser Print (SDK window.BrowserPrint se presente; senão fallback serviço local 9100). Retorna Promise.
+function frSendZplBrowserPrint(zpl) {
+  return new Promise(function (resolve, reject) {
+    const BP = window.BrowserPrint;
+    if (BP && typeof BP.getDefaultDevice === 'function') {
+      BP.getDefaultDevice('printer',
+        function (device) {
+          if (!device) { reject(new Error('nenhuma impressora padrão no Browser Print')); return; }
+          device.send(zpl, function () { resolve(); }, function (err) { reject(new Error(err || 'falha no envio (SDK)')); });
+        },
+        function (err) { reject(new Error(err || 'Browser Print indisponível (o serviço está rodando?)')); }
+      );
+      return;
+    }
+    var base = 'http://127.0.0.1:9100';
+    fetch(base + '/default?type=printer')
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status + ' em /default'); return r.json(); })
+      .then(function (device) {
+        if (!device || (!device.uid && !device.name)) throw new Error('nenhuma impressora padrão no Browser Print');
+        return fetch(base + '/write', { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ device: device, data: zpl }) })
+          .then(function (w) { if (!w.ok) throw new Error('HTTP ' + w.status + ' em /write'); });
+      })
+      .then(resolve)
+      .catch(function (e) { reject(new Error((e && e.message ? e.message : String(e)) + ' (serviço local 9100)')); });
+  });
 }
 
-function CfLabelsModal({ t, order, onClose, onSim }) {
+// Etiqueta da SOLICITAÇÃO (volumes) — ZPL 100x60mm @203dpi, impressão AUTOMÁTICA na ZD220.
+// Migrado de window.print()/HTML: mesmo layout provado no teste, com dados REAIS.
+// N cópias: 1 device.send por volume, com VOLUME variando (k/n).
+// ^BC codifica order.req COMPLETO ('PED-XXXXXX') — é o valor que o reqMap da Conferência casa.
+async function cfPrintVolumes(order, qtd, onFlash) {
+  const notify = onFlash || function () {};
+  const n = Math.max(1, parseInt(qtd) || 1);
+  const cliente = frZplField(order.cliente || 'Sem cliente');
+  const destino = frZplField(order.sol) || '—';   // DESTINO = nome do solicitante (requester.name); vazio → '—'
+  const op = frZplField(order.op);
+  const armazem = frZplField(order.setor);
+  const req = frZplField(order.req);
+  // Centraliza o Code 128 em ^PW800 e garante que CABE (a ^BY5 o req completo 'PED-XXXXXX' estourava
+  // os 800 dots e era cortado → ilegível). Largura Code128 (subset B, cota superior) = (11*len+35)*módulo.
+  const barBY = 4;
+  const barW = (11 * req.length + 35) * barBY;
+  const barX = Math.max(20, Math.round((800 - barW) / 2));
+  const zplVolume = (k) => `^XA
+^PW800
+^LL480
+^CI28
+^FO0,20^A0N,26,26^FB800,1,0,C^FDFLUXO ROYALE - SEPARACAO^FS
+^FO0,65^A0N,58,58^FB800,1,0,C^FD${cliente}^FS
+^FO40,150^A0N,20,20^FDOP^FS
+^FO40,178^A0N,32,32^FD${op}^FS
+^FO230,150^A0N,20,20^FDDESTINO^FS
+^FO230,178^A0N,28,28^FD${destino}^FS
+^FO460,150^A0N,20,20^FDARMAZEM^FS
+^FO460,178^A0N,28,28^FD${armazem}^FS
+^FO680,150^A0N,20,20^FDVOLUME^FS
+^FO680,178^A0N,32,32^FD${k} / ${n}^FS
+^FO${barX},240^BY${barBY}^BCN,120,N,N,N^FD${req}^FS
+^FO0,380^A0N,28,28^FB800,1,0,C^FD${req}^FS
+^XZ`;
+  try {
+    for (let k = 1; k <= n; k++) {
+      await frSendZplBrowserPrint(zplVolume(k));   // 1 send por volume
+    }
+    notify('ok', n + (n === 1 ? ' etiqueta enviada' : ' etiquetas enviadas') + ' à impressora · ' + order.req);
+  } catch (e) {
+    notify('error', 'Impressão falhou: ' + (e && e.message ? e.message : String(e)) + '. Browser Print rodando e a ZD220 ligada?');
+  }
+}
+
+function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
   const [step, setStep] = useStateCf('ident');
   const [faltam, setFaltam] = useStateCf(() => order.itens.map(() => ''));
   const [vol, setVol] = useStateCf(String(order.itens.length || 1));
@@ -528,8 +663,8 @@ function CfLabelsModal({ t, order, onClose, onSim }) {
   const clearAll = () => setFaltam(order.itens.map(() => '0'));
   const total = faltam.reduce((s, v) => s + (parseInt(v) || 0), 0);
   const n = Math.max(1, parseInt(vol) || 1);
-  const cliente = cfClienteDaOP(order.op) || order.cliente || 'Cliente da OP';
-  const chefe = cfChefe(order.setor);
+  const cliente = order.cliente || 'Sem cliente';   // real (client_name via adapter); sem mock cfClienteDaOP
+  const chefe = order.sol || '—';   // DESTINO na prévia = solicitante (igual ao ZPL impresso)
   const code = order.req;
   const avancar = () => {
     const items = order.itens.map((it, i) => ({ ...it, faltam: parseInt(faltam[i]) || 0 })).filter((it) => it.faltam > 0);
@@ -625,7 +760,7 @@ function CfLabelsModal({ t, order, onClose, onSim }) {
             </div>
             <div style={{ padding: '14px 20px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <button onClick={() => setStep('ident')} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 700, color: t.muted }}><Icon name="chevronLeft" size={16} /> Voltar</button>
-              <Btn t={t} icon="barcode" onClick={() => { cfPrintVolumes(order, n); onClose(); }}>Imprimir {n} etiqueta{n === 1 ? '' : 's'} de volume</Btn>
+              <Btn t={t} icon="barcode" onClick={() => { cfPrintVolumes(order, n, onFlash); onClose(); }}>Imprimir {n} etiqueta{n === 1 ? '' : 's'} de volume</Btn>
             </div>
           </>
         )}
