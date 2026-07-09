@@ -152,7 +152,7 @@ function PageConferencia({ t, setActive }) {
       const confQtd = b ? b.qtd : '';
       const nq = parseInt(confQtd);
       const parcial = b && confQtd !== '' && nq < it.qtd;
-      const completo = !!b && confQtd !== '' && nq >= 1 && (nq >= it.qtd || (b.just || '').trim().length > 0);
+      const completo = !!b && confQtd !== '' && (nq >= it.qtd || (nq >= 0 && (b.just || '').trim().length > 0));
       return { ...it, bipado: !!b, confQtd, just: b ? b.just : '', parcial, completo, key: o.id + ':' + idx };
     }) }));
 
@@ -537,47 +537,51 @@ function cfClienteDaOP(op) {
   const found = ops.find((c) => (c.ops || []).some((o) => String(o) === String(op) || String(o).includes(String(op))));
   return found ? found.cliente : null;
 }
-// Imprime etiquetas de IDENTIFICAÇÃO dos produtos (padrão de entrada, sem campo NF).
-function cfPrintIdentificacao(items) {
-  const data = new Date().toLocaleDateString('pt-BR');
-  const logo = (window.__asset ? window.__asset('assets/logo-royale.png') : 'assets/logo-royale.png');
-  const labels = [];
+// Etiqueta de MATERIAL (identificação) — ZPL 100x60mm @203dpi (800x480), impressão AUTOMÁTICA na ZD220.
+// Migrada de window.print()/HTML → Browser Print/ZPL (mesmo caminho do cfPrintVolumes, reusando frSendZplBrowserPrint).
+// Layout do Bruno: cabeçalho, SKU grande em destaque, nome do produto, "NF ${nf} · ${data}", barcode Code 128 e SKU legível.
+// ^BC codifica o it.sku LITERAL (com pontos) — é exatamente o valor que o handleScan de ITEM casa
+// (String(it.sku).toUpperCase() === code). N cópias por item = it.faltam (1 device.send por etiqueta).
+// Na Conferência: nf='-' e data=hoje (dd/mm/aaaa, padrão do app).
+async function cfPrintIdentificacao(items, onFlash) {
+  const notify = onFlash || function () {};
+  const data = new Date().toLocaleDateString('pt-BR');   // dd/mm/aaaa — padrão do app
+  const nf = '-';                                        // contexto Conferência (sem NF)
+  const jobs = [];
   items.forEach((it) => {
     const n = parseInt(it.faltam) || 0;
     if (n <= 0) return;
-    const bars = (window.frBarcode128 ? window.frBarcode128(it.sku) : []).map((b) => `<i style="display:inline-block;width:${b.w * 1.4}px;height:60px;background:${b.on ? '#000' : '#fff'}"></i>`).join('');
-    for (let k = 0; k < n; k++) {
-      labels.push(`<div class="lbl"><div class="frame">
-        <div class="brand"><img src="${logo}" alt=""/><span>Fluxo Royale</span></div>
-        <div class="desc">${String(it.nome).replace(/</g, '&lt;')}</div>
-        <div class="meta">${data}</div>
-        <div class="bars">${bars}</div>
-        <div class="bcode">${it.sku}</div>
-      </div></div>`);
-    }
+    const sku = frZplField(it.sku);          // literal, mantém os pontos (só remove ^ e ~)
+    if (!sku) return;                        // item sem SKU (custom) → sem barcode válido, pula
+    const nome = frZplField(it.nome);
+    // Largura do Code 128 (subset B, cota superior) = (11*len+35)*módulo. Escolhe o MAIOR módulo (4→2)
+    // que ainda cabe em 800 com margem (útil 760) e centraliza. Não pode cortar → senão não escaneia.
+    const bLen = sku.length;
+    let barBY = 4;
+    while (barBY > 2 && (11 * bLen + 35) * barBY > 760) barBY--;
+    const barW = (11 * bLen + 35) * barBY;
+    const barX = Math.max(20, Math.round((800 - barW) / 2));
+    const zpl = `^XA
+^PW800
+^LL480
+^CI28
+^FO0,25^A0N,26,26^FB800,1,0,C^FDFluxo Royale^FS
+^FO0,70^A0N,64,64^FB800,1,0,C^FD${sku}^FS
+^FO0,150^A0N,32,32^FB800,1,0,C^FD${nome}^FS
+^FO0,200^A0N,24,24^FB800,1,0,C^FDNF ${nf} · ${data}^FS
+^FO${barX},250^BY${barBY}^BCN,120,N,N,N^FD${sku}^FS
+^FO0,390^A0N,28,28^FB800,1,0,C^FD${sku}^FS
+^XZ`;
+    for (let k = 0; k < n; k++) jobs.push(zpl);
   });
-  if (!labels.length) return;
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiquetas de identificação</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:Arial,Helvetica,sans-serif;background:#eee;padding:10px}
-    .sheet{display:flex;flex-wrap:wrap;gap:8px}
-    .lbl{width:300px;height:200px;background:#fff;border-radius:6px;padding:8px;page-break-inside:avoid}
-    .frame{width:100%;height:100%;border:1px solid #222;border-radius:5px;padding:10px 12px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;text-align:center}
-    .brand{display:flex;align-items:center;gap:6px;opacity:.85}
-    .brand img{width:16px;height:16px;object-fit:contain}
-    .brand span{font-size:10px;font-weight:800;letter-spacing:.5px;color:#1a1f4d;text-transform:uppercase}
-    .desc{font-size:18px;font-weight:800;line-height:1.2;max-height:66px;overflow:hidden}
-    .meta{font-size:11px;color:#444}
-    .bars{display:flex;align-items:flex-end;justify-content:center;flex-wrap:nowrap;height:62px;max-width:100%;overflow:hidden;background:#fff}
-    .bcode{font-size:12px;letter-spacing:3px;font-family:monospace}
-    @media print{body{background:#fff;padding:0}.frame{border:1px solid #000}}
-  </style></head><body>
-  <div class="sheet">${labels.join('')}</div>
-  <script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script>
-  </body></html>`;
-  const w = window.open('', '_blank');
-  if (w) { w.document.open(); w.document.write(html); w.document.close(); }
+  if (!jobs.length) return;
+  let printed = 0;
+  try {
+    for (let i = 0; i < jobs.length; i++) { await frSendZplBrowserPrint(jobs[i]); printed++; }   // 1 send por etiqueta
+    notify('ok', printed + (printed === 1 ? ' etiqueta de material enviada' : ' etiquetas de material enviadas') + ' à impressora');
+  } catch (e) {
+    notify('error', 'Impressão falhou (' + printed + '/' + jobs.length + '): ' + (e && e.message ? e.message : String(e)) + '. Browser Print rodando e a ZD220 ligada?');
+  }
 }
 
 // Sanitiza texto p/ campo ^FD (remove os control chars ^ e ~ do ZPL).
@@ -668,7 +672,7 @@ function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
   const code = order.req;
   const avancar = () => {
     const items = order.itens.map((it, i) => ({ ...it, faltam: parseInt(faltam[i]) || 0 })).filter((it) => it.faltam > 0);
-    if (items.length) cfPrintIdentificacao(items);
+    if (items.length) cfPrintIdentificacao(items, onFlash);
     setStep('volume');
   };
   const inp = { width: 76, height: 40, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 16, fontWeight: 800, fontFamily: 'inherit', outline: 'none' };

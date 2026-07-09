@@ -774,12 +774,31 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                       <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span>
                     </div>
                   </div>
-                ) : (
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>QTD PEDIDA</div>
-                    <div style={{ fontSize: 19, fontWeight: 850, color: t.text }}>{pedidaOf(it)} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
-                  </div>
-                )}
+                ) : (() => {
+                  const posConf = s.status === 'em-transito' || s.status === 'concluido';   // pós-conferência (backend conferido/entregue)
+                  const enviada = it.enviada;                          // null/undefined = sem ajuste (integral) | número (incl. 0)
+                  const showEnviado = posConf && enviada != null;      // != null cobre null E undefined (mock/'mine')
+                  const falta = showEnviado && enviada < pedidaOf(it);
+                  const amber = uiTone(t, 'amber');
+                  return (
+                    <div style={{ textAlign: 'right', flexShrink: 0, maxWidth: 260 }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>QTD PEDIDA</div>
+                      <div style={{ fontSize: 19, fontWeight: 850, color: t.text }}>{pedidaOf(it)} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
+                      {showEnviado && (
+                        <React.Fragment>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: falta ? amber.fg : t.faint, marginTop: 7 }}>ENVIADO</div>
+                          <div style={{ fontSize: 16, fontWeight: 850, color: falta ? amber.fg : t.text }}>{enviada} <span style={{ fontSize: 11, fontWeight: 600, color: falta ? amber.fg : t.muted }}>{it.un || 'un'}</span></div>
+                          {falta && (
+                            <div style={{ marginTop: 7, display: 'inline-flex', alignItems: 'flex-start', gap: 5, textAlign: 'left', background: amber.bg, color: amber.fg, borderRadius: 8, padding: '6px 9px', maxWidth: 240 }}>
+                              <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                              <span style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.35 }}>{it.justificativa || 'Sem justificativa'}</span>
+                            </div>
+                          )}
+                        </React.Fragment>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
@@ -867,6 +886,8 @@ function frRequestToCard(r) {
       sku: (ri.products && ri.products.sku) || '',
       nome: (ri.products && ri.products.name) || ri.custom_product_name || 'Item',
       qtdPedida: Number(ri.quantity_requested) || 0,
+      enviada: ri.quantity_delivered == null ? null : Number(ri.quantity_delivered),  // null = nunca ajustado (foi tudo) | número = ajustado (incl. 0)
+      justificativa: ri.conference_note || '',
       un: (ri.products && ri.products.unit) || 'un',
     })),
   };
