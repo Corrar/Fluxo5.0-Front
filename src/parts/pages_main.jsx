@@ -467,17 +467,25 @@ function PageCatalogo({ t, brand }) {
   const [inv, setInv] = useStateM(false);
   const [edit, setEdit] = useStateM(null);
   const [page, setPage] = useStateM(1);
+  const [q, setQ] = useStateM('');
   const topRef = useRefM(null);
   // Fonte REAL: GET /products adaptado. Escrita (novo/editar/excluir/inventário) fica para a próxima leva.
   const { items, loading, error, reload } = window.useFRProducts();
-  // Paginação: aqui a busca é inerte (homolog), então paginamos a lista completa direto.
-  const total = items.length;
+  // Busca funcional (portada da PageProdutos): filtra sobre a lista COMPLETA por nome/SKU/tag; só então pagina a fatia visível.
+  const ql = q.trim().toLowerCase();
+  const view = items.filter((p) => !ql
+    || (p.nome || '').toLowerCase().includes(ql)
+    || (p.sku || '').toLowerCase().includes(ql)
+    || (p.tag || '').toLowerCase().includes(ql));
+  const total = view.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const start = total === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
   const end = Math.min(safePage * PAGE_SIZE, total);
-  const pageItems = items.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pageItems = view.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const goToPage = (n) => { setPage(n); if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  // Ao mudar a busca, volta para a página 1 (senão ficaria numa página inexistente no resultado filtrado).
+  const onBusca = (e) => { setQ(e.target.value); setPage(1); };
   return (
     <div ref={topRef}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -492,8 +500,8 @@ function PageCatalogo({ t, brand }) {
         <NovoProdutoForm t={t} brand={brand} onCreated={reload} produtos={items} />
         <div style={{ flex: 1, minWidth: 280 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderRadius: 13, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, marginBottom: 16 }}>
-            <Icon name="search" size={17} /><span style={{ fontSize: 13.5 }}>Busque por nome, SKU ou tag…</span>
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>FILTROS:</span><Badge t={t} kind="amber">HOMOLOG</Badge></div>
+            <Icon name="search" size={17} />
+            <input value={q} onChange={onBusca} placeholder="Busque por nome, SKU ou tag…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
           </div>
           {error ? (
             <ProdutoErro t={t} message={error} onRetry={reload} />
@@ -502,8 +510,8 @@ function PageCatalogo({ t, brand }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 18 }}>
               {loading
                 ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
-                : items.length === 0
-                ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhum produto" sub="Nenhum produto ativo no catálogo." /></Card></div>
+                : total === 0
+                ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql ? `Nada encontrado para "${q.trim()}".` : 'Nenhum produto ativo no catálogo.'} /></Card></div>
                 : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} onEdit={(np) => setEdit(np)} onDelete={() => {}} />)}
             </div>
             {!loading && total > 0 && <Paginacao t={t} page={safePage} totalPages={totalPages} total={total} start={start} end={end} onPage={goToPage} unidade="produtos" />}
