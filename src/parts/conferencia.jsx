@@ -6,6 +6,12 @@ const { useState: useStateCf, useRef: useRefCf, useEffect: useEffectCf, useMemo:
 
 const CF_ACCENT = '#2563eb';
 
+// Unidades que aceitam quantidade fracionada (metro, litro, quilo). Qualquer outra → inteiro
+// (default seguro p/ unidades novas/desconhecidas). Espelha DECIMAL_UNITS do backend (requests.controller.ts).
+const DECIMAL_UNITS = new Set(['M', 'MT', 'L', 'KG']);
+const isDecimalUnit = (un) => DECIMAL_UNITS.has(String(un || '').trim().toUpperCase());
+const pedidaOf = (it) => Number(it && it.qtd) || 0;   // teto da qtd conferida = pedido
+
 // Ordens de separação aprovadas (status a-separar), com armazém de destino.
 const CONF_SEED = [
   { id: 5,  req: 'REQ-44C9F210', sol: 'William Souza',  setor: 'Montagem',     op: '88210', armazem: 'Montagem',
@@ -150,7 +156,7 @@ function PageConferencia({ t, setActive }) {
     .map((o) => ({ ...o, itens: o.itens.map((it, idx) => {
       const b = biped[o.id + ':' + idx];
       const confQtd = b ? b.qtd : '';
-      const nq = parseInt(confQtd);
+      const nq = parseFloat(confQtd);
       const parcial = b && confQtd !== '' && nq < it.qtd;
       const completo = !!b && confQtd !== '' && (nq >= it.qtd || (nq >= 0 && (b.just || '').trim().length > 0));
       return { ...it, bipado: !!b, confQtd, just: b ? b.just : '', parcial, completo, key: o.id + ':' + idx };
@@ -192,7 +198,26 @@ function PageConferencia({ t, setActive }) {
 
   const enviadas = solic.filter((o) => o.status === 'em-transito' || o.status === 'concluido');
 
-  const setConfQtd = (key, v) => setBiped((b) => ({ ...b, [key]: { ...(b[key] || { just: '' }), qtd: v.replace(/[^0-9]/g, '') } }));
+  // Qtd conferida: clampa 0 ≤ n ≤ pedido; unidade decimal (M/MT/L/KG) aceita até 2 casas, resto é inteiro.
+  // O backend revalida (fonte da verdade), mas aqui já bloqueamos na UX. Vazio é permitido (item não tocado).
+  const setConfQtd = (key, raw, it) => {
+    const max = pedidaOf(it);
+    let s = String(raw);
+    if (isDecimalUnit(it.un)) {
+      s = s.replace(',', '.').replace(/[^0-9.]/g, '');
+      const parts = s.split('.');
+      s = parts[0] + (parts.length > 1 ? '.' + parts.slice(1).join('').slice(0, 2) : '');
+    } else {
+      s = s.replace(/[^0-9]/g, '');
+    }
+    const store = (qtd) => setBiped((b) => ({ ...b, [key]: { ...(b[key] || { just: '' }), qtd } }));
+    if (s === '' || s === '.') { store(''); return; }
+    if (s.endsWith('.')) { store(s); return; }   // estado intermediário "N." — usuário ainda vai digitar a casa
+    let n = parseFloat(s);
+    if (Number.isNaN(n)) { store(''); return; }
+    n = Math.max(0, Math.min(max, n));            // CLAMP 0 ≤ n ≤ pedido
+    store(String(n));
+  };
   const setJustB = (key, v) => setBiped((b) => ({ ...b, [key]: { ...(b[key] || { qtd: '' }), just: v } }));
 
   const doFlash = (type, msg) => {
@@ -249,10 +274,17 @@ function PageConferencia({ t, setActive }) {
     const conference_notes = (o.itens || [])
       .filter((it) => (it.just || '').trim() !== '')
       .map((it) => ({ id: it.id, note: it.just.trim() }));
+    // Qtd conferida por item (cenário 2): só os itens efetivamente tocados. Já validada no setConfQtd
+    // (0 ≤ q ≤ pedido, decimais por unidade); o backend revalida e ajusta a reserva no status 'conferido'.
+    const adjusted_items = (o.itens || []).map((it, idx) => {
+      const b = biped[o.id + ':' + idx];
+      if (!b || b.qtd === '' || b.qtd == null) return null;   // item não conferido → não força ajuste
+      const q = parseFloat(b.qtd);
+      return Number.isNaN(q) ? null : { id: it.id, quantity_delivered: q };
+    }).filter(Boolean);
     setEnviando(true);
     try {
-      // NÃO enviar adjusted_items aqui — a qtd finaliza no ACEITE, não na conferência.
-      await window.FRApi.put(`/requests/${o.id}/status`, { status: 'conferido', conference_notes });
+      await window.FRApi.put(`/requests/${o.id}/status`, { status: 'conferido', conference_notes, adjusted_items });
       if (activeId === o.id) setActiveId(null);
       doFlash('ok', 'Conferência concluída · ' + o.req);
       reload();   // sai da lista (deixa de ser 'aprovado'); o socket também recarrega
@@ -381,7 +413,7 @@ function PageConferencia({ t, setActive }) {
                             </div>
                             {it.bipado ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                                <input value={it.confQtd} onChange={(e) => setConfQtd(it.key, e.target.value)} inputMode="numeric" placeholder="Qtd" autoFocus={isLast}
+                                <input value={it.confQtd} onChange={(e) => setConfQtd(it.key, e.target.value, it)} inputMode={isDecimalUnit(it.un) ? 'decimal' : 'numeric'} placeholder="Qtd" autoFocus={isLast}
                                   style={{ width: 64, height: 40, textAlign: 'center', borderRadius: 10, border: `1.5px solid ${it.parcial ? '#f59e0b' : it.completo ? '#10b981' : CF_ACCENT}`, background: t.panel, color: t.text, fontSize: 16, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
                                 <span style={{ fontSize: 12, color: t.faint, width: 28 }}>/{it.qtd}</span>
                               </div>
