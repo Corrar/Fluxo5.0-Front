@@ -907,7 +907,7 @@ function useFRRequests() {
       .then(function (res) {
         if (!mounted.current) return;
         const rows = Array.isArray(res && res.data) ? res.data : [];
-        setItems(rows.filter(function (r) { return r && (r.status === 'aberto' || r.status === 'aprovado' || r.status === 'conferido'); }).map(frRequestToCard));
+        setItems(rows.filter(function (r) { return r && (r.status === 'aberto' || r.status === 'aprovado' || r.status === 'conferido' || r.status === 'entregue'); }).map(frRequestToCard));
         setLoading(false);
       })
       .catch(function (e) {
@@ -970,6 +970,21 @@ function PageSolicitacoes({ t }) {
   const [dismissed, setDismissed] = useStateA(() => new Set());   // dispensa LOCAL do botão "Remover" (sem endpoint de exclusão no escopo)
   const remove = (id) => setDismissed((h) => { const n = new Set(h); n.add(id); return n; });
   const setStatus = () => {};   // no-op: bloco de Devoluções é mock e não renderiza com dados reais (/requests não traz tipo devolução)
+  // Passo D — ENVIO REAL (conferido → entregue → consume/baixa física no backend). Guard anti-duplo-clique OBRIGATÓRIO (estoque físico).
+  const [enviandoId, setEnviandoId] = useStateA(null);
+  const [envioErro, setEnvioErro] = useStateA('');
+  const confirmarEnvio = async (s) => {
+    if (enviandoId) return;
+    setEnviandoId(s.id); setEnvioErro('');
+    try {
+      // INVARIANTE: só { status: 'entregue' } — SEM adjusted_items (a qtd finalizou na conferência; backend lê quantity_delivered do banco).
+      await window.FRApi.put(`/requests/${s.id}/status`, { status: 'entregue' });
+      reload();   // card vira 'concluido' (o filtro agora carrega 'entregue')
+    } catch (e) {
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setEnvioErro(gm ? gm(e) : 'Não foi possível confirmar o envio.');   // NÃO baixou; card permanece em trânsito
+    } finally { setEnviandoId(null); }
+  };
   const tabs = [['todas', 'Todas'], ['em-analise', 'Em Análise'], ['a-separar', 'A Separar'], ['em-transito', 'Em Trânsito'], ['concluido', 'Concluído'], ['recusado', 'Recusado']];
   const count = (k) => (k === 'todas' ? items.length : items.filter((x) => x.status === k).length);
   const q = search.trim().toLowerCase();
@@ -1007,6 +1022,14 @@ function PageSolicitacoes({ t }) {
           );
         })}
       </div>
+
+      {envioErro && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 11, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, marginBottom: 14, fontSize: 13, fontWeight: 700 }}>
+          <Icon name="alert" size={16} />
+          <span style={{ flex: 1, minWidth: 0 }}>{envioErro}</span>
+          <button onClick={() => setEnvioErro('')} title="Fechar" style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 26, height: 26, borderRadius: 7, color: uiTone(t, 'red').fg }}><Icon name="x" size={15} /></button>
+        </div>
+      )}
 
       {/* Estados de carga da lista REAL (GET /requests) */}
       {loading && (
@@ -1105,7 +1128,14 @@ function PageSolicitacoes({ t }) {
                     <div style={{ fontSize: 12, color: t.muted }}>{s.setor}</div>
                   </div>
                 </div>
-                <div style={{ marginTop: 12 }}><Badge t={t} kind="gray">OP: {s.op}</Badge></div>
+                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <Badge t={t} kind="gray">OP: {s.op}</Badge>
+                  {s.status === 'em-transito' && (
+                    <button disabled={enviandoId === s.id} onClick={(e) => { e.stopPropagation(); confirmarEnvio(s); }} style={{ all: 'unset', cursor: enviandoId === s.id ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 32, padding: '0 12px', borderRadius: 8, fontSize: 12.5, fontWeight: 800, background: uiTone(t, 'green').fg, color: '#fff', opacity: enviandoId === s.id ? 0.6 : 1 }}>
+                      <Icon name="truck" size={14} /> {enviandoId === s.id ? 'Enviando…' : 'Confirmar envio'}
+                    </button>
+                  )}
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 13, borderTop: `1px solid ${t.border}` }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: t.muted }}><Icon name={s.tipo === 'devolucao' ? 'exchange' : 'box'} size={15} /> {s.itens.length} {s.tipo === 'devolucao' ? (s.itens.length === 1 ? 'item devolvido' : 'itens devolvidos') : (s.itens.length === 1 ? 'item solicitado' : 'itens solicitados')}</span>

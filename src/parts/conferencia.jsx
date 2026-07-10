@@ -57,6 +57,9 @@ function CfBarcode({ code, height = 56 }) {
 // rótulo espelhado do pages_admin (local; não exposto no window). store.jsx fica INTOCADO.
 function frReqLabelLocal(id) { return 'PED-' + String(id || '').replace(/-/g, '').slice(0, 6).toUpperCase(); }
 
+// Backend status → vocabulário da tela: aprovado = fila de conferência (pend); conferido = aguardando envio (Enviadas, Passo D).
+const FR_CONF_STATUS_MAP = { aprovado: 'a-separar', conferido: 'em-transito', entregue: 'concluido' };
+
 function frConfRequestToCard(r) {
   const its = Array.isArray(r.request_items) ? r.request_items : [];
   return {
@@ -67,7 +70,7 @@ function frConfRequestToCard(r) {
     op: r.op_code || '—',
     cliente: r.client_name || 'Sem cliente',   // real: getRequests JOIN clients (NULL → 'Sem cliente')
     armazem: '',                       // /requests não fornece o nome do armazém por ora
-    status: 'a-separar',               // vocabulário da tela p/ backend 'aprovado' (o 'pend' filtra por isto)
+    status: FR_CONF_STATUS_MAP[r.status] || 'a-separar',   // aprovado→a-separar (pend); conferido→em-transito (Enviadas/Passo D)
     itens: its.map((ri) => ({
       id: ri.id,                       // ri.id REAL — chave do conference_notes
       nome: (ri.products && ri.products.name) || ri.custom_product_name || 'Item',
@@ -78,7 +81,7 @@ function frConfRequestToCard(r) {
   };
 }
 
-// GET /requests adaptado; mantém só o status backend 'aprovado' (aguardando conferência).
+// GET /requests adaptado; mantém 'aprovado' (fila de conferência → pend) e 'conferido' (aguardando envio → Enviadas/Passo D).
 function useFRConferencia() {
   const [items, setItems] = useStateCf([]);
   const [loading, setLoading] = useStateCf(true);
@@ -90,7 +93,7 @@ function useFRConferencia() {
       .then(function (res) {
         if (!mounted.current) return;
         const rows = Array.isArray(res && res.data) ? res.data : [];
-        setItems(rows.filter(function (r) { return r && r.status === 'aprovado'; }).map(frConfRequestToCard));
+        setItems(rows.filter(function (r) { return r && (r.status === 'aprovado' || r.status === 'conferido'); }).map(frConfRequestToCard));
         setLoading(false);
       })
       .catch(function (e) {
@@ -133,6 +136,7 @@ function useFRConferencia() {
 function PageConferencia({ t, setActive }) {
   const { items: solic, loading, error, reload } = useFRConferencia();
   const [enviando, setEnviando] = useStateCf(false);
+  const [enviandoEnvio, setEnviandoEnvio] = useStateCf(null);   // id da solicitação em ENVIO (conferido→entregue), separado do 'enviando' da conferência
   const [biped, setBiped] = useStateCf({});       // { 'id:idx': { qtd:'', just:'' } }
   const [feed, setFeed] = useStateCf([]);
   const [last, setLast] = useStateCf(null);
@@ -293,6 +297,25 @@ function PageConferencia({ t, setActive }) {
       doFlash('error', gm ? gm(e) : 'Não foi possível concluir a conferência.');
     } finally {
       setEnviando(false);
+    }
+  };
+
+  // Passo D — ENVIO REAL (conferido → entregue → consume/baixa física no backend).
+  // Guard anti-duplo-clique OBRIGATÓRIO: mexe em ESTOQUE FÍSICO; duplo envio = baixa dobrada.
+  const confirmarEnvio = async (o) => {
+    if (enviandoEnvio) return;
+    setEnviandoEnvio(o.id);
+    try {
+      // INVARIANTE: só { status: 'entregue' } — SEM adjusted_items. A qtd finalizou na conferência;
+      // o backend lê quantity_delivered do banco e faz o consume (baixa físico + libera reserva).
+      await window.FRApi.put(`/requests/${o.id}/status`, { status: 'entregue' });
+      doFlash('ok', 'Envio confirmado · ' + o.req);
+      reload();   // card sai de 'conferido' → vira entregue/concluído; o socket request_updated também recarrega
+    } catch (e) {
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      doFlash('error', gm ? gm(e) : 'Não foi possível confirmar o envio.');
+    } finally {
+      setEnviandoEnvio(null);
     }
   };
 
@@ -530,7 +553,7 @@ function PageConferencia({ t, setActive }) {
                   <div style={{ display: 'flex', gap: 8, padding: '11px 16px', borderTop: `1px solid ${t.border}` }}>
                     <Btn t={t} variant="ghost" icon="barcode" onClick={() => setLabelsId(o.id)}>Etiquetas</Btn>
                     <button disabled={!ready || enviando} onClick={() => concluir(o)} style={{ all: 'unset', marginLeft: 'auto', cursor: (ready && !enviando) ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 16px', borderRadius: 10, fontWeight: 800, fontSize: 13.5, color: '#fff', background: ready ? '#10b981' : t.faint, opacity: (ready && !enviando) ? 1 : .55 }}>
-                      <Icon name="truck" size={16} /> {enviando ? 'Concluindo…' : 'Confirmar envio'}
+                      <Icon name="truck" size={16} /> {enviando ? 'Concluindo…' : 'Concluir conferência'}
                     </button>
                   </div>
                 </Card>
@@ -546,6 +569,11 @@ function PageConferencia({ t, setActive }) {
                       <span style={{ width: 28, height: 28, borderRadius: 8, background: '#10b981', color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="check" size={15} /></span>
                       <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, fontWeight: 800, color: t.text }}>{o.req}</span>
                       <span style={{ fontSize: 12.5, color: t.muted, marginLeft: 'auto' }}>→ {o.armazem} · OP {o.op}</span>
+                      {o.status === 'em-transito' && (
+                        <button disabled={enviandoEnvio === o.id} onClick={() => confirmarEnvio(o)} style={{ all: 'unset', cursor: enviandoEnvio === o.id ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 14px', borderRadius: 9, fontWeight: 800, fontSize: 12.5, color: '#fff', background: '#10b981', opacity: enviandoEnvio === o.id ? .6 : 1 }}>
+                          <Icon name="truck" size={14} /> {enviandoEnvio === o.id ? 'Enviando…' : 'Confirmar envio'}
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
