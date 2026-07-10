@@ -124,12 +124,79 @@ function HeroPatrimonio({ t, brand, produtos }) {
   );
 }
 
-function NovoProdutoForm({ t, brand }) {
+// Máscara do SKU: o usuário digita só números; os pontos entram sozinhos → C.SS.NNNN (ex.: 3.08.0114).
+const maskSku = (raw) => {
+  const d = String(raw).replace(/\D/g, '').slice(0, 7);   // só dígitos, máx 7
+  if (d.length <= 1) return d;                              // "3"
+  if (d.length <= 3) return d[0] + '.' + d.slice(1);        // "3.08"
+  return d[0] + '.' + d.slice(1, 3) + '.' + d.slice(3);     // "3.08.0114"
+};
+
+function NovoProdutoForm({ t, brand, onCreated, produtos = [] }) {
   const field = { width: '100%', boxSizing: 'border-box', height: 42, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
   const lab = { fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7, display: 'block' };
+  const [nome, setNome] = useStateM('');
+  const [sku, setSku] = useStateM('');
   const [unidade, setUnidade] = useStateM('un');
+  const [minimo, setMinimo] = useStateM('');
   const [tags, setTags] = useStateM([]);
-  const toggleTag = (tg) => setTags((xs) => (xs.includes(tg) ? xs.filter((x) => x !== tg) : [...xs, tg]));
+  const [novaTag, setNovaTag] = useStateM('');
+  const [salvando, setSalvando] = useStateM(false);   // guard anti-duplo-clique + estado de loading
+  const [feedback, setFeedback] = useStateM(null);     // { type: 'ok' | 'error', msg }
+
+  // SKU: formato C.SS.NNNN (1º dígito de 1 a 9). skuValido libera o envio;
+  // skuDuplicado checa contra a lista JÁ carregada (defesa imediata — o backend revalida, inclusive arquivados).
+  const SKU_REGEX = /^[1-9]\.\d{2}\.\d{4}$/;
+  const skuValido = SKU_REGEX.test(sku);
+  const skuDuplicado = skuValido && (produtos || []).some((p) => p.sku === sku);
+  const skuHint = sku === '' ? null
+    : skuDuplicado ? { type: 'error', msg: 'SKU já cadastrado.' }
+    : !skuValido ? { type: 'warn', msg: 'SKU incompleto — formato C.SS.NNNN (ex.: 3.08.0114).' }
+    : null;
+  const bloqueado = salvando || !skuValido || skuDuplicado;
+
+  const toggleTag = (tg) => { setFeedback(null); setTags((xs) => (xs.includes(tg) ? xs.filter((x) => x !== tg) : [...xs, tg])); };
+  const addNovaTag = () => {
+    const tg = novaTag.trim();
+    setNovaTag('');
+    if (!tg) return;
+    setTags((xs) => (xs.includes(tg) ? xs : [...xs, tg]));
+  };
+  const limpar = () => { setNome(''); setSku(''); setUnidade('un'); setMinimo(''); setTags([]); setNovaTag(''); };
+
+  const handleCadastrar = async () => {
+    if (salvando) return;   // guard anti-duplo-clique
+    const nomeLimpo = nome.trim();
+    // Validação no front (feedback imediato). O backend é a fonte da verdade e revalida formato/duplicata/obrigatórios.
+    if (!nomeLimpo) { setFeedback({ type: 'error', msg: 'Informe o nome do produto.' }); return; }
+    if (!skuValido) { setFeedback({ type: 'error', msg: 'SKU incompleto — formato C.SS.NNNN (ex.: 3.08.0114).' }); return; }
+    if (skuDuplicado) { setFeedback({ type: 'error', msg: 'SKU já cadastrado.' }); return; }
+    setSalvando(true);
+    setFeedback(null);
+    try {
+      // NÃO enviamos image_url (sem upload — dívida adiada) nem saldo inicial (produto nasce 0; saldo LAZY no backend).
+      await window.FRApi.post('/products', {
+        name: nomeLimpo,
+        sku,
+        unit: unidade,
+        min_stock: minimo.trim() === '' ? 0 : Number(minimo),
+        tags,
+      });
+      setFeedback({ type: 'ok', msg: 'Produto cadastrado com sucesso.' });
+      limpar();
+      if (onCreated) onCreated();   // recarrega a lista — o produto novo aparece
+    } catch (e) {
+      // Backend retorna 400 com mensagem clara (SKU duplicado, SKU de arquivado, campos faltando).
+      // NÃO limpamos o form no erro — o usuário não perde o que digitou.
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setFeedback({ type: 'error', msg: gm ? gm(e) : 'Não foi possível cadastrar o produto.' });
+    } finally {
+      setSalvando(false);
+    }
+  };
+
+  const fb = feedback ? uiTone(t, feedback.type === 'ok' ? 'green' : 'red') : null;
+
   return (
     <Card t={t} style={{ padding: 22, width: 340, flexShrink: 0, alignSelf: 'flex-start', position: 'sticky', top: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 18 }}>
@@ -137,7 +204,14 @@ function NovoProdutoForm({ t, brand }) {
         <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>Novo Produto</div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
-        <div><label style={lab}>Nome do produto</label><input placeholder="Ex: Parafuso Sextavado M8" style={field} /></div>
+        <div><label style={lab}>Nome do produto</label><input value={nome} onChange={(e) => { setNome(e.target.value); setFeedback(null); }} placeholder="Ex: Parafuso Sextavado M8" style={field} /></div>
+        <div>
+          <label style={lab}>Código SKU</label>
+          <input value={sku} onChange={(e) => { setSku(maskSku(e.target.value)); setFeedback(null); }} inputMode="numeric" placeholder="3.08.0114" style={field} />
+          {skuHint && (
+            <div style={{ marginTop: 6, fontSize: 11.5, fontWeight: 700, color: uiTone(t, skuHint.type === 'error' ? 'red' : 'amber').fg }}>{skuHint.msg}</div>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
             <label style={lab}>Unidade</label>
@@ -148,7 +222,7 @@ function NovoProdutoForm({ t, brand }) {
               <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} />
             </div>
           </div>
-          <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input placeholder="0" inputMode="numeric" style={field} /></div>
+          <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input value={minimo} onChange={(e) => setMinimo(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={field} /></div>
         </div>
         <div>
           <label style={lab}>Categorias e etiquetas</label>
@@ -162,14 +236,26 @@ function NovoProdutoForm({ t, brand }) {
                 </button>
               );
             })}
+            {tags.filter((tg) => !PRODUTO_TAGS.some((x) => x.tag === tg)).map((tg) => {
+              const c = uiTone(t, 'accent');
+              return (
+                <button key={tg} onClick={() => toggleTag(tg)} title="Remover etiqueta" style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, letterSpacing: '.02em', padding: '5px 10px', borderRadius: 8, background: c.fg, color: '#fff', border: `1px solid ${c.fg}` }}>
+                  <Icon name="check" size={11} />{tg}
+                </button>
+              );
+            })}
           </div>
-          <input placeholder="Criar nova etiqueta…" style={field} />
+          <input value={novaTag} onChange={(e) => setNovaTag(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addNovaTag(); } }} onBlur={addNovaTag} placeholder="Criar nova etiqueta…" style={field} />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-          <div><div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em', color: t.muted }}>CÓDIGO SKU</div><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>9.99.0239</div></div>
-          <Badge t={t} kind="accent" dot>AUTO</Badge>
-        </div>
-        <Btn t={t} icon="plus">Cadastrar Produto</Btn>
+        {feedback && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: fb.bg, color: fb.fg, border: `1px solid ${frHexToRgba(fb.fg, 0.25)}` }}>
+            <Icon name={feedback.type === 'ok' ? 'check' : 'alert'} size={15} /> {feedback.msg}
+          </div>
+        )}
+        <button onClick={handleCadastrar} disabled={bloqueado}
+          style={{ all: 'unset', boxSizing: 'border-box', cursor: bloqueado ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, width: '100%', height: 42, borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, border: `1px solid ${t.accent}`, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.28)}`, opacity: bloqueado ? 0.6 : 1, transition: 'opacity .14s' }}>
+          <Icon name={salvando ? 'refresh' : 'plus'} size={17} /> {salvando ? 'Cadastrando…' : 'Cadastrar Produto'}
+        </button>
       </div>
     </Card>
   );
@@ -403,7 +489,7 @@ function PageCatalogo({ t, brand }) {
       </div>
       <HeroPatrimonio t={t} brand={brand} produtos={items} />
       <div style={{ display: 'flex', gap: 20, marginTop: 22, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <NovoProdutoForm t={t} brand={brand} />
+        <NovoProdutoForm t={t} brand={brand} onCreated={reload} produtos={items} />
         <div style={{ flex: 1, minWidth: 280 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderRadius: 13, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, marginBottom: 16 }}>
             <Icon name="search" size={17} /><span style={{ fontSize: 13.5 }}>Busque por nome, SKU ou tag…</span>
