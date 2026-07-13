@@ -603,10 +603,9 @@ function cfClienteDaOP(op) {
 // ^BC codifica o it.sku LITERAL (com pontos) — é exatamente o valor que o handleScan de ITEM casa
 // (String(it.sku).toUpperCase() === code). N cópias por item = it.faltam (1 device.send por etiqueta).
 // Na Conferência: nf='-' e data=hoje (dd/mm/aaaa, padrão do app).
-async function cfPrintIdentificacao(items, onFlash) {
+async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().toLocaleDateString('pt-BR')) {
   const notify = onFlash || function () {};
-  const data = new Date().toLocaleDateString('pt-BR');   // dd/mm/aaaa — padrão do app
-  const nf = '-';                                        // contexto Conferência (sem NF)
+  // nf e data agora vêm por PARÂMETRO (defaults '-'/hoje preservam a chamada interna da Conferência :735).
   const jobs = [];
   items.forEach((it) => {
     const n = parseInt(it.faltam) || 0;
@@ -838,4 +837,6 @@ function nowHm() {
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
 }
 
-Object.assign(window, { PageConferencia });
+// cfPrintIdentificacao/frSendZplBrowserPrint/frZplField exportados p/ a Entrada por NF reusar o caminho ZPL
+// (PageEntradaNova em pages_admin.jsx). São module-level: a Conferência continua chamando os locais — sem mudança.
+Object.assign(window, { PageConferencia, cfPrintIdentificacao, frSendZplBrowserPrint, frZplField });

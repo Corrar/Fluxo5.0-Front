@@ -1,16 +1,8 @@
 // pages_admin.jsx — Entradas, Saídas, Usuários, Relatórios, Placeholder + router.
 const { useState: useStateA } = React;
 
-const MATERIAIS = [
-  { sku: '9.99.0238', nome: 'Parafuso Sextavado M8', disp: '320 un' },
-  { sku: '1.02.0044', nome: 'Chapa Aço 1020 2mm',    disp: '12 ch' },
-  { sku: '3.00.0101', nome: 'Filamento PLA Azul 1kg', disp: '8 un' },
-  { sku: '4.10.0233', nome: 'Rolamento 6204ZZ',      disp: '54 un' },
-  { sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm',   disp: '240 m' },
-  { sku: '6.30.0012', nome: 'Tinta Epóxi Cinza 3,6L', disp: '5 lt' },
-  { sku: '2.11.0080', nome: 'Porca Sextavada M8',    disp: '410 un' },
-  { sku: '7.40.0150', nome: 'Arruela Lisa 8mm',      disp: '880 un' },
-];
+// MATERIAIS (mock por SKU) removido: a busca de material agora usa window.useFRProducts() (GET /products
+// adaptado), com a row carregando product_id REAL + sku + nome. Ver PageEntradaNova / PageMeusPedidosLegacy.
 const ARMAZENS = ['Almoxarifado Central', 'Usinagem', 'Produção 3D', 'Elétrica', 'Montagem', 'Expedição'];
 
 // Gera um código de barras Code 128B REAL (escaneável) a partir do texto.
@@ -31,48 +23,10 @@ function frBarcode128(text) {
   return bars;
 }
 window.frBarcode128 = frBarcode128;
-// Abre janela de impressão com N etiquetas por item.
-function frPrintEtiquetas(items, nf) {
-  const data = new Date().toLocaleDateString('pt-BR');
-  const logo = (window.__asset ? window.__asset('assets/logo-royale.png') : 'assets/logo-royale.png');
-  const labels = [];
-  items.forEach((it) => {
-    const n = parseInt(it.etiq != null && it.etiq !== '' ? it.etiq : it.qtd) || 0;
-    for (let k = 0; k < n; k++) {
-      const bars = frBarcode128(it.sku).map((b) => `<i style="display:inline-block;width:${b.w * 1.6}px;height:50px;background:${b.on ? '#000' : '#fff'}"></i>`).join('');
-      labels.push(`<div class="lbl"><div class="frame">
-        <div class="brand"><img src="${logo}" alt=""/><span>Fluxo Royale</span></div>
-        <div class="code">${it.sku}</div>
-        <div class="desc">${(it.nome || 'Material').replace(/</g, '&lt;')}</div>
-        <div class="meta">NF ${nf || '—'} &nbsp;·&nbsp; ${data}</div>
-        <div class="bars">${bars}</div>
-        <div class="bcode">${it.sku}</div>
-      </div></div>`);
-    }
-  });
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiquetas · NF ${nf || ''}</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:Arial,Helvetica,sans-serif;background:#eee;padding:10px}
-    .sheet{display:flex;flex-wrap:wrap;gap:8px}
-    .lbl{width:280px;height:168px;background:#fff;border-radius:6px;padding:8px;page-break-inside:avoid}
-    .frame{width:100%;height:100%;border:1px solid #222;border-radius:5px;padding:10px 12px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;text-align:center}
-    .brand{display:flex;align-items:center;gap:6px;opacity:.85}
-    .brand img{width:16px;height:16px;object-fit:contain}
-    .brand span{font-size:10px;font-weight:700;letter-spacing:.5px;color:#222}
-    .code{font-size:23px;font-weight:800;letter-spacing:.5px;line-height:1}
-    .desc{font-size:12.5px;font-weight:600;line-height:1.25;max-height:32px;overflow:hidden}
-    .meta{font-size:11px;color:#444}
-    .bars{display:flex;align-items:flex-end;justify-content:center;flex-wrap:nowrap;height:52px;overflow:hidden;background:#fff;padding:0 10px}
-    .bcode{font-size:11px;letter-spacing:3px;font-family:monospace}
-    @media print{body{background:#fff;padding:0}.frame{border:1px solid #000}}
-  </style></head><body>
-  <div class="sheet">${labels.join('')}</div>
-  <script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script>
-  </body></html>`;
-  const w = window.open('', '_blank');
-  if (w) { w.document.open(); w.document.write(html); w.document.close(); }
-}
+// frPrintEtiquetas (window.print + frBarcode128) REMOVIDO: a impressão da Entrada por NF agora usa o
+// caminho ZPL/Browser Print da Conferência (window.cfPrintIdentificacao), disparado SÓ após o 201 do
+// POST /stock/entries. Ver handleEntradaImprimir em PageEntradaNova. frBarcode128 (acima) mantido
+// como util exposto em window.frBarcode128.
 
 const SOLICITACOES = [
   { id: 1, req: 'REQ-B491B451', sol: 'Nemias',       setor: 'Desenvolvimento', op: '00005', status: 'em-analise', time: 'há cerca de 1 hora',  itens: [{ nome: 'Parafuso Allen Inox 3/16 x 1', sku: '3.09.0484', qtd: 20 }] },
@@ -142,6 +96,9 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const [rows, setRows] = useStateA([{ sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }]);
   const [drag, setDrag] = useStateA(false);
   const [done, setDone] = useStateA(false);
+  // Catálogo REAL (GET /products adaptado) — mesmo hook/pattern do pedidos.jsx. Substitui o mock MATERIAIS.
+  const { items: frProdutos, loading: catLoading, error: catError } = window.useFRProducts();
+  const prodBySku = (sku) => frProdutos.find((p) => p.sku === sku);
   const filled = rows.filter((r) => r.sku.trim());
   const totalUn = filled.reduce((s, r) => s + (parseInt(r.qtd) || 0), 0);
   const totalEtiq = filled.reduce((s, r) => s + (parseInt(r.etiq != null && r.etiq !== '' ? r.etiq : r.qtd) || 0), 0);
@@ -156,16 +113,54 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const importSample = () => { setRows([['9.99.0238', 320], ['1.02.0044', 12], ['4.10.0233', 54], ['5.20.0099', 240], ['3.00.0101', 8]].map(([sku, qtd]) => ({ sku, qtd: String(qtd), etiq: String(qtd), etiqT: false }))); setDone(false); };
   const [q, setQ] = useStateA('');
   const [review, setReview] = useStateA(false);
-  const nameForSku = (sku) => (MATERIAIS.find((m) => m.sku === sku) || {}).nome;
-  const filtered = q.trim() ? MATERIAIS.filter((m) => m.nome.toLowerCase().includes(q.toLowerCase()) || m.sku.includes(q)) : [];
-  const addMaterial = (sku) => {
+  const [enviando, setEnviando] = useStateA(false);   // anti duplo-clique no POST /stock/entries
+  const [envErro, setEnvErro] = useStateA(null);      // erro do envio (inclui "Esta NF-e já foi cadastrada")
+  // Nome da row: prioriza o que a busca gravou (r.nome); fallback por SKU no catálogo real (SKU digitado à mão).
+  const rowName = (r) => r.nome || (prodBySku(r.sku) || {}).nome;
+  // product_id REAL da row: da busca (r.product_id) ou resolvido pelo SKU no catálogo (SKU digitado válido).
+  const resolvePid = (r) => r.product_id || (prodBySku(r.sku) || {}).product_id;
+  const ql = q.trim().toLowerCase();
+  const filtered = q.trim() ? frProdutos.filter((p) => (p.nome || '').toLowerCase().includes(ql) || (p.sku || '').includes(q.trim())) : [];
+  const addMaterial = (p) => {
     setRows((rs) => {
-      if (rs.some((r) => r.sku === sku)) return rs;
-      const idx = rs.findIndex((r) => !r.sku.trim());
-      if (idx >= 0) return rs.map((r, j) => (j === idx ? { ...r, sku } : r));
-      return [...rs, { sku, qtd: '' }];
+      if (rs.some((r) => r.product_id && r.product_id === p.product_id)) return rs;   // dedup por product_id
+      const idx = rs.findIndex((r) => !r.sku?.trim());
+      const novaRow = { product_id: p.product_id, sku: p.sku, nome: p.nome, un: p.un, qtd: '', etiq: '', etiqT: false };
+      if (idx >= 0) return rs.map((r, j) => (j === idx ? { ...r, ...novaRow } : r));
+      return [...rs, novaRow];
     });
     setQ(''); setDone(false);
+  };
+  // POST /stock/entries -> só imprime (ZPL, via Conferência) se der 201. Ordem: entrada → sucesso → imprime.
+  const handleEntradaImprimir = async () => {
+    if (enviando) return;                              // anti duplo-clique (Btn não tem prop `disabled`)
+    setEnvErro(null);
+    if (!nf.trim()) { setEnvErro('Informe o número da NF.'); return; }
+    if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
+    const invalidRows = filled.filter((r) => !resolvePid(r));
+    if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar entrada.'); return; }
+    const qtdRuim = filled.filter((r) => !(Number(r.qtd) > 0));
+    if (qtdRuim.length) { setEnvErro('Todos os itens precisam de quantidade maior que zero.'); return; }
+    setEnviando(true);
+    try {
+      // 1. ENTRADA (backend) — agrega por produto, grava nf_number, bloqueia NF duplicada (400).
+      await window.FRApi.post('/stock/entries', {
+        nf_number: nf.trim(),
+        type: 'NFe',
+        entries: filled.map((r) => ({ product_id: resolvePid(r), quantity: Number(r.qtd) })),
+      });
+      // 2. IMPRESSÃO (só após 201) — etiqueta de material ZPL, com NF real + data de hoje.
+      const dataEntrada = new Date().toLocaleDateString('pt-BR');
+      const itensEtiqueta = filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: parseInt(r.etiq !== '' && r.etiq != null ? r.etiq : r.qtd) || 0 }));
+      await window.cfPrintIdentificacao(itensEtiqueta, null, nf.trim(), dataEntrada);
+      setDone(true);
+    } catch (e) {
+      // 400 do backend ("Esta NF-e já foi cadastrada." / "Número da NF é obrigatório..." / furo) → mostra, NÃO imprime.
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setEnvErro(gm ? gm(e) : (e && e.message ? e.message : 'Erro ao dar entrada.'));
+    } finally {
+      setEnviando(false);
+    }
   };
   const inp = { boxSizing: 'border-box', height: 40, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', width: '100%' };
   const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
@@ -256,12 +251,18 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material no estoque por nome ou SKU…"
               style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
           </label>
-          {filtered.length > 0 && (
+          {q.trim() && (
             <div style={{ position: 'absolute', zIndex: 30, top: '100%', left: 6, right: 6, marginTop: 4, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6, maxHeight: 280, overflowY: 'auto' }} className="fr-scroll">
-              {filtered.map((m) => {
-                const added = rows.some((r) => r.sku === m.sku);
+              {catLoading ? (
+                <div style={{ padding: '12px 12px', fontSize: 12.5, color: t.muted }}>Carregando produtos…</div>
+              ) : catError ? (
+                <div style={{ padding: '12px 12px', fontSize: 12.5, color: uiTone(t, 'red').fg }}>{catError}</div>
+              ) : filtered.length === 0 ? (
+                <div style={{ padding: '12px 12px', fontSize: 12.5, color: t.muted }}>Nenhum produto encontrado.</div>
+              ) : filtered.map((m) => {
+                const added = rows.some((r) => r.product_id === m.product_id);
                 return (
-                  <button key={m.sku} disabled={added} onClick={() => addMaterial(m.sku)} style={{
+                  <button key={m.product_id || m.sku} disabled={added} onClick={() => addMaterial(m)} style={{
                     all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 12,
                     padding: '9px 10px', borderRadius: 9, opacity: added ? 0.55 : 1 }}
                     onMouseEnter={(e) => { if (!added) e.currentTarget.style.background = t.hover; }}
@@ -284,12 +285,14 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '0 12px 8px' }}>
           {rows.map((r, i) => {
-            const nm = nameForSku(r.sku);
+            const nm = rowName(r);
+            const notFound = !catLoading && !catError && r.sku.trim() && !nm;   // SKU digitado que não casa com produto real
             return (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: isNF ? '1fr 120px 120px 44px' : '1fr 160px 44px', gap: 10, alignItems: 'center' }}>
               <div>
                 {nm && <div style={{ fontSize: 13, fontWeight: 700, color: t.text, margin: '0 2px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nm}</div>}
-                <input value={r.sku} onChange={(e) => update(i, 'sku', e.target.value)} placeholder="9.99.0000" style={inp} />
+                <input value={r.sku} onChange={(e) => update(i, 'sku', e.target.value)} placeholder="9.99.0000" style={{ ...inp, ...(notFound ? { borderColor: '#ef4444' } : null) }} />
+                {notFound && <div style={{ fontSize: 10.5, fontWeight: 700, color: uiTone(t, 'red').fg, margin: '5px 2px 0' }}>Produto não encontrado no estoque</div>}
               </div>
               <input value={r.qtd} onChange={(e) => update(i, 'qtd', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={{ ...inp, textAlign: 'center', alignSelf: 'end' }} />
               {isNF && <input value={r.etiq != null && r.etiq !== '' ? r.etiq : (r.etiqT ? '' : r.qtd)} onChange={(e) => update(i, 'etiq', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" title="Quantidade de etiquetas a imprimir" style={{ ...inp, textAlign: 'center', alignSelf: 'end', borderColor: t.accent, color: t.accentText, fontWeight: 800 }} />}
@@ -320,9 +323,15 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
         {done
           ? <Badge t={t} kind="green" dot>{L.confirmado}</Badge>
           : isNF
-            ? <Btn t={t} icon="barcode" onClick={() => { if (filled.length) { frPrintEtiquetas(filled.map((r) => ({ ...r, nome: nameForSku(r.sku) })), nf); setDone(true); } }}>Entrada / Imprimir</Btn>
+            ? <Btn t={t} icon="barcode" onClick={handleEntradaImprimir}>{enviando ? 'Dando entrada…' : 'Entrada / Imprimir'}</Btn>
             : <Btn t={t} icon="eye" onClick={() => filled.length && setReview(true)}>Revisar e Confirmar</Btn>}
       </div>
+
+      {envErro && (
+        <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 10, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 13, fontWeight: 600 }}>
+          {envErro}
+        </div>
+      )}
 
       {review && (
         <div onClick={() => setReview(false)} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(10,12,20,.55)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
@@ -342,7 +351,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
             )}
             <div className="fr-scroll" style={{ overflowY: 'auto', padding: '8px 14px', flex: 1 }}>
               {filled.map((r, i) => {
-                const nm = nameForSku(r.sku);
+                const nm = rowName(r);
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 8px', borderBottom: i === filled.length - 1 ? 'none' : `1px solid ${t.border}` }}>
                     <span style={{ width: 34, height: 34, borderRadius: 9, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={16} /></span>
@@ -1177,16 +1186,20 @@ function PageMeusPedidosLegacy({ t }) {
   const [q, setQ] = useStateA('');
   const [sent, setSent] = useStateA(false);
   const remove = (id) => setItems((xs) => xs.filter((x) => x.id !== id));
-  const nameForSku = (sku) => (MATERIAIS.find((mt) => mt.sku === sku) || {}).nome;
-  const filtered = q.trim() ? MATERIAIS.filter((mt) => mt.nome.toLowerCase().includes(q.toLowerCase()) || mt.sku.includes(q)) : [];
-  const addMaterial = (sku) => { setRows((rs) => (rs.some((r) => r.sku === sku) ? rs : [...rs, { sku, qtd: '1' }])); setQ(''); setSent(false); };
+  // Catálogo REAL (GET /products adaptado) — substitui o mock MATERIAIS.
+  const { items: frProdutos, loading: catLoading, error: catError } = window.useFRProducts();
+  const prodBySku = (sku) => frProdutos.find((p) => p.sku === sku);
+  const rowName = (r) => r.nome || (prodBySku(r.sku) || {}).nome;
+  const ql = q.trim().toLowerCase();
+  const filtered = q.trim() ? frProdutos.filter((p) => (p.nome || '').toLowerCase().includes(ql) || (p.sku || '').includes(q.trim())) : [];
+  const addMaterial = (p) => { setRows((rs) => (rs.some((r) => r.product_id && r.product_id === p.product_id) ? rs : [...rs, { product_id: p.product_id, sku: p.sku, nome: p.nome, un: p.un, qtd: '1' }])); setQ(''); setSent(false); };
   const updateQ = (i, v) => { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, qtd: v } : r))); setSent(false); };
   const removeRow = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
   const filledNew = rows.filter((r) => parseInt(r.qtd) > 0);
   const totalNew = filledNew.reduce((a, r) => a + (parseInt(r.qtd) || 0), 0);
   const submit = () => {
     if (!filledNew.length) return;
-    const novo = { id: Date.now(), req: 'REQ-PED-' + (7700 + Math.floor(Math.random() * 200)), sol: 'Bruno Teixeira', setor: 'Diretoria', op: op.trim() || 's/ OP', status: 'em-analise', time: 'agora', itens: filledNew.map((r) => ({ nome: nameForSku(r.sku) || 'Material', sku: r.sku, qtd: parseInt(r.qtd) })) };
+    const novo = { id: Date.now(), req: 'REQ-PED-' + (7700 + Math.floor(Math.random() * 200)), sol: 'Bruno Teixeira', setor: 'Diretoria', op: op.trim() || 's/ OP', status: 'em-analise', time: 'agora', itens: filledNew.map((r) => ({ nome: rowName(r) || 'Material', sku: r.sku, qtd: parseInt(r.qtd) })) };
     setItems((xs) => [novo, ...xs]); setRows([]); setOp(''); setSent(true); setFilter('todas');
   };
   const inp = { boxSizing: 'border-box', height: 42, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', width: '100%' };
@@ -1221,12 +1234,18 @@ function PageMeusPedidosLegacy({ t }) {
             <Icon name="search" size={18} />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material por nome ou SKU…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
           </label>
-          {filtered.length > 0 && (
+          {q.trim() && (
             <div className="fr-scroll" style={{ position: 'absolute', zIndex: 30, top: '100%', left: 0, right: 0, marginTop: 4, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6, maxHeight: 260, overflowY: 'auto' }}>
-              {filtered.map((mt) => {
-                const added = rows.some((r) => r.sku === mt.sku);
+              {catLoading ? (
+                <div style={{ padding: '10px 12px', fontSize: 12, color: t.muted }}>Carregando produtos…</div>
+              ) : catError ? (
+                <div style={{ padding: '10px 12px', fontSize: 12, color: uiTone(t, 'red').fg }}>{catError}</div>
+              ) : filtered.length === 0 ? (
+                <div style={{ padding: '10px 12px', fontSize: 12, color: t.muted }}>Nenhum produto encontrado.</div>
+              ) : filtered.map((mt) => {
+                const added = rows.some((r) => r.product_id === mt.product_id);
                 return (
-                  <button key={mt.sku} disabled={added} onClick={() => addMaterial(mt.sku)} style={{ all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9, opacity: added ? 0.55 : 1 }}
+                  <button key={mt.product_id || mt.sku} disabled={added} onClick={() => addMaterial(mt)} style={{ all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9, opacity: added ? 0.55 : 1 }}
                     onMouseEnter={(e) => { if (!added) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                     <span style={{ width: 32, height: 32, borderRadius: 8, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={16} /></span>
                     <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{mt.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {mt.sku} · {mt.disp} disp.</div></div>
@@ -1243,11 +1262,12 @@ function PageMeusPedidosLegacy({ t }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {rows.map((r, i) => {
-              const nm = nameForSku(r.sku);
+              const nm = rowName(r);
+              const notFound = !catLoading && !catError && r.sku.trim() && !nm;   // SKU sem correspondência no catálogo real
               return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${notFound ? '#ef4444' : t.border}` }}>
                   <span style={{ width: 34, height: 34, borderRadius: 9, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={16} /></span>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nm || 'Material'}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {r.sku}</div></div>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nm || 'Produto não encontrado'}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {r.sku}</div></div>
                   <input value={r.qtd} onChange={(e) => updateQ(i, e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={{ ...inp, width: 76, height: 38, textAlign: 'center' }} />
                   <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>un</span>
                   <button onClick={() => removeRow(i)} title="Remover" style={{ all: 'unset', cursor: 'pointer', width: 36, height: 36, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
