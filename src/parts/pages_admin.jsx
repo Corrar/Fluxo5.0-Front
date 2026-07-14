@@ -192,18 +192,27 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       let importados = 0, naoEncontrados = 0, qtdInvalida = 0, repetidos = 0;
       const skusVistos = new Set();
       const novas = [];
+      // normaliza SKU p/ forma canônica d.dd.dddd (tolera zero à esquerda / segmentos curtos); colapsado (sem os 2 pontos) → devolve cru, hit=false honesto:
+      const normSku = (v) => {
+        const s = String(v ?? '').trim();
+        const m = s.match(/^0*(\d)\.0*(\d{1,2})\.0*(\d{1,4})$/);
+        if (!m) return s;
+        return `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(4, '0')}`;
+      };
+      // Map pré-normalizado — mata o find O(n)/linha e o mismatch de formatação de uma vez:
+      const skuIndex = new Map((frProdutos || []).map((p) => [normSku(p.sku), p]));
       for (let i = inicio; i < linhas.length; i++) {
         const linha = linhas[i] || [];
         const codigo = String(linha[0] ?? '').trim();               // normaliza (Excel pode dar número/espaços)
         if (!codigo) continue;                                       // linha vazia
         const qtd = Number(String(linha[1] ?? '').replace(',', '.'));
         if (!Number.isFinite(qtd) || qtd <= 0) { qtdInvalida++; continue; }
-        const prod = prodBySku(codigo);                              // casa código→produto real
+        const prod = skuIndex.get(normSku(codigo));                  // casa código→produto (normalizado d.dd.dddd)
         if (!prod) { naoEncontrados++; continue; }                   // SKU não existe → ignora
-        if (skusVistos.has(codigo)) { repetidos++; continue; }       // repetido na planilha → mantém o 1º
-        const jaNaLista = rows.some((r) => (r.product_id === prod.product_id) || (r.sku === codigo)); // já na lista → não duplica
+        if (skusVistos.has(prod.product_id)) { repetidos++; continue; } // repetido na planilha (por produto) → mantém o 1º
+        const jaNaLista = rows.some((r) => r.product_id === prod.product_id); // já na lista → não duplica
         if (jaNaLista) { repetidos++; continue; }
-        skusVistos.add(codigo);
+        skusVistos.add(prod.product_id);
         const etiqRaw = String(linha[2] ?? '').trim();               // coluna C; vazia/inválida → usa qtd (B)
         const etiq = etiqRaw && Number(etiqRaw) > 0 ? etiqRaw : String(qtd);
         novas.push({ product_id: prod.product_id, sku: prod.sku, nome: prod.nome, un: prod.un, qtd: String(qtd), etiq, etiqT: true });
@@ -230,7 +239,13 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       [ex1, 10, 10],                                // exemplo 1 (SKU real)
       [ex2, 25, 5],                                 // exemplo 2 (qtd etiqueta ≠ quantidade)
     ];
-    const ws = XLSX.utils.aoa_to_sheet(dados);      // SKU é string no array -> célula de TEXTO (não vira número)
+    const ws = XLSX.utils.aoa_to_sheet(dados);
+    // Blindagem anti-colapso: força cada Código (coluna A das linhas de dados) como TEXTO explícito
+    // — t:'s' (string) + z:'@' (número-formato texto) — pra Excel/Sheets NÃO reinterpretar o SKU como número/data.
+    [ex1, ex2].forEach((sku, i) => {
+      const addr = XLSX.utils.encode_cell({ c: 0, r: i + 1 }); // A2, A3 (header é r=0)
+      ws[addr] = { t: 's', v: String(sku), z: '@' };
+    });
     ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Entrada');
