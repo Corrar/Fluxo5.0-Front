@@ -115,6 +115,8 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   // via handleImportXlsx (casa código→product_id no catálogo). Ver dropzone abaixo.
   const [q, setQ] = useStateA('');
   const [review, setReview] = useStateA(false);
+  const [idemKey, setIdemKey] = useStateA(null);              // âncora X-Idempotency-Key do reuse (gerada ao ABRIR o modal)
+  const genKey = () => (crypto.randomUUID?.() ?? `r-${Date.now()}-${Math.random().toString(16).slice(2)}`); // fallback p/ contexto não-seguro (http://IP-LAN)
   const [enviando, setEnviando] = useStateA(false);   // anti duplo-clique no POST /stock/entries
   const [envErro, setEnvErro] = useStateA(null);      // erro do envio (inclui "Esta NF-e já foi cadastrada")
   // Toast de erro some sozinho em ~4s. cleanup evita timer duplicado se der 2 erros seguidos.
@@ -171,6 +173,37 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       setDone(true);
     } catch (e) {
       // 400 do backend ("Esta NF-e já foi cadastrada." / "Número da NF é obrigatório..." / furo) → mostra, NÃO imprime.
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setEnvErro(gm ? gm(e) : (e && e.message ? e.message : 'Erro ao dar entrada.'));
+    } finally {
+      setEnviando(false);
+    }
+  };
+  // Submit do REAPROVEITAMENTO (confirm do modal). Espelha handleEntradaImprimir, SEM NF.
+  // Idempotência: reusa idemKey (gerada ao abrir o modal) no header X-Idempotency-Key.
+  const handleReuseConfirmar = async () => {
+    if (enviando) return;                              // mesmo guard anti duplo-clique
+    setEnvErro(null);
+    if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
+    const invalidRows = filled.filter((r) => !resolvePid(r));
+    if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar entrada.'); return; }
+    const qtdRuim = filled.filter((r) => !(Number(r.qtd) > 0));
+    if (qtdRuim.length) { setEnvErro('Todos os itens precisam de quantidade maior que zero.'); return; }
+    setEnviando(true);
+    try {
+      // ENTRADA de reaproveitamento — SEM nf_number; header carrega a âncora de idempotência.
+      await window.FRApi.post('/stock/entries', {
+        type: 'REAPROVEITAMENTO',
+        entries: filled.map((r) => ({ product_id: resolvePid(r), quantity: Number(r.qtd) })),
+      }, { headers: { 'X-Idempotency-Key': idemKey } });
+      // IMPRESSÃO (só após 201) — mesma regra de etiqueta da NF; banner REAPROVEITADO, sem NF.
+      const dataEntrada = new Date().toLocaleDateString('pt-BR');
+      const itensEtiqueta = filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: parseInt(r.etiq !== '' && r.etiq != null ? r.etiq : r.qtd) || 0 }));
+      await window.cfPrintIdentificacao(itensEtiqueta, null, null, dataEntrada, { reaproveitado: true });
+      setDone(true);
+      setReview(false);                                // só no SUCESSO fecha o modal
+    } catch (e) {
+      // NO ERRO: mantém o modal aberto e a MESMA idemKey (retry idempotente). Só mostra o erro.
       const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
       setEnvErro(gm ? gm(e) : (e && e.message ? e.message : 'Erro ao dar entrada.'));
     } finally {
@@ -415,7 +448,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           ? <Badge t={t} kind="green" dot>{L.confirmado}</Badge>
           : isNF
             ? <Btn t={t} icon="barcode" onClick={handleEntradaImprimir}>{enviando ? 'Dando entrada…' : 'Entrada / Imprimir'}</Btn>
-            : <Btn t={t} icon="eye" onClick={() => filled.length && setReview(true)}>Revisar e Confirmar</Btn>}
+            : <Btn t={t} icon="eye" onClick={() => { if (filled.length) { setIdemKey(genKey()); setReview(true); } }}>Revisar e Confirmar</Btn>}
       </div>
 
       {envErro && (
@@ -467,7 +500,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
               <div style={{ fontSize: 13, color: t.muted }}><b style={{ color: t.text }}>{filled.length}</b> itens · <b style={{ color: t.text }}>{totalUn}</b> unidades</div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <Btn t={t} kind="ghost" onClick={() => setReview(false)}>Voltar</Btn>
-                <Btn t={t} icon="check" onClick={() => { setDone(true); setReview(false); }}>{L.confirmar}</Btn>
+                <Btn t={t} icon="check" onClick={reuse ? handleReuseConfirmar : () => { setDone(true); setReview(false); }}>{L.confirmar}</Btn>
               </div>
             </div>
           </div>

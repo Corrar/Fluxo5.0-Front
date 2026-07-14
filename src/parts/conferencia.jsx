@@ -603,7 +603,7 @@ function cfClienteDaOP(op) {
 // ^BC codifica o it.sku LITERAL (com pontos) — é exatamente o valor que o handleScan de ITEM casa
 // (String(it.sku).toUpperCase() === code). N cópias por item = it.faltam (1 device.send por etiqueta).
 // Na Conferência: nf='-' e data=hoje (dd/mm/aaaa, padrão do app).
-async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().toLocaleDateString('pt-BR')) {
+async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().toLocaleDateString('pt-BR'), opts = {}) {
   const notify = onFlash || function () {};
   // nf e data agora vêm por PARÂMETRO (defaults '-'/hoje preservam a chamada interna da Conferência :735).
   const jobs = [];
@@ -620,6 +620,14 @@ async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().
     while (barBY > 2 && (11 * bLen + 35) * barBY > 760) barBY--;
     const barW = (11 * bLen + 35) * barBY;
     const barX = Math.max(20, Math.round((800 - barW) / 2));
+    // Reaproveitamento (opts.reaproveitado): omite "NF …" (reuse não tem NF) e imprime só a data;
+    // adiciona banner reverse-video "REAPROVEITADO" na zona livre y=418-480. Sem opts → NF-mode INALTERADO.
+    const linhaInfo = opts.reaproveitado
+      ? `^FO0,200^A0N,24,24^FB800,1,0,C^FD${data}^FS`
+      : `^FO0,200^A0N,24,24^FB800,1,0,C^FDNF ${nf} · ${data}^FS`;
+    const bannerReuse = opts.reaproveitado
+      ? `\n^FO0,425^GB800,48,48^FS\n^FO0,432^A0N,30,30^FB800,1,0,C^FR^FDREAPROVEITADO^FS`
+      : '';
     const zpl = `^XA
 ^PW800
 ^LL480
@@ -627,9 +635,9 @@ async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().
 ^FO0,25^A0N,26,26^FB800,1,0,C^FDFluxo Royale^FS
 ^FO0,70^A0N,64,64^FB800,1,0,C^FD${sku}^FS
 ^FO0,150^A0N,32,32^FB800,1,0,C^FD${nome}^FS
-^FO0,200^A0N,24,24^FB800,1,0,C^FDNF ${nf} · ${data}^FS
+${linhaInfo}
 ^FO${barX},250^BY${barBY}^BCN,120,N,N,N^FD${sku}^FS
-^FO0,390^A0N,28,28^FB800,1,0,C^FD${sku}^FS
+^FO0,390^A0N,28,28^FB800,1,0,C^FD${sku}^FS${bannerReuse}
 ^XZ`;
     for (let k = 0; k < n; k++) jobs.push(zpl);
   });
