@@ -1,4 +1,5 @@
 // pages_admin.jsx — Entradas, Saídas, Usuários, Relatórios, Placeholder + router.
+import * as XLSX from 'xlsx';   // leitura de planilha .xlsx na Entrada por NF (import de itens)
 const { useState: useStateA } = React;
 
 // MATERIAIS (mock por SKU) removido: a busca de material agora usa window.useFRProducts() (GET /products
@@ -110,11 +111,25 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   })); setDone(false); };
   const addRow = () => setRows((rs) => [...rs, { sku: '', qtd: '', etiq: '', etiqT: false }]);
   const removeRow = (i) => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : rs));
-  const importSample = () => { setRows([['9.99.0238', 320], ['1.02.0044', 12], ['4.10.0233', 54], ['5.20.0099', 240], ['3.00.0101', 8]].map(([sku, qtd]) => ({ sku, qtd: String(qtd), etiq: String(qtd), etiqT: false }))); setDone(false); };
+  // importSample (mock que preenchia rows com SKUs fixos) REMOVIDO — a dropzone agora importa .xlsx real
+  // via handleImportXlsx (casa código→product_id no catálogo). Ver dropzone abaixo.
   const [q, setQ] = useStateA('');
   const [review, setReview] = useStateA(false);
   const [enviando, setEnviando] = useStateA(false);   // anti duplo-clique no POST /stock/entries
   const [envErro, setEnvErro] = useStateA(null);      // erro do envio (inclui "Esta NF-e já foi cadastrada")
+  // Toast de erro some sozinho em ~4s. cleanup evita timer duplicado se der 2 erros seguidos.
+  React.useEffect(() => {
+    if (!envErro) return;
+    const id = setTimeout(() => setEnvErro(null), 4000);
+    return () => clearTimeout(id);
+  }, [envErro]);
+  const [okMsg, setOkMsg] = useStateA(null);          // toast VERDE de sucesso (resultado do import de planilha)
+  React.useEffect(() => {
+    if (!okMsg) return;
+    const id = setTimeout(() => setOkMsg(null), 4000);
+    return () => clearTimeout(id);
+  }, [okMsg]);
+  const fileRef = React.useRef(null);                 // input .xlsx escondido, disparado pela dropzone
   // Nome da row: prioriza o que a busca gravou (r.nome); fallback por SKU no catálogo real (SKU digitado à mão).
   const rowName = (r) => r.nome || (prodBySku(r.sku) || {}).nome;
   // product_id REAL da row: da busca (r.product_id) ou resolvido pelo SKU no catálogo (SKU digitado válido).
@@ -162,13 +177,72 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       setEnviando(false);
     }
   };
+  // Importa planilha .xlsx (A=código, B=quantidade, C=qtd etiqueta). Casa código→product_id no catálogo real;
+  // ADICIONA as linhas válidas às existentes (não substitui). Toast de resultado (X/Y/Z). Erro de parse → envErro.
+  const handleImportXlsx = async (file) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) { setEnvErro('Não foi possível ler a planilha (sem abas).'); return; }
+      const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' }); // matriz; raw:false = tudo string
+      if (!linhas.length) { setEnvErro('Planilha vazia.'); return; }
+      // Cabeçalho: se a coluna B da 1ª linha NÃO é número → é cabeçalho, pula.
+      const inicio = (linhas[0] && !Number.isFinite(Number(String(linhas[0][1]).replace(',', '.')))) ? 1 : 0;
+      let importados = 0, naoEncontrados = 0, qtdInvalida = 0, repetidos = 0;
+      const skusVistos = new Set();
+      const novas = [];
+      for (let i = inicio; i < linhas.length; i++) {
+        const linha = linhas[i] || [];
+        const codigo = String(linha[0] ?? '').trim();               // normaliza (Excel pode dar número/espaços)
+        if (!codigo) continue;                                       // linha vazia
+        const qtd = Number(String(linha[1] ?? '').replace(',', '.'));
+        if (!Number.isFinite(qtd) || qtd <= 0) { qtdInvalida++; continue; }
+        const prod = prodBySku(codigo);                              // casa código→produto real
+        if (!prod) { naoEncontrados++; continue; }                   // SKU não existe → ignora
+        if (skusVistos.has(codigo)) { repetidos++; continue; }       // repetido na planilha → mantém o 1º
+        const jaNaLista = rows.some((r) => (r.product_id === prod.product_id) || (r.sku === codigo)); // já na lista → não duplica
+        if (jaNaLista) { repetidos++; continue; }
+        skusVistos.add(codigo);
+        const etiqRaw = String(linha[2] ?? '').trim();               // coluna C; vazia/inválida → usa qtd (B)
+        const etiq = etiqRaw && Number(etiqRaw) > 0 ? etiqRaw : String(qtd);
+        novas.push({ product_id: prod.product_id, sku: prod.sku, nome: prod.nome, un: prod.un, qtd: String(qtd), etiq, etiqT: true });
+        importados++;
+      }
+      setRows((rs) => { const preenchidas = rs.filter((r) => r.sku?.trim()); return [...preenchidas, ...novas]; });
+      setDone(false);
+      const partes = [`${importados} importado(s)`];
+      if (naoEncontrados) partes.push(`${naoEncontrados} não encontrado(s)`);
+      if (qtdInvalida) partes.push(`${qtdInvalida} qtd inválida`);
+      if (repetidos) partes.push(`${repetidos} repetido(s)`);
+      setOkMsg(partes.join(' · '));
+    } catch (e) {
+      setEnvErro('Não foi possível ler a planilha. Confirme que é um .xlsx válido.');
+    }
+  };
+  // Gera e baixa o .xlsx modelo (cabeçalho A/B/C idêntico ao que o handleImportXlsx lê) com 2 SKUs reais de exemplo.
+  const baixarModelo = () => {
+    const exemplos = (frProdutos || []).slice(0, 2);
+    const ex1 = exemplos[0]?.sku || '3.08.0114';
+    const ex2 = exemplos[1]?.sku || '5.20.0099';
+    const dados = [
+      ['Código', 'Quantidade', 'Qtd Etiqueta'],   // cabeçalho
+      [ex1, 10, 10],                                // exemplo 1 (SKU real)
+      [ex2, 25, 5],                                 // exemplo 2 (qtd etiqueta ≠ quantidade)
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(dados);      // SKU é string no array -> célula de TEXTO (não vira número)
+    ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Entrada');
+    XLSX.writeFile(wb, 'modelo-entrada-nf.xlsx');   // dispara o download no browser
+  };
   const inp = { boxSizing: 'border-box', height: 40, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', width: '100%' };
   const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
 
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
       <PageHeader t={t} title={L.title} subtitle={L.sub}
-        actions={<Btn t={t} icon="download" kind="ghost">Baixar modelo</Btn>} />
+        actions={<Btn t={t} icon="download" kind="ghost" onClick={baixarModelo}>Baixar modelo</Btn>} />
 
       {saida && (
         <Card t={t} style={{ padding: 18, marginBottom: 20 }}>
@@ -195,7 +269,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div>
               <label style={lab}>Nota Fiscal (NF)</label>
-              <input value={nf} onChange={(e) => setNf(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Ex: 004471" inputMode="numeric" style={inp} />
+              <input value={nf} onChange={(e) => setNf(e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="Número da NF (ex.: 004471)" inputMode="numeric" style={inp} />
             </div>
             <div>
               <label style={lab}>Armazém de entrada</label>
@@ -223,9 +297,11 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           <Badge t={t} kind="amber">RETORNO DE OP / PROJETO</Badge>
         </div>
       )}
-      <div onClick={importSample}
+      <input ref={fileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+        onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) handleImportXlsx(f); e.target.value = ''; }} />
+      <div onClick={() => fileRef.current && fileRef.current.click()}
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
-        onDrop={(e) => { e.preventDefault(); setDrag(false); importSample(); }}
+        onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) handleImportXlsx(f); }}
         style={{ cursor: 'pointer', borderRadius: 18, padding: '34px 24px', textAlign: 'center',
           border: `2px dashed ${drag ? t.accent : t.borderStrong}`, background: drag ? t.accentSoft : t.panel, transition: 'all .15s' }}>
         <div style={{ width: 60, height: 60, margin: '0 auto 16px', borderRadius: 16, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}>
@@ -328,8 +404,16 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       </div>
 
       {envErro && (
-        <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 10, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 13, fontWeight: 600 }}>
-          {envErro}
+        <div style={{ position: 'fixed', top: 84, right: 24, zIndex: 30, display: 'flex', alignItems: 'center', gap: 10, padding: '13px 18px', borderRadius: 13, maxWidth: 'min(380px,90vw)', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontWeight: 700, fontSize: 13.5, boxShadow: '0 10px 30px rgba(0,0,0,.3)' }}>
+          <Icon name="alert" size={18} />
+          <span style={{ flex: 1 }}>{envErro}</span>
+        </div>
+      )}
+
+      {okMsg && (
+        <div style={{ position: 'fixed', top: envErro ? 144 : 84, right: 24, zIndex: 30, display: 'flex', alignItems: 'center', gap: 10, padding: '13px 18px', borderRadius: 13, maxWidth: 'min(380px,90vw)', background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 13.5, boxShadow: '0 10px 30px rgba(0,0,0,.3)' }}>
+          <Icon name="check" size={18} />
+          <span style={{ flex: 1 }}>{okMsg}</span>
         </div>
       )}
 
