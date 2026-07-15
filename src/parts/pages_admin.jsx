@@ -5,6 +5,10 @@ const { useState: useStateA } = React;
 // MATERIAIS (mock por SKU) removido: a busca de material agora usa window.useFRProducts() (GET /products
 // adaptado), com a row carregando product_id REAL + sku + nome. Ver PageEntradaNova / PageMeusPedidosLegacy.
 const ARMAZENS = ['Almoxarifado Central', 'Usinagem', 'Produção 3D', 'Elétrica', 'Montagem', 'Expedição'];
+// Setores de destino da SAÍDA manual. FONTE DA VERDADE: VALID_SECTORS no backend
+// (Backend-Fluxo2.0/src/controllers/stock.controller.ts → manualWithdrawal). Precisa bater 1:1,
+// senão o POST /stock/manual-withdrawal toma 400 "Setor de destino inválido". NÃO reusar ARMAZENS.
+const SETORES_SAIDA = ['Elétrica', 'Flow', 'Esteira', 'Lavadora', 'Usinagem', 'Desenvolvimento', 'Protótipo', 'Engenharia', 'Outros', 'Viagem', 'Terceiros', 'Acumulador', 'Reposição'];
 
 // Gera um código de barras Code 128B REAL (escaneável) a partir do texto.
 const FR_C128 = ['212222','222122','222221','121223','121322','131222','122213','122312','132212','221213','221312','231212','112232','122132','122231','113222','123122','123221','223211','221132','221231','213212','223112','312131','311222','321122','321221','312212','322112','322211','212123','212321','232121','111323','131123','131321','112313','132113','132311','211313','231113','231311','112133','112331','132131','113123','113321','133121','313121','211331','231131','213113','213311','213131','311123','311321','331121','312113','312311','332111','314111','221411','431111','111224','111422','121124','121421','141122','141221','112214','112412','122114','122411','142112','142211','241211','221114','413111','241112','134111','111242','121142','121241','114212','124112','124211','411212','421112','421211','212141','214121','412121','111143','111341','131141','114113','114311','411113','411311','113141','114131','311141','411131','211412','211214','211232','2331112'];
@@ -94,6 +98,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const [op, setOp] = useStateA('');
   const [nf, setNf] = useStateA('');
   const [armazem, setArmazem] = useStateA(ARMAZENS[0]);
+  const [setor, setSetor] = useStateA('');   // Setor de destino da SAÍDA (enum VALID_SECTORS do backend); '' obriga escolha explícita
   const [rows, setRows] = useStateA([{ sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }]);
   const [drag, setDrag] = useStateA(false);
   const [done, setDone] = useStateA(false);
@@ -210,6 +215,50 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       setEnviando(false);
     }
   };
+  // Submit da SAÍDA (confirm do modal). Espelha handleReuseConfirmar: guard + valida itens/SKU/qtd,
+  // e ADICIONA validação de SETOR (VALID_SECTORS) e OP CONDICIONAL (regra por tag do backend), então
+  // POST /stock/manual-withdrawal com X-Idempotency-Key (âncora do idemKey gerado ao abrir o modal).
+  // SAÍDA NÃO imprime ZPL (baixa de estoque, não recebimento).
+  const handleSaidaConfirmar = async () => {
+    if (enviando) return;                              // anti duplo-clique (guard igual ao reuse)
+    setEnvErro(null);
+    if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
+    const invalidRows = filled.filter((r) => !resolvePid(r));
+    if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar saída.'); return; }
+    const qtdRuim = filled.filter((r) => !(Number(r.qtd) > 0));
+    if (qtdRuim.length) { setEnvErro('Todos os itens precisam de quantidade maior que zero.'); return; }
+    // Setor obrigatório e dentro do enum do backend (senão o POST toma 400 "Setor inválido").
+    if (!setor || !SETORES_SAIDA.includes(setor)) { setEnvErro('Selecione um setor de destino válido.'); return; }
+    // OP condicional — espelha a regra do backend: item cujo produto NÃO tem tag isenta
+    // (camisetas/epi/ferramentas) exige OP. Itens sem produto já foram barrados acima, então
+    // basta olhar as tags reais (frProdutos vem do GET /products, traz tags por produto).
+    const exemptTags = ['camisetas', 'epi', 'ferramentas'];
+    const requiresOp = filled.some((r) => {
+      const p = frProdutos.find((x) => x.product_id === resolvePid(r));
+      const tags = ((p && p.tags) || []).map((tg) => String(tg).toLowerCase());
+      return !tags.some((tg) => exemptTags.includes(tg));   // não isento → exige OP
+    });
+    if (requiresOp && !op.trim()) { setEnvErro('Informe o número da OP: há itens não isentos que exigem OP.'); return; }
+    setEnviando(true);
+    try {
+      // Baixa física real. op_code opcional (só vai se preenchido); o header carrega a âncora de
+      // idempotência que o backend 1A honra (op_key ancorado no X-Idempotency-Key).
+      await window.FRApi.post('/stock/manual-withdrawal', {
+        sector: setor,
+        op_code: op.trim() || undefined,
+        items: filled.map((r) => ({ product_id: resolvePid(r), quantity: Number(r.qtd) })),
+      }, { headers: { 'X-Idempotency-Key': idemKey } });
+      setDone(true);
+      setReview(false);                                // só no SUCESSO fecha o modal
+    } catch (e) {
+      // NO ERRO: mantém o modal aberto e a MESMA idemKey (retry idempotente). O backend devolve msg
+      // clara (setor inválido / OP obrigatória / OP não encontrada / OP finalizada / furo de estoque).
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setEnvErro(gm ? gm(e) : (e && e.message ? e.message : 'Erro ao dar saída.'));
+    } finally {
+      setEnviando(false);
+    }
+  };
   // Importa planilha .xlsx (A=código, B=quantidade, C=qtd etiqueta). Casa código→product_id no catálogo real;
   // ADICIONA as linhas válidas às existentes (não substitui). Toast de resultado (X/Y/Z). Erro de parse → envErro.
   const handleImportXlsx = async (file) => {
@@ -297,13 +346,14 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div>
               <label style={lab}>Ordem de Produção (OP)</label>
-              <input value={op} onChange={(e) => setOp(e.target.value)} placeholder="Ex: OP-2025-0412" style={inp} />
+              <input value={op} onChange={(e) => setOp(e.target.value)} placeholder="Ex: 12010" style={inp} />
             </div>
             <div>
-              <label style={lab}>Armazém de destino</label>
+              <label style={lab}>Setor de destino</label>
               <div style={{ position: 'relative' }}>
-                <select value={armazem} onChange={(e) => setArmazem(e.target.value)} style={{ ...inp, appearance: 'none', WebkitAppearance: 'none', paddingRight: 34, cursor: 'pointer' }}>
-                  {ARMAZENS.map((a) => <option key={a} value={a}>{a}</option>)}
+                <select value={setor} onChange={(e) => setSetor(e.target.value)} style={{ ...inp, appearance: 'none', WebkitAppearance: 'none', paddingRight: 34, cursor: 'pointer', color: setor ? t.text : t.muted }}>
+                  <option value="" disabled>Selecione o setor…</option>
+                  {SETORES_SAIDA.map((s) => <option key={s} value={s} style={{ color: t.text }}>{s}</option>)}
                 </select>
                 <Icon name="chevronDown" size={16} style={{ position: 'absolute', right: 12, top: 12, color: t.muted, pointerEvents: 'none' }} />
               </div>
@@ -478,7 +528,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
             {saida && (
               <div style={{ display: 'flex', gap: 24, padding: '12px 22px', borderBottom: `1px solid ${t.border}`, background: t.elevated, flexWrap: 'wrap' }}>
                 <div><div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>OP</div><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, marginTop: 2 }}>{op || '—'}</div></div>
-                <div><div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>DESTINO</div><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, marginTop: 2 }}>{armazem}</div></div>
+                <div><div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>SETOR</div><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, marginTop: 2 }}>{setor || '—'}</div></div>
               </div>
             )}
             <div className="fr-scroll" style={{ overflowY: 'auto', padding: '8px 14px', flex: 1 }}>
@@ -500,7 +550,12 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
               <div style={{ fontSize: 13, color: t.muted }}><b style={{ color: t.text }}>{filled.length}</b> itens · <b style={{ color: t.text }}>{totalUn}</b> unidades</div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <Btn t={t} kind="ghost" onClick={() => setReview(false)}>Voltar</Btn>
-                <Btn t={t} icon="check" onClick={reuse ? handleReuseConfirmar : () => { setDone(true); setReview(false); }}>{L.confirmar}</Btn>
+                {/* Feedback visual de envio SÓ no ramo da saída (reuse/NF inalterados). Btn não tem prop
+                    disabled → o wrapper aplica opacity + pointer-events enquanto envia; o guard
+                    if(enviando) return no handleSaidaConfirmar continua sendo a proteção REAL. */}
+                <span style={saida && enviando ? { opacity: 0.6, pointerEvents: 'none' } : undefined}>
+                  <Btn t={t} icon="check" onClick={reuse ? handleReuseConfirmar : saida ? handleSaidaConfirmar : () => { setDone(true); setReview(false); }}>{saida && enviando ? 'Dando saída…' : L.confirmar}</Btn>
+                </span>
               </div>
             </div>
           </div>
