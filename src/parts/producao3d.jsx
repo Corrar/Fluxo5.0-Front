@@ -19,13 +19,7 @@ const P3_HIST = [
   { id: 'PR-3298', peca: 'SEPARADOR DE BANDEJA', code: '5.03.0031', qtd: 6, gramas: 384, tempo: '3h 30min', data: '16/06 · 11:02', op: 'OP-2041', operador: 'Davi M.' },
   { id: 'PR-3294', peca: 'TAMPA DO DESCEDOR', code: '5.03.0061', qtd: 10, gramas: 520, tempo: '5h 10min', data: '15/06 · 15:30', op: 'OP-2060', operador: 'Rafael S.' },
 ];
-const P3_DEMANDAS_SEED = [
-  { id: 'DM-1180', peca: 'ALOCADOR DE OVOS', code: '5.03.0014', qtd: 20, op: 'OP-2041', setor: 'Montagem', solicitante: 'Carlos M.', quando: 'há 30 min', status: 'analise', notas: 'Urgente — linha parada aguardando a peça.' },
-  { id: 'DM-1178', peca: 'GUIA DA ESTEIRA', code: '5.03.0044', qtd: 8, op: 'OP-2038', setor: 'Elétrica', solicitante: 'Bruno T.', quando: 'há 2 h', status: 'aceita', notas: 'Cor preta de preferência.' },
-  { id: 'DM-1175', peca: 'CAÍDA OVO EMBALADORA', code: '5.03.0029', qtd: 14, op: 'OP-2060', setor: 'Produção', solicitante: 'Ana P.', quando: 'há 3 h', status: 'produzindo', notas: 'Reforçar densidade de preenchimento.' },
-  { id: 'DM-1170', peca: 'CARAMBOLA 3D', code: '5.03.0012', qtd: 30, op: 'OP-2041', setor: 'Montagem', solicitante: 'Carlos M.', quando: 'ontem', status: 'concluida', notas: '' },
-  { id: 'DM-1166', peca: 'TAMPA DO DESCEDOR', code: '5.03.0061', qtd: 5, op: 'OP-2060', setor: 'Produção', solicitante: 'Davi M.', quando: 'há 2 dias', status: 'rejeitada', notas: 'Sem filamento disponível no momento.' },
-];
+// P3_DEMANDAS_SEED removido — Demandas renderiza 100% de useFRDemands (GET /producao-3d/demands).
 const P3_DEMSTATUS = {
   analise:    { label: 'Em análise', kind: 'amber', next: 'aceita', act: 'Aceitar pedido', actIcon: 'check' },
   aceita:     { label: 'Aceita', kind: 'blue', next: 'produzindo', act: 'Iniciar produção', actIcon: 'printer' },
@@ -33,6 +27,76 @@ const P3_DEMSTATUS = {
   concluida:  { label: 'Concluída', kind: 'green' },
   rejeitada:  { label: 'Rejeitada', kind: 'red' },
 };
+
+// ==========================================================================
+// LIGAÇÃO AO BACKEND /producao-3d (controller 100% no StockService — 06fc48d).
+// Hooks compartilhados no padrão useFRClients/useFRSeparations; a peça 2 (Catálogo/
+// Dashboard) reusa window.useFR3DParts / window.useFRProductions.
+// ==========================================================================
+function p3Err(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function p3Num(v) { const f = window.FRAdapters && window.FRAdapters.parseNumber; return f ? f(v) : (parseFloat(v) || 0); }
+function p3Minutes(m) { m = Math.round(p3Num(m)); if (!m) return '—'; const h = Math.floor(m / 60), mm = m % 60; return (h ? h + 'h ' : '') + mm + 'min'; }
+function p3RelTime(iso) { if (!iso) return ''; const d = new Date(iso); if (isNaN(d.getTime())) return ''; const s = Math.max(0, (Date.now() - d.getTime()) / 1000); if (s < 3600) return 'há ' + Math.max(1, Math.round(s / 60)) + ' min'; if (s < 86400) return 'há ' + Math.round(s / 3600) + ' h'; return 'há ' + Math.round(s / 86400) + ' dias'; }
+function p3DateTime(iso) { if (!iso) return '—'; const d = new Date(iso); if (isNaN(d.getTime())) return '—'; const p = (x) => String(x).padStart(2, '0'); return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' · ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+
+// Status da demanda: backend (real, capitalizado/acentuado) ↔ front (lowercase do P3_DEMSTATUS).
+const P3_DEM_BACK2FRONT = { 'Em análise': 'analise', 'Aceita': 'aceita', 'Em desenvolvimento': 'produzindo', 'Concluída': 'concluida', 'Rejeitada': 'rejeitada' };
+const P3_DEM_FRONT2BACK = { analise: 'Em análise', aceita: 'Aceita', produzindo: 'Em desenvolvimento', concluida: 'Concluída', rejeitada: 'Rejeitada' };
+
+// Adapters backend → shape das telas.
+function p3AdaptProduction(p) {
+  p = p || {};
+  return { id: p.id, product_id: p.partId || null, demandId: p.demandId || null,
+    qtd: p3Num(p.quantity), gramas: p3Num(p.filamentGrams), tempo: p3Minutes(p.totalMinutes),
+    data: p3DateTime(p.date), operador: p.operator || '—', origem: p.demandId ? 'demanda' : 'propria' };
+}
+function p3AdaptDemand(d) {
+  d = d || {};
+  return { id: d.id, product_id: d.partId || null, requestId: d.requestId || null,
+    qtd: p3Num(d.quantity), op: d.opNumber || '—', priority: d.priority || '',
+    solicitante: d.requester || 'Sistema', quando: p3RelTime(d.createdAt),
+    status: P3_DEM_BACK2FRONT[d.status] || 'analise', statusBack: d.status, notas: d.notes || '' };
+}
+function p3AdaptPart(p) {
+  p = p || {};
+  return { product_id: p.id, code: p.code || '', nome: p.name || '', image: p.image || null,
+    gramas: p3Num(p.filamentGrams), minutes: p3Num(p.productionMinutes) };
+}
+
+// Hook GET genérico → { items, loading, error, reload }.
+function p3UseGet(path, adapt) {
+  const R = window.React;
+  const [items, setItems] = R.useState([]);
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const mounted = R.useRef(true);
+  const load = R.useCallback(function () {
+    setError(null);
+    window.FRApi.get(path, { skipLoading: true })
+      .then(function (res) { if (!mounted.current) return; const rows = Array.isArray(res && res.data) ? res.data : []; setItems(rows.map(adapt).filter(Boolean)); setLoading(false); })
+      .catch(function (e) { if (!mounted.current) return; setError(p3Err(e)); setLoading(false); });
+  }, []);
+  R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  return { items: items, loading: loading, error: error, reload: load };
+}
+function useFRProductions() { return p3UseGet('/producao-3d/productions', p3AdaptProduction); }
+function useFRDemands() { return p3UseGet('/producao-3d/demands', p3AdaptDemand); }
+function useFR3DParts() { return p3UseGet('/producao-3d/parts', p3AdaptPart); }
+window.useFRProductions = useFRProductions;
+window.useFRDemands = useFRDemands;
+window.useFR3DParts = useFR3DParts;
+
+// Toast (erro/sucesso) — mesmo visual das telas já ligadas.
+function P3Toast({ t, toast, onClose }) {
+  if (!toast) return null;
+  return (
+    <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
+      <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
+      <span style={{ fontSize: 13, fontWeight: 600 }}>{toast.msg}</span>
+      <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', opacity: 0.7, flexShrink: 0 }}><Icon name="x" size={16} /></button>
+    </div>
+  );
+}
 
 // ---------- Dashboard Operacional ----------
 const P3_PERIODOS = [['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias']];
@@ -176,13 +240,7 @@ function P3Dashboard({ t }) {
 }
 
 // ---------- Histórico de Produção ----------
-const P3_HIST_SEED = [
-  { id: 'PR-3308', peca: 'CARAMBOLA 3D', code: '5.03.0012', qtd: 12, gramas: 504, tempo: '5h 40min', data: '17/06 · 14:20', op: 'OP-2041', operador: 'Rafael S.', origem: 'demanda', teste: false, fil: 'PETG Preto', temp: '240°C', obs: '', melhoria: 'Aumentei o fluxo para 105% — reduziu falhas de camada.', impacto: 'Refugo caiu de 3 para 0 peças no lote.' },
-  { id: 'PR-3305', peca: 'SUPORTE DE SENSOR', code: '5.03.0050', qtd: 8, gramas: 176, tempo: '4h 00min', data: '17/06 · 09:10', op: 'OP-2038', operador: 'Davi M.', origem: 'demanda', teste: false, fil: 'PLA Azul', temp: '210°C', obs: 'Suporte exige cama a 60°C.', melhoria: '', impacto: '' },
-  { id: 'PR-3303', peca: 'GUIA DA ESTEIRA', code: '5.03.0044', qtd: 2, gramas: 68, tempo: '1h 30min', data: '16/06 · 18:50', op: '—', operador: 'Rafael S.', origem: 'propria', teste: true, fil: 'TPU Flex', temp: '230°C', obs: 'Teste de flexibilidade com TPU.', melhoria: 'Reduzi velocidade para 25mm/s no TPU.', impacto: 'Peça saiu sem stringing, aprovada para produção.' },
-  { id: 'PR-3301', peca: 'COPINHO 3D', code: '5.03.0002', qtd: 24, gramas: 432, tempo: '6h 25min', data: '16/06 · 16:45', op: 'OP-2060', operador: 'Rafael S.', origem: 'demanda', teste: false, fil: 'PLA Branco', temp: '205°C', obs: '', melhoria: '', impacto: '' },
-  { id: 'PR-3299', peca: 'CARAMBOLA 3D', code: '5.03.0012', qtd: 1, gramas: 42, tempo: '0h 30min', data: '16/06 · 13:10', op: '—', operador: 'Davi M.', origem: 'propria', teste: true, fil: 'PETG Preto', temp: '245°C', obs: 'Protótipo de validação dimensional.', melhoria: '', impacto: '' },
-];
+// P3_HIST_SEED removido — Histórico renderiza 100% de useFRProductions (GET /producao-3d/productions).
 
 function P3HistModal({ t, rec, onClose, onSave }) {
   const novo = !rec.id;
@@ -260,33 +318,51 @@ function P3HistModal({ t, rec, onClose, onSave }) {
 }
 
 function P3Historico({ t }) {
-  const [recs, setRecs] = useStateP3(P3_HIST_SEED);
-  const [edit, setEdit] = useStateP3(null);
+  const { items: prods, loading, error, reload } = useFRProductions();
+  const { items: parts } = useFR3DParts();
+  const partsMap = React.useMemo(() => { const m = {}; parts.forEach((p) => { m[p.product_id] = p; }); return m; }, [parts]);
   const [filtro, setFiltro] = useStateP3('todas');
-  const save = (r, novo) => {
-    if (novo) { const id = 'PR-' + (3309 + recs.length); setRecs((xs) => [{ id, gramas: 0, tempo: '—', data: 'agora', op: '—', operador: 'Bruno T.', origem: 'propria', ...r }, ...xs]); }
-    else setRecs((xs) => xs.map((x) => (x.id === r.id ? r : x)));
-    setEdit(null);
+  const [busy, setBusy] = useStateP3(false);
+  const [toast, setToast] = useStateP3(null);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+  const busyRef = React.useRef(false); busyRef.current = busy;
+
+  // GET /productions não traz nome/sku da peça (só product_id) → resolve pelo mapa de /parts.
+  const recs = prods.map((p) => ({ ...p, peca: (partsMap[p.product_id] && partsMap[p.product_id].nome) || (p.product_id ? 'Peça ' + String(p.product_id).slice(0, 8) : '—'), code: (partsMap[p.product_id] && partsMap[p.product_id].code) || '' }));
+  const tabs = [['todas', 'Todas'], ['demanda', 'Por demanda'], ['propria', 'Conta própria']];
+  const count = (k) => k === 'todas' ? recs.length : recs.filter((r) => r.origem === k).length;
+  const view = recs.filter((r) => filtro === 'todas' || r.origem === filtro);
+
+  // Excluir = REVERSÃO de estoque (reverseReceive), não remoção cosmética → confirma antes.
+  const del = async (r) => {
+    if (busyRef.current) return;
+    if (!window.confirm('Excluir a produção de ' + r.qtd + '× ' + r.peca + '?\n\nIsto REVERTE a entrada: baixa ' + r.qtd + ' un. do estoque físico. Não pode ser desfeito.')) return;
+    setBusy(true);
+    try {
+      await window.FRApi.delete('/producao-3d/productions/' + r.id);
+      reload();
+      setToast({ kind: 'ok', msg: 'Produção revertida — estoque ajustado.' });
+    } catch (e) {
+      if (e && e.status === 404) { reload(); setToast({ kind: 'ok', msg: 'Produção já não existia — lista atualizada.' }); }
+      else { setToast({ kind: 'err', msg: p3Err(e) }); } // 400 SALDO_INSUFICIENTE_REVERSAO → msg do StockError; registro FICA
+    } finally { setBusy(false); }
   };
-  const tabs = [['todas', 'Todas'], ['demanda', 'Por demanda'], ['propria', 'Conta própria'], ['teste', 'Testes']];
-  const count = (k) => k === 'todas' ? recs.length : k === 'teste' ? recs.filter((r) => r.teste).length : recs.filter((r) => r.origem === k).length;
-  const view = recs.filter((r) => filtro === 'todas' || (filtro === 'teste' ? r.teste : r.origem === filtro));
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 850, letterSpacing: '-.02em', color: t.text }}>Histórico de Produção</h1>
-          <p style={{ margin: '7px 0 0', fontSize: 13.5, color: t.muted }}>Todas as peças feitas — por demanda ou por conta própria.</p>
+          <p style={{ margin: '7px 0 0', fontSize: 13.5, color: t.muted }}>Peças produzidas — por demanda ou por conta própria. Excluir reverte a entrada no estoque.</p>
         </div>
-        <Btn t={t} icon="plus" onClick={() => setEdit({})}>Registrar produção</Btn>
+        <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
       </div>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
         <KPI t={t} mini icon="box" label="Peças produzidas" value={recs.reduce((a, r) => a + r.qtd, 0)} kind="accent" />
         <KPI t={t} mini icon="printer" label="Por demanda" value={recs.filter((r) => r.origem === 'demanda').length} kind="blue" />
         <KPI t={t} mini icon="zap" label="Conta própria" value={recs.filter((r) => r.origem === 'propria').length} kind="green" />
-        <KPI t={t} mini icon="clock" label="Testes" value={recs.filter((r) => r.teste).length} kind="amber" />
+        <KPI t={t} mini icon="clock" label="Registros" value={recs.length} kind="amber" />
       </div>
 
       <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 18 }}>
@@ -295,6 +371,14 @@ function P3Historico({ t }) {
         ); })}
       </div>
 
+      {loading && recs.length === 0 ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando produções…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      ) : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {view.map((r) => (
           <Card t={t} key={r.id} hover style={{ padding: 16 }}>
@@ -302,51 +386,41 @@ function P3Historico({ t }) {
               <span style={{ width: 44, height: 44, borderRadius: 12, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={21} /></span>
               <div style={{ flex: 1, minWidth: 160 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: t.muted }}>{r.id}</span>
                   <span style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{r.peca}</span>
                   {r.origem === 'propria' ? <Badge t={t} kind="green">Conta própria</Badge> : <Badge t={t} kind="blue">Demanda</Badge>}
-                  {r.teste && <Badge t={t} kind="amber" dot>Teste</Badge>}
                 </div>
-                <div style={{ fontSize: 12, color: t.muted, marginTop: 4 }}>{r.code} · {r.op} · {r.operador} · {r.data}</div>
+                <div style={{ fontSize: 12, color: t.muted, marginTop: 4 }}>{r.code || '—'} · {r.operador} · {r.data}</div>
               </div>
               <div style={{ display: 'flex', gap: 18, textAlign: 'center' }}>
                 <div><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>QTD</div><div style={{ fontSize: 16, fontWeight: 850, color: t.text }}>{r.qtd}</div></div>
                 <div><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>FILAMENTO</div><div style={{ fontSize: 16, fontWeight: 850, color: t.text }}>{r.gramas}g</div></div>
                 <div><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>TEMPO</div><div style={{ fontSize: 16, fontWeight: 850, color: t.text }}>{r.tempo}</div></div>
               </div>
-              <button onClick={() => setEdit(r)} title="Anotações" style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 14px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, color: t.accentText, background: t.accentSoft, flexShrink: 0 }}><Icon name="pencil" size={15} /> Anotações</button>
+              <button onClick={() => del(r)} disabled={busy} title="Excluir (reverte a entrada no estoque)" style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 14px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}`, opacity: busy ? 0.5 : 1, flexShrink: 0 }}
+                onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="trash" size={15} /> Excluir</button>
             </div>
-            {(r.obs || r.melhoria || r.fil || r.temp) && (
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14, paddingTop: 13, borderTop: `1px solid ${t.border}` }}>
-                {r.fil && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: t.muted, padding: '5px 10px', borderRadius: 8, background: t.elevated }}><Icon name="zap" size={12} /> {r.fil}{r.temp ? ` · ${r.temp}` : ''}</span>}
-                {r.obs && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: t.muted, padding: '5px 10px', borderRadius: 8, background: t.elevated }}><Icon name="file" size={12} /> {r.obs}</span>}
-                {r.melhoria && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: uiTone(t, 'green').fg, padding: '5px 10px', borderRadius: 8, background: uiTone(t, 'green').bg }}><Icon name="zap" size={12} /> Melhoria: {r.melhoria}{r.impacto ? ` → ${r.impacto}` : ''}</span>}
-              </div>
-            )}
           </Card>
         ))}
         {view.length === 0 && <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhuma produção neste filtro." /></Card>}
       </div>
-      {edit && <P3HistModal t={t} rec={edit} onClose={() => setEdit(null)} onSave={save} />}
+      )}
+      <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }
 
 // ---------- Quadro de Demandas ----------
-function P3DemandaCard({ t, d, onAdvance, onReject, onDelete }) {
-  const st = P3_DEMSTATUS[d.status];
+function P3DemandaCard({ t, d, onAdvance, onReject, busy }) {
+  const st = P3_DEMSTATUS[d.status] || P3_DEMSTATUS.analise;
   const isHist = d.status === 'concluida' || d.status === 'rejeitada';
-  const peca = P3_PECAS.find((p) => p.code === d.code);
-  const img = peca && peca.img;
+  const img = d.img;
   return (
     <Card t={t} style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ position: 'relative', height: 160, background: '#e9ebf0' }}>
         {img
-          ? <img src={img} alt={d.peca} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ? <img src={window.__asset ? window.__asset(img) : img} alt={d.peca} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           : <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: '#9aa3b2' }}><Icon name="box" size={42} /></div>}
-        <span style={{ position: 'absolute', top: 12, left: 12, fontFamily: 'monospace', fontSize: 11, fontWeight: 800, color: '#fff', background: 'rgba(8,10,16,.6)', padding: '4px 9px', borderRadius: 7, backdropFilter: 'blur(4px)' }}>{d.id}</span>
         <span style={{ position: 'absolute', top: 12, right: 12 }}><Badge t={t} kind={st.kind} dot>{st.label}</Badge></span>
-        {d.teste && <span style={{ position: 'absolute', bottom: 12, left: 12 }}><Badge t={t} kind="amber" dot>Teste</Badge></span>}
       </div>
       <div style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
@@ -354,12 +428,12 @@ function P3DemandaCard({ t, d, onAdvance, onReject, onDelete }) {
           <Badge t={t} kind="gray">{d.op}</Badge>
           <span style={{ marginLeft: 'auto', fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em', textAlign: 'right' }}>QTD<br /><span style={{ fontSize: 18, color: t.text }}>{d.qtd}</span></span>
         </div>
-        <div style={{ fontSize: 12, color: t.muted, marginTop: 4 }}>{d.code}</div>
+        <div style={{ fontSize: 12, color: t.muted, marginTop: 4 }}>{d.code || '—'}</div>
 
         {/* solicitante */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 13, paddingTop: 13, borderTop: `1px solid ${t.border}` }}>
-          <span style={{ width: 32, height: 32, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 11.5, flexShrink: 0 }}>{d.solicitante.split(' ').map((x) => x[0]).slice(0, 2).join('')}</span>
-          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{d.solicitante}</div><div style={{ fontSize: 11, color: t.muted }}>{d.setor} · {d.quando}</div></div>
+          <span style={{ width: 32, height: 32, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 11.5, flexShrink: 0 }}>{String(d.solicitante || '?').split(' ').map((x) => x[0]).slice(0, 2).join('')}</span>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{d.solicitante}</div><div style={{ fontSize: 11, color: t.muted }}>{d.priority ? 'Prioridade ' + d.priority + ' · ' : ''}{d.quando}</div></div>
         </div>
 
         {/* observações */}
@@ -368,22 +442,21 @@ function P3DemandaCard({ t, d, onAdvance, onReject, onDelete }) {
             <Icon name="file" size={15} style={{ color: t.muted, flexShrink: 0, marginTop: 1 }} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 2 }}>{d.status === 'rejeitada' ? 'Motivo da recusa' : 'Observações'}</div>
-              <div style={{ fontSize: 12.5, color: d.status === 'rejeitada' ? uiTone(t, 'red').fg : t.muted, lineHeight: 1.45 }}>{d.notas}</div>
+              <div style={{ fontSize: 12.5, color: d.status === 'rejeitada' ? uiTone(t, 'red').fg : t.muted, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{d.notas}</div>
             </div>
           </div>
         )}
 
         {!isHist && (
           <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-            <button onClick={() => onReject(d)} style={{ all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /> Recusar</button>
-            <button onClick={() => onAdvance(d.id)} style={{ all: 'unset', cursor: 'pointer', flex: 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: '#fff', boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}` }}><Icon name={st.actIcon} size={16} /> {st.act}</button>
+            <button onClick={() => !busy && onReject(d)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}`, opacity: busy ? 0.5 : 1 }}
+              onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /> Recusar</button>
+            <button onClick={() => !busy && onAdvance(d)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', flex: 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: '#fff', boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}`, opacity: busy ? 0.6 : 1 }}><Icon name={st.actIcon || 'check'} size={16} /> {st.act}</button>
           </div>
         )}
         {isHist && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-            <button onClick={() => onDelete(d.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.muted, padding: '7px 12px', borderRadius: 9 }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={15} /> Excluir</button>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: t.faint }}>Registro histórico</span>
           </div>
         )}
       </div>
@@ -419,12 +492,16 @@ function P3RejectModal({ t, demanda, onClose, onConfirm }) {
 }
 
 function P3Demandas({ t }) {
-  const [items, setItems] = useStateP3(P3_DEMANDAS_SEED);
+  const { items: demands, loading, error, reload } = useFRDemands();
+  const { items: parts } = useFR3DParts();
+  const partsMap = React.useMemo(() => { const m = {}; parts.forEach((p) => { m[p.product_id] = p; }); return m; }, [parts]);
   const [tab, setTab] = useStateP3('fila');
-  const [rejecting, setRejecting] = useStateP3(null);
-  const advance = (id) => setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status: P3_DEMSTATUS[x.status].next } : x)));
-  const reject = (id, motivo) => { setItems((xs) => xs.map((x) => (x.id === id ? { ...x, status: 'rejeitada', notas: motivo } : x))); setRejecting(null); };
-  const remove = (id) => setItems((xs) => xs.filter((x) => x.id !== id));
+  const [busy, setBusy] = useStateP3(false);
+  const [toast, setToast] = useStateP3(null);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+  const busyRef = React.useRef(false); busyRef.current = busy;
+
+  const items = demands.map((d) => { const pt = partsMap[d.product_id]; return { ...d, peca: (pt && pt.nome) || (d.product_id ? 'Peça ' + String(d.product_id).slice(0, 8) : '—'), code: (pt && pt.code) || '', img: (pt && pt.image) || null }; });
   const groups = {
     fila: items.filter((x) => x.status === 'analise' || x.status === 'aceita'),
     produzindo: items.filter((x) => x.status === 'produzindo'),
@@ -432,6 +509,36 @@ function P3Demandas({ t }) {
   };
   const tabs = [['fila', 'Fila'], ['produzindo', 'Produzindo'], ['historico', 'Histórico']];
   const view = groups[tab];
+
+  // Avançar status. Concluir (produzindo→concluida = 'Concluída' no backend) dispara o CRÍTICO #2:
+  // receive + reserve + request 'aprovado'. Envia o status do BACKEND (capitalizado), não o do front.
+  const advance = async (d) => {
+    if (busyRef.current) return;
+    const nextFront = P3_DEMSTATUS[d.status] && P3_DEMSTATUS[d.status].next;
+    if (!nextFront) return;
+    const backStatus = P3_DEM_FRONT2BACK[nextFront];
+    setBusy(true);
+    try {
+      await window.FRApi.put('/producao-3d/demands/' + d.id + '/status', { status: backStatus });
+      reload();
+      setToast({ kind: 'ok', msg: nextFront === 'concluida' ? 'Peça produzida — estoque creditado e reservado para a solicitação.' : 'Demanda movida para "' + P3_DEMSTATUS[nextFront].label + '".' });
+    } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); } // 400 "Demanda já concluída/cancelada" (guard) → msg clara
+    finally { setBusy(false); }
+  };
+  // Recusar = muda status para 'Rejeitada'. O endpoint só aceita { status } — o MOTIVO NÃO é
+  // persistido (gap reportado); por isso confirmamos direto, sem coletar um texto que se perderia.
+  const reject = async (d) => {
+    if (busyRef.current) return;
+    if (!window.confirm('Recusar a demanda de ' + d.qtd + '× ' + d.peca + '?')) return;
+    setBusy(true);
+    try {
+      await window.FRApi.put('/producao-3d/demands/' + d.id + '/status', { status: 'Rejeitada' });
+      reload();
+      setToast({ kind: 'ok', msg: 'Demanda recusada.' });
+    } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div>
       <PageHeader t={t} title="Quadro de Demandas" subtitle="Pedidos de peças recebidos dos setores para impressão." />
@@ -442,11 +549,20 @@ function P3Demandas({ t }) {
           </button>
         ); })}
       </div>
+      {loading && items.length === 0 ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando demandas…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
         {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhuma demanda neste status." /></Card></div>}
-        {view.map((d) => <P3DemandaCard key={d.id} t={t} d={d} onAdvance={advance} onReject={(dem) => setRejecting(dem)} onDelete={remove} />)}
+        {view.map((d) => <P3DemandaCard key={d.id} t={t} d={d} busy={busy} onAdvance={advance} onReject={reject} />)}
       </div>
-      {rejecting && <P3RejectModal t={t} demanda={rejecting} onClose={() => setRejecting(null)} onConfirm={reject} />}
+      )}
+      <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }
