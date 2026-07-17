@@ -133,7 +133,7 @@ function useFRConferencia() {
   return { items: items, loading: loading, error: error, reload: load };
 }
 
-function PageConferencia({ t, setActive }) {
+function ConferenciaEnvioTab({ t, setActive }) {
   const { items: solic, loading, error, reload } = useFRConferencia();
   const [enviando, setEnviando] = useStateCf(false);
   const [enviandoEnvio, setEnviandoEnvio] = useStateCf(null);   // id da solicitação em ENVIO (conferido→entregue), separado do 'enviando' da conferência
@@ -843,6 +843,175 @@ function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
 function nowHm() {
   const d = new Date();
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+// ==========================================================================================
+// ABA DEVOLUÇÕES (peça 3) — fila de conferência dos pedidos de devolução (op_returns_pending).
+// Conferir credita os 3 livros (per-OP, físico central POOLED, op_returns) e abate o custo da OP;
+// rejeitar não credita nada. GET /stock/returns/pending · PUT .../:id/confer · PUT .../:id/reject.
+// ==========================================================================================
+const dvErr = (e) => { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; };
+const dvNotify = (titulo, txt, tone, icon) => window.dispatchEvent(new CustomEvent('fr-notify', { detail: { titulo, txt, tone, icon } }));
+const dvDate = (iso) => { if (!iso) return ''; try { return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
+
+function useDvPending() {
+  const [items, setItems] = useStateCf([]);
+  const [loading, setLoading] = useStateCf(true);
+  const [error, setError] = useStateCf(null);
+  const mounted = useRefCf(true);
+  const load = React.useCallback(function () {
+    setError(null);
+    window.FRApi.get('/stock/returns/pending', { skipLoading: true })
+      .then(function (res) { if (!mounted.current) return; setItems(Array.isArray(res && res.data) ? res.data : []); setLoading(false); })
+      .catch(function (e) { if (!mounted.current) return; setError(dvErr(e)); setLoading(false); });
+  }, []);
+  useEffectCf(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  return { items: items, loading: loading, error: error, reload: load };
+}
+
+// Linha de um item pendente: conferir (qtd editável pra menos, 1..enviada) ou rejeitar (com motivo).
+function DvConfItemRow({ t, it, busy, onConfer, onReject }) {
+  const [qty, setQty] = useStateCf(String(it.quantity));
+  const [rejecting, setRejecting] = useStateCf(false);
+  const [reason, setReason] = useStateCf('');
+  const clampQty = (raw) => {
+    let s = String(raw).replace(',', '.').replace(/[^0-9.]/g, '');
+    if (s === '' || s === '.') return '';
+    let n = parseFloat(s);
+    if (Number.isNaN(n)) return '';
+    n = Math.max(0, Math.min(Number(it.quantity) || 0, n));
+    return String(n);
+  };
+  const confVal = parseFloat(qty);
+  const canConfer = !busy && confVal > 0 && confVal <= (Number(it.quantity) || 0);
+  return (
+    <div style={{ borderRadius: 12, background: t.subtle, border: `1px solid ${t.border}`, padding: '12px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 170 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{it.name}</div>
+          <div style={{ fontSize: 11.5, color: t.faint, fontFamily: 'ui-monospace, monospace' }}>{it.sku} · enviada {it.quantity} {it.unit || ''}{it.requested_by_name ? ' · ' + it.requested_by_name : ''}{it.created_at ? ' · ' + dvDate(it.created_at) : ''}</div>
+          {it.observation && <div style={{ fontSize: 11.5, color: t.muted, marginTop: 3 }}>“{it.observation}”</div>}
+        </div>
+        {!rejecting && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: t.faint }}>Conferir</span>
+            <input value={qty} onChange={(e) => setQty(clampQty(e.target.value))} inputMode="decimal"
+              style={{ width: 58, height: 38, textAlign: 'center', borderRadius: 9, border: `1.5px solid ${canConfer ? '#10b981' : t.border}`, background: t.panel, color: t.text, fontSize: 15, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+            <span style={{ fontSize: 12, color: t.faint, width: 30 }}>/{it.quantity}</span>
+            <button disabled={!canConfer} onClick={() => onConfer(it, confVal)} style={{ all: 'unset', cursor: canConfer ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6, height: 38, padding: '0 14px', borderRadius: 9, fontWeight: 800, fontSize: 12.5, color: '#fff', background: '#10b981', opacity: canConfer ? 1 : 0.5 }}>
+              <Icon name="check" size={15} /> {busy ? '…' : 'Conferir'}
+            </button>
+            <button disabled={busy} onClick={() => setRejecting(true)} title="Rejeitar" style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', width: 38, height: 38, borderRadius: 9, display: 'grid', placeItems: 'center', color: '#ef4444', border: `1px solid ${t.border}`, opacity: busy ? 0.5 : 1 }}><Icon name="ban" size={16} /></button>
+          </div>
+        )}
+      </div>
+      {rejecting && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo da rejeição (ex.: material não chegou, avariado…)" autoFocus
+            style={{ flex: 1, minWidth: 200, height: 38, borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', padding: '0 12px' }} />
+          <button disabled={busy} onClick={() => onReject(it, reason.trim())} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, height: 38, padding: '0 14px', borderRadius: 9, fontWeight: 800, fontSize: 12.5, color: '#fff', background: '#ef4444', opacity: busy ? 0.6 : 1 }}><Icon name="ban" size={15} /> Confirmar rejeição</button>
+          <button disabled={busy} onClick={() => { setRejecting(false); setReason(''); }} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 12px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, color: t.muted, border: `1px solid ${t.border}` }}>Cancelar</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DevolucoesConfTab({ t }) {
+  const { items, loading, error, reload } = useDvPending();
+  const [busyId, setBusyId] = useStateCf(null);
+
+  const confer = async (it, conferredQty) => {
+    if (busyId) return;
+    setBusyId(it.id);
+    try {
+      await window.FRApi.put('/stock/returns/' + it.id + '/confer', { conferredQty });
+      dvNotify('Devolução conferida', 'Estoque creditado, custo da OP abatido', 'green', 'check');
+      reload();
+    } catch (e) { dvNotify('Erro ao conferir', dvErr(e), 'red', 'x'); }
+    finally { setBusyId(null); }
+  };
+  const reject = async (it, reason) => {
+    if (busyId) return;
+    setBusyId(it.id);
+    try {
+      await window.FRApi.put('/stock/returns/' + it.id + '/reject', { reason });
+      dvNotify('Devolução rejeitada', reason || '—', 'red', 'x');
+      reload();
+    } catch (e) { dvNotify('Erro ao rejeitar', dvErr(e), 'red', 'x'); }
+    finally { setBusyId(null); }
+  };
+
+  // Agrupa os pendentes por OP (um card por OP, listando os itens).
+  const groups = {};
+  items.forEach((it) => { const k = it.op_code || '—'; (groups[k] = groups[k] || []).push(it); });
+  const opCodes = Object.keys(groups);
+
+  return (
+    <div>
+      <PageHeader t={t} title="Devoluções — Conferência" subtitle="Confira ou rejeite o material devolvido pelos setores. Conferir credita o estoque central e abate o custo da OP; rejeitar não credita nada."
+        actions={<Btn t={t} icon="refresh" onClick={reload}>Atualizar</Btn>} />
+      {loading && <Card t={t} style={{ padding: 22, textAlign: 'center' }}><div style={{ fontSize: 13, fontWeight: 600, color: t.muted }}>Carregando devoluções…</div></Card>}
+      {!loading && error && (
+        <Card t={t} style={{ padding: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>Não foi possível carregar</div><div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>{error}</div></div>
+            <Btn t={t} icon="refresh" onClick={reload}>Tentar novamente</Btn>
+          </div>
+        </Card>
+      )}
+      {!loading && !error && opCodes.length === 0 && <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma devolução pendente" sub="Quando um setor registrar uma devolução, ela aparece aqui para conferência." /></Card>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {opCodes.map((op) => {
+          const rows = groups[op];
+          return (
+            <Card t={t} key={op} style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '13px 16px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ width: 34, height: 34, borderRadius: 9, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="exchange" size={18} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint }}>Devolução · OP</div>
+                  <div style={{ fontSize: 15, fontWeight: 850, color: t.text, fontFamily: 'ui-monospace, monospace' }}>{op}</div>
+                </div>
+                <Badge t={t} kind="amber">{rows.length} {rows.length === 1 ? 'item' : 'itens'}</Badge>
+              </div>
+              <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {rows.map((it) => <DvConfItemRow key={it.id} t={t} it={it} busy={busyId === it.id} onConfer={confer} onReject={reject} />)}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Wrapper com abas: "Conferência de Envio" (tela original, intocada) | "Devoluções" (nova).
+function PageConferencia({ t, setActive }) {
+  const [tab, setTab] = useStateCf('envio');
+  const [pendCount, setPendCount] = useStateCf(null);
+  useEffectCf(function () {
+    let alive = true;
+    window.FRApi.get('/stock/returns/pending', { skipLoading: true })
+      .then(function (res) { if (alive) setPendCount(Array.isArray(res && res.data) ? res.data.length : 0); })
+      .catch(function () { if (alive) setPendCount(null); });
+    return function () { alive = false; };
+  }, [tab]);
+  const TABS = [['envio', 'Conferência de Envio'], ['devolucoes', 'Devoluções']];
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+        {TABS.map(function (pair) {
+          const k = pair[0], label = pair[1], on = tab === k, n = k === 'devolucoes' ? pendCount : null;
+          return (
+            <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 11, fontSize: 13.5, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}>
+              {label}{n != null && n > 0 && <span style={{ fontSize: 11, fontWeight: 800, padding: '1px 7px', borderRadius: 7, background: on ? 'rgba(255,255,255,.25)' : uiTone(t, 'amber').bg, color: on ? '#fff' : uiTone(t, 'amber').fg }}>{n}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {tab === 'envio' ? <ConferenciaEnvioTab t={t} setActive={setActive} /> : <DevolucoesConfTab t={t} />}
+    </div>
+  );
 }
 
 // cfPrintIdentificacao/frSendZplBrowserPrint/frZplField exportados p/ a Entrada por NF reusar o caminho ZPL
