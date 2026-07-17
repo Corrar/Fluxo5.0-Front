@@ -2,23 +2,9 @@
 const { useState: useStateP3 } = React;
 const P3_ACCENT = '#6366f1', P3_ACCENT_T = '#818cf8';
 
-const P3_PECAS = [
-  { code: '5.03.0002', nome: 'COPINHO 3D', cat: 'Componentes', fil: 'PLA Azul', gramas: 18, tempo: '1h 05min', stock: 1, img: 'assets/peca-copinho-3d.png' },
-  { code: '5.03.0012', nome: 'CARAMBOLA 3D', cat: 'Componentes', fil: 'PETG Preto', gramas: 42, tempo: '2h 20min', stock: 39, img: 'assets/peca-carambola-3d.png' },
-  { code: '5.03.0014', nome: 'ALOCADOR DE OVOS', cat: 'Embalagem', fil: 'ABS Cinza', gramas: 120, tempo: '6h 06min', stock: 0 },
-  { code: '5.03.0029', nome: 'CAÍDA OVO EMBALADORA', cat: 'Embalagem', fil: 'PLA Branco', gramas: 88, tempo: '4h 12min', stock: 6, img: 'assets/peca-caida-ovo.png' },
-  { code: '5.03.0050', nome: 'SUPORTE DE SENSOR', cat: 'Componentes', fil: 'PLA Azul', gramas: 22, tempo: '1h 30min', stock: 22 },
-  { code: '5.03.0031', nome: 'SEPARADOR DE BANDEJA', cat: 'Embalagem', fil: 'PETG Preto', gramas: 64, tempo: '3h 05min', stock: 12 },
-  { code: '5.03.0044', nome: 'GUIA DA ESTEIRA', cat: 'Componentes', fil: 'TPU Flex', gramas: 34, tempo: '0h 45min', stock: 8 },
-  { code: '5.03.0061', nome: 'TAMPA DO DESCEDOR', cat: 'Embalagem', fil: 'PLA Branco', gramas: 52, tempo: '1h 12min', stock: 0 },
-];
-const P3_HIST = [
-  { id: 'PR-3308', peca: 'CARAMBOLA 3D', code: '5.03.0012', qtd: 12, gramas: 504, tempo: '5h 40min', data: '17/06 · 14:20', op: 'OP-2041', operador: 'Rafael S.' },
-  { id: 'PR-3305', peca: 'SUPORTE DE SENSOR', code: '5.03.0050', qtd: 8, gramas: 176, tempo: '4h 00min', data: '17/06 · 09:10', op: 'OP-2038', operador: 'Davi M.' },
-  { id: 'PR-3301', peca: 'COPINHO 3D', code: '5.03.0002', qtd: 24, gramas: 432, tempo: '6h 25min', data: '16/06 · 16:45', op: 'OP-2060', operador: 'Rafael S.' },
-  { id: 'PR-3298', peca: 'SEPARADOR DE BANDEJA', code: '5.03.0031', qtd: 6, gramas: 384, tempo: '3h 30min', data: '16/06 · 11:02', op: 'OP-2041', operador: 'Davi M.' },
-  { id: 'PR-3294', peca: 'TAMPA DO DESCEDOR', code: '5.03.0061', qtd: 10, gramas: 520, tempo: '5h 10min', data: '15/06 · 15:30', op: 'OP-2060', operador: 'Rafael S.' },
-];
+// P3_PECAS / P3_HIST / P3_DADOS (seeds de Catálogo, Histórico e Dashboard) REMOVIDOS na peça 2:
+// as quatro telas do módulo renderizam 100% dos hooks reais (useFR3DParts / useFRProductions /
+// useFRDemands). Nenhum dado inventado sobra na renderização.
 // P3_DEMANDAS_SEED removido — Demandas renderiza 100% de useFRDemands (GET /producao-3d/demands).
 const P3_DEMSTATUS = {
   analise:    { label: 'Em análise', kind: 'amber', next: 'aceita', act: 'Aceitar pedido', actIcon: 'check' },
@@ -48,6 +34,9 @@ function p3AdaptProduction(p) {
   p = p || {};
   return { id: p.id, product_id: p.partId || null, demandId: p.demandId || null,
     qtd: p3Num(p.quantity), gramas: p3Num(p.filamentGrams), tempo: p3Minutes(p.totalMinutes),
+    // minutes/dateISO crus: o Dashboard agrega (soma horas, agrupa por período); `tempo`/`data` já vêm
+    // formatados p/ exibição e não servem p/ cálculo. Aditivos — Histórico segue usando os formatados.
+    minutes: p3Num(p.totalMinutes), dateISO: p.date || null,
     data: p3DateTime(p.date), operador: p.operator || '—', origem: p.demandId ? 'demanda' : 'propria' };
 }
 function p3AdaptDemand(d) {
@@ -59,8 +48,11 @@ function p3AdaptDemand(d) {
 }
 function p3AdaptPart(p) {
   p = p || {};
+  // description entra no shape porque o PUT /parts/:id reescreve as QUATRO colunas de uma vez
+  // (SET production_minutes, filament_grams, image_url, description). Sem ler a descrição atual não
+  // dá pra reenviá-la, e salvar tempo/filamento apagaria a descrição da peça. Ver o save do P3Catalogo.
   return { product_id: p.id, code: p.code || '', nome: p.name || '', image: p.image || null,
-    gramas: p3Num(p.filamentGrams), minutes: p3Num(p.productionMinutes) };
+    gramas: p3Num(p.filamentGrams), minutes: p3Num(p.productionMinutes), descricao: p.description || '' };
 }
 
 // Hook GET genérico → { items, loading, error, reload }.
@@ -100,54 +92,129 @@ function P3Toast({ t, toast, onClose }) {
 
 // ---------- Dashboard Operacional ----------
 const P3_PERIODOS = [['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias']];
-const P3_DADOS = {
-  '7':  { pecas: 284, filamento: 6.4, horas: 142, dias: 6, chart: [{ label: 'Seg', v: 320 }, { label: 'Ter', v: 480, accent: true }, { label: 'Qua', v: 410 }, { label: 'Qui', v: 560, accent: true }, { label: 'Sex', v: 504 }, { label: 'Sáb', v: 280 }] },
-  '30': { pecas: 1180, filamento: 27.2, horas: 596, dias: 26, chart: [{ label: 'S1', v: 1800 }, { label: 'S2', v: 2400, accent: true }, { label: 'S3', v: 2100 }, { label: 'S4', v: 2900, accent: true }] },
-  '90': { pecas: 3420, filamento: 79.5, horas: 1740, dias: 78, chart: [{ label: 'Abr', v: 6800 }, { label: 'Mai', v: 8200, accent: true }, { label: 'Jun', v: 9100, accent: true }] },
-};
+const P3_WD = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const P3_MES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
-function P3PrinterModal({ t, printer, onClose, onSave, onDelete }) {
-  const novo = !printer.id;
-  const [f, setF] = useStateP3({ nome: printer.nome || '', modelo: printer.modelo || '', bico: printer.bico || '0,4mm', status: printer.status || 'ociosa', job: printer.job || '', prog: String(printer.prog ?? 0) });
-  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+// P3_DADOS (KPIs + série do gráfico chumbados) REMOVIDO — p3Aggregate deriva tudo das produções REAIS.
+// Agrega as produções do período em KPIs + barras. Puro: recebe a lista já adaptada e devolve números.
+// Bucket por dia (7d), semana (30d) ou mês (90d) — mais barras que isso vira poeira ilegível.
+function p3Aggregate(prods, days) {
+  const now = Date.now(), from = now - days * 86400000;
+  const rows = [];
+  for (let i = 0; i < prods.length; i++) {
+    const ts = prods[i].dateISO ? new Date(prods[i].dateISO).getTime() : NaN;
+    if (!isNaN(ts) && ts >= from && ts <= now) rows.push({ ...prods[i], ts: ts });
+  }
+  const pecas = rows.reduce((a, r) => a + r.qtd, 0);
+  const gramas = rows.reduce((a, r) => a + r.gramas, 0);
+  const minutes = rows.reduce((a, r) => a + r.minutes, 0);
+  // Média por DIA COM PRODUÇÃO (não por dia do calendário): dia parado não é média baixa, é dia parado.
+  const diasAtivos = new Set(rows.map((r) => new Date(r.ts).toDateString())).size;
+
+  const span = days === 7 ? 86400000 : days === 30 ? 7 * 86400000 : 30 * 86400000;
+  // ceil, NÃO round: com round o período de 30d daria 4 baldes de 7 dias = 28 dias, e as produções de
+  // 28~30 dias atrás entravam nos KPIs mas sumiam do gráfico (barras somando menos que o card).
+  const nB = Math.ceil(days * 86400000 / span);
+  const buckets = [];
+  for (let i = nB - 1; i >= 0; i--) {                     // i = quantos spans atrás → empilha antigo→recente
+    const start = now - (i + 1) * span;
+    const label = days === 7 ? P3_WD[new Date(start + span / 2).getDay()]
+      : days === 30 ? 'S' + (nB - i)
+      : P3_MES[new Date(start + span / 2).getMonth()];
+    buckets.push({ label: label, v: 0 });
+  }
+  // Clamp: a produção exatamente na borda do período (now - days) cairia em idx -1 e sumiria da barra
+  // sem sumir do KPI. Toda linha que passou no filtro tem que aparecer no gráfico — soma das barras
+  // SEMPRE bate com o card "Peças produzidas".
+  rows.forEach((r) => {
+    const idx = Math.min(nB - 1, Math.max(0, nB - 1 - Math.floor((now - r.ts) / span)));
+    buckets[idx].v += r.qtd;
+  });
+  const max = Math.max.apply(null, buckets.map((b) => b.v).concat([0]));
+  if (max > 0) buckets.forEach((b) => { if (b.v === max) b.accent = true; });
+
+  return { pecas: pecas, gramas: gramas, minutes: minutes, diasAtivos: diasAtivos, registros: rows.length, chart: buckets };
+}
+
+// P3PrinterModal (CRUD de impressoras) REMOVIDO — era 100% decorativo: cadastrava/editava/excluía em
+// state local, sem NENHUM endpoint por trás (não existe tabela nem rota de impressoras no backend).
+// Um formulário que promete "Cadastrar" e perde tudo no F5 mente pro operador; o card de impressoras
+// saiu junto e o espaço virou o painel de Demandas, que tem dado real. Onda 2: /producao-3d/printers.
+
+// Campos do antigo P3HistModal SEM coluna em productions_3d (id, product_id, demand_id, quantity,
+// total_minutes, filament_grams, date, operator_id) — não são coletados no P3ProdModal:
+//   temperatura · tipo de filamento · "peça de teste" · observação · melhoria · impacto
+// Coletá-los seria pedir digitação pro lixo: o POST ignora o que não conhece. Onda 2: colunas + PUT.
+const p3GenKey = () => (crypto.randomUUID?.() ?? `p3-${Date.now()}-${Math.random().toString(16).slice(2)}`); // fallback p/ contexto não-seguro (http://IP-LAN)
+
+// ---------- Nova produção (POST /producao-3d/productions) ----------
+// Peça do catálogo REAL (useFR3DParts). Filamento/tempo TOTAIS vêm pré-calculados (por-unidade × qtd)
+// e continuam editáveis: a impressão real gasta o que gasta, e ambos têm coluna própria no INSERT.
+function P3ProdModal({ t, parts, onClose, onSubmit, enviando, erro }) {
+  const [f, setF] = useStateP3({ partId: '', qtd: '1', gramas: '', minutes: '', gT: false, mT: false });
+  const [q, setQ] = useStateP3('');
+  const [open, setOpen] = useStateP3(false);
+  const sel = parts.find((p) => p.product_id === f.partId) || null;
+  // Re-deriva os totais a partir da peça × qtd, EXCETO o que o operador já editou à mão (gT/mT).
+  const recalc = (s, part, qtd) => {
+    const n = parseInt(qtd) || 0;
+    return { ...s,
+      gramas: s.gT ? s.gramas : String(part ? Math.round(part.gramas * n) : ''),
+      minutes: s.mT ? s.minutes : String(part ? Math.round(part.minutes * n) : '') };
+  };
+  const pick = (p) => { setF((s) => recalc({ ...s, partId: p.product_id }, p, s.qtd)); setQ(p.nome); setOpen(false); };
+  const setQtd = (v) => setF((s) => recalc({ ...s, qtd: v }, parts.find((p) => p.product_id === s.partId), v));
+  const ql = q.trim().toLowerCase();
+  const sugest = (ql && (!sel || sel.nome.toLowerCase() !== ql) ? parts.filter((p) => p.nome.toLowerCase().includes(ql) || p.code.toLowerCase().includes(ql)) : parts).slice(0, 6);
   const field = { boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
   const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
-  const sela = { ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' };
+  const ok = !!f.partId && (parseInt(f.qtd) || 0) > 0;
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(500px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
+    <div onClick={() => !enviando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="printer" size={19} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{novo ? 'Cadastrar impressora' : 'Editar impressora'}</div></div>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="plus" size={19} /></span>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Nova produção</div><div style={{ fontSize: 12.5, color: t.muted }}>Peça impressa por conta própria — dá entrada no estoque.</div></div>
+          <button onClick={() => !enviando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ position: 'relative' }}>
+            <label style={lab}>Peça <span style={{ color: uiTone(t, 'red').fg }}>*</span></label>
+            <input value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); setF((s) => ({ ...s, partId: '' })); }} onFocus={() => setOpen(true)} placeholder="Buscar peça do catálogo…" style={field} />
+            {sel && <div style={{ fontSize: 11.5, color: t.muted, marginTop: 6 }}>{sel.code} · {sel.gramas}g e {p3Minutes(sel.minutes)} por unidade</div>}
+            {open && sugest.length > 0 && (
+              <React.Fragment>
+                <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+                <div className="fr-scroll" style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, marginTop: 4, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6, maxHeight: 230, overflowY: 'auto' }}>
+                  {sugest.map((p) => (
+                    <button key={p.product_id} onClick={() => pick(p)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                      <span style={{ width: 30, height: 30, borderRadius: 8, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={15} /></span>
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{p.nome}</div><div style={{ fontSize: 11, color: t.muted }}>{p.code} · {p.gramas}g · {p3Minutes(p.minutes)}</div></div>
+                      <Icon name="plus" size={15} style={{ color: t.accentText }} />
+                    </button>
+                  ))}
+                </div>
+              </React.Fragment>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lab}>Nome</label><input value={f.nome} onChange={(e) => set('nome', e.target.value)} placeholder="Ex: Prusa MK4 #1" style={field} /></div>
-            <div style={{ width: 110 }}><label style={lab}>Bico</label><input value={f.bico} onChange={(e) => set('bico', e.target.value)} placeholder="0,4mm" style={field} /></div>
+            <div style={{ width: 120 }}><label style={lab}>Quantidade <span style={{ color: uiTone(t, 'red').fg }}>*</span></label><input value={f.qtd} onChange={(e) => setQtd(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="1" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Filamento total (g)</label><input value={f.gramas} onChange={(e) => setF((s) => ({ ...s, gramas: e.target.value.replace(/[^0-9]/g, ''), gT: true }))} inputMode="numeric" placeholder="0" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Tempo total (min)</label><input value={f.minutes} onChange={(e) => setF((s) => ({ ...s, minutes: e.target.value.replace(/[^0-9]/g, ''), mT: true }))} inputMode="numeric" placeholder="0" style={field} /></div>
           </div>
-          <div><label style={lab}>Modelo</label><input value={f.modelo} onChange={(e) => set('modelo', e.target.value)} placeholder="Ex: Original Prusa MK4" style={field} /></div>
-          <div>
-            <label style={lab}>Status</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {[['imprimindo', 'Imprimindo', 'green'], ['ociosa', 'Ociosa', 'gray'], ['manutencao', 'Manutenção', 'amber']].map(([id, label, k]) => { const on = f.status === id; return (
-                <button key={id} onClick={() => set('status', id)} style={{ all: 'unset', cursor: 'pointer', flex: 1, textAlign: 'center', height: 40, lineHeight: '40px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: on ? uiTone(t, k).fg : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? 'transparent' : t.border}` }}>{label}</button>
-              ); })}
-            </div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
+            <Icon name="zap" size={15} style={{ color: t.accentText, flexShrink: 0, marginTop: 1 }} />
+            <div style={{ fontSize: 12, color: t.muted, lineHeight: 1.45 }}>Registrar <strong style={{ color: t.text }}>credita {parseInt(f.qtd) || 0} un.</strong> no estoque físico da peça. O operador e a data são gravados automaticamente.</div>
           </div>
-          {f.status === 'imprimindo' && (
-            <div style={{ display: 'flex', gap: 12 }}>
-              <div style={{ flex: 1 }}><label style={lab}>Imprimindo agora</label><input value={f.job} onChange={(e) => set('job', e.target.value)} placeholder="Ex: CARAMBOLA 3D" style={field} /></div>
-              <div style={{ width: 110 }}><label style={lab}>Progresso %</label><input value={f.prog} onChange={(e) => set('prog', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
-            </div>
-          )}
+          {erro && <div style={{ padding: '11px 13px', borderRadius: 11, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 12.5, fontWeight: 700 }}>{erro}</div>}
         </div>
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-          {!novo ? <button onClick={() => onDelete(printer.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 42, padding: '0 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}><Icon name="trash" size={15} /> Excluir</button> : <span />}
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-            <Btn t={t} icon="check" onClick={() => f.nome.trim() && onSave({ id: printer.id || 'pr' + Date.now(), nome: f.nome.trim(), modelo: f.modelo.trim(), bico: f.bico, status: f.status, job: f.status === 'imprimindo' ? (f.job.trim() || 'Peça') : '', prog: parseInt(f.prog) || 0 })}>{novo ? 'Cadastrar' : 'Salvar'}</Btn>
-          </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <Btn t={t} kind="ghost" onClick={() => !enviando && onClose()}>Cancelar</Btn>
+          <button onClick={() => ok && !enviando && onSubmit({ partId: f.partId, quantity: parseInt(f.qtd) || 0, filamentGrams: parseInt(f.gramas) || 0, totalMinutes: parseInt(f.minutes) || 0 })}
+            style={{ all: 'unset', cursor: ok && !enviando ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: ok && !enviando ? t.accent : t.elevated, color: ok && !enviando ? '#fff' : t.faint }}>
+            <Icon name={enviando ? 'refresh' : 'check'} size={17} style={enviando ? { animation: 'fr-spin .7s linear infinite' } : undefined} /> {enviando ? 'Registrando…' : 'Registrar produção'}
+          </button>
         </div>
       </div>
     </div>
@@ -155,23 +222,45 @@ function P3PrinterModal({ t, printer, onClose, onSave, onDelete }) {
 }
 
 function P3Dashboard({ t }) {
+  const { items: prods, loading, error, reload } = useFRProductions();
+  const { items: demands, loading: demLoading, error: demError } = useFRDemands();
+  const { items: parts } = useFR3DParts();
   const [periodo, setPeriodo] = useStateP3('7');
-  const [printers, setPrinters] = useStateP3([
-    { id: 'p1', nome: 'Prusa MK4 #1', modelo: 'Original Prusa MK4', bico: '0,4mm', status: 'imprimindo', job: 'CARAMBOLA 3D', prog: 68 },
-    { id: 'p2', nome: 'Prusa MK4 #2', modelo: 'Original Prusa MK4', bico: '0,4mm', status: 'imprimindo', job: 'SUPORTE DE SENSOR', prog: 31 },
-    { id: 'p3', nome: 'Bambu X1 #3', modelo: 'Bambu Lab X1-Carbon', bico: '0,4mm', status: 'ociosa', job: '', prog: 0 },
-  ]);
-  const [edit, setEdit] = useStateP3(null);
-  const d = P3_DADOS[periodo];
-  const media = (d.pecas / d.dias).toFixed(1).replace('.', ',');
-  const statusMap = { imprimindo: ['Imprimindo', 'green'], ociosa: ['Ociosa', 'gray'], manutencao: ['Manutenção', 'amber'] };
-  const ativas = printers.filter((p) => p.status === 'imprimindo').length;
-  const savePrinter = (p) => { setPrinters((xs) => (xs.some((x) => x.id === p.id) ? xs.map((x) => (x.id === p.id ? p : x)) : [...xs, p])); setEdit(null); };
-  const delPrinter = (id) => { setPrinters((xs) => xs.filter((x) => x.id !== id)); setEdit(null); };
+  const [novo, setNovo] = useStateP3(false);
+  const [idemKey, setIdemKey] = useStateP3(null);     // âncora X-Idempotency-Key (gerada ao ABRIR o form)
+  const [enviando, setEnviando] = useStateP3(false);  // anti duplo-clique no POST
+  const [erro, setErro] = useStateP3(null);
+  const [toast, setToast] = useStateP3(null);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+
+  const d = React.useMemo(() => p3Aggregate(prods, parseInt(periodo)), [prods, periodo]);
+  const media = (d.pecas / (d.diasAtivos || 1)).toFixed(1).replace('.', ',');
+  const filamentoKg = (d.gramas / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  const demCount = (ks) => demands.filter((x) => ks.indexOf(x.status) >= 0).length;
+
+  // Registra a produção. O header carrega a âncora de idempotência: com ela o backend faz o pré-check
+  // no razão e um retry da MESMA chave devolve o registro original — 1 crédito, 1 linha no histórico.
+  const submit = async (payload) => {
+    if (enviando) return;
+    setErro(null);
+    if (!payload.partId) { setErro('Selecione a peça no catálogo.'); return; }
+    if (!(payload.quantity > 0)) { setErro('Informe uma quantidade maior que zero.'); return; }
+    setEnviando(true);
+    try {
+      await window.FRApi.post('/producao-3d/productions', { ...payload, date: new Date().toISOString() },
+        { headers: { 'X-Idempotency-Key': idemKey } });
+      setNovo(false); setIdemKey(null);              // só o SUCESSO fecha o form e queima a chave
+      reload();
+      setToast({ kind: 'ok', msg: 'Produção registrada — estoque creditado.' });
+    } catch (e) {
+      // NO ERRO: form aberto e MESMA idemKey (retry idempotente — não credita duas vezes).
+      setErro(p3Err(e));
+    } finally { setEnviando(false); }
+  };
+
   const exportar = () => {
-    const head = 'Periodo,' + periodo + ' dias\\nPecas produzidas,' + d.pecas + '\\nFilamento (kg),' + d.filamento + '\\nHoras de impressao,' + d.horas + '\\nMedia diaria,' + media + '\\n\\nImpressora,Modelo,Status,Imprimindo,Progresso';
-    const rows = printers.map((p) => [p.nome, p.modelo, statusMap[p.status][0], p.job || '-', p.prog + '%'].join(','));
-    const csv = head + '\\n' + rows.join('\\n');
+    const head = 'Periodo,' + periodo + ' dias\nPecas produzidas,' + d.pecas + '\nFilamento (kg),' + filamentoKg + '\nHoras de impressao,' + Math.round(d.minutes / 60) + '\nRegistros,' + d.registros + '\nDias com producao,' + d.diasAtivos + '\nMedia por dia ativo,' + media + '\n\nBucket,Pecas';
+    const csv = head + '\n' + d.chart.map((b) => b.label + ',' + b.v).join('\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'dashboard-3d-' + periodo + 'dias.csv'; a.click();
   };
 
@@ -189,14 +278,23 @@ function P3Dashboard({ t }) {
             ); })}
           </div>
           <Btn t={t} kind="ghost" icon="download" onClick={exportar}>Exportar</Btn>
+          <Btn t={t} icon="plus" onClick={() => { setErro(null); setIdemKey(p3GenKey()); setNovo(true); }}>Nova produção</Btn>
         </div>
       </div>
 
+      {error && (
+        <Card t={t} style={{ padding: 18, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <Icon name="alert" size={17} style={{ color: uiTone(t, 'red').fg }} />
+          <span style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{error}</span>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      )}
+
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} icon="box" label="Peças produzidas" value={d.pecas.toLocaleString('pt-BR')} sub={`em ${periodo} dias`} kind="accent" />
-        <KPI t={t} icon="zap" label="Filamento usado" value={`${d.filamento.toLocaleString('pt-BR')} kg`} sub="material consumido" kind="green" />
-        <KPI t={t} icon="clock" label="Horas de impressão" value={`${d.horas}h`} sub={`${printers.length} impressoras`} kind="amber" />
-        <KPI t={t} icon="barChart2" label="Média de produção" value={`${media}`} sub="peças por dia" kind="blue" />
+        <KPI t={t} icon="box" label="Peças produzidas" value={loading && !prods.length ? '—' : d.pecas.toLocaleString('pt-BR')} sub={`em ${periodo} dias`} kind="accent" />
+        <KPI t={t} icon="zap" label="Filamento usado" value={loading && !prods.length ? '—' : `${filamentoKg} kg`} sub="material consumido" kind="green" />
+        <KPI t={t} icon="clock" label="Horas de impressão" value={loading && !prods.length ? '—' : `${Math.round(d.minutes / 60)}h`} sub={`${d.registros} produções`} kind="amber" />
+        <KPI t={t} icon="barChart2" label="Média de produção" value={loading && !prods.length ? '—' : media} sub="peças por dia com produção" kind="blue" />
       </div>
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'stretch' }}>
@@ -205,36 +303,36 @@ function P3Dashboard({ t }) {
             <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Produção no período</div>
             <Badge t={t} kind="green" dot>{periodo} dias</Badge>
           </div>
-          <BarChart t={t} data={d.chart} />
+          {loading && !prods.length
+            ? <div style={{ height: 180, display: 'grid', placeItems: 'center', color: t.muted, fontSize: 13.5 }}>Carregando produções…</div>
+            : d.pecas === 0
+              ? <div style={{ height: 180, display: 'grid', placeItems: 'center', color: t.muted, fontSize: 13.5 }}>Nenhuma produção registrada neste período.</div>
+              : <BarChart t={t} data={d.chart} />}
         </Card>
+        {/* Painel de Demandas (real, GET /producao-3d/demands) no lugar do card de impressoras decorativo. */}
         <Card t={t} style={{ padding: 22, flex: 1, minWidth: 280 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Impressoras <span style={{ fontSize: 12, fontWeight: 600, color: t.muted }}>· {ativas}/{printers.length} ativas</span></div>
-            <button onClick={() => setEdit({})} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, background: t.accentSoft }}><Icon name="plus" size={14} /> Cadastrar</button>
+            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Demandas <span style={{ fontSize: 12, fontWeight: 600, color: t.muted }}>· {demands.length} no total</span></div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {printers.length === 0 && <div style={{ padding: 18, textAlign: 'center', fontSize: 13, color: t.muted, border: `1px dashed ${t.borderStrong}`, borderRadius: 12 }}>Nenhuma impressora cadastrada.</div>}
-            {printers.map((p) => { const sm = statusMap[p.status]; const printing = p.status === 'imprimindo'; return (
-              <div key={p.id} style={{ padding: '13px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <span style={{ width: 38, height: 38, borderRadius: 10, background: uiTone(t, sm[1]).bg, color: uiTone(t, sm[1]).fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="printer" size={18} /></span>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{p.nome}</div><div style={{ fontSize: 11, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{printing ? p.job : p.modelo}</div></div>
-                  <Badge t={t} kind={sm[1]} dot>{sm[0]}</Badge>
-                  <button onClick={() => setEdit(p)} title="Editar" style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="pencil" size={14} /></button>
+          {demLoading && !demands.length ? (
+            <div style={{ padding: 18, textAlign: 'center', fontSize: 13, color: t.muted }}>Carregando demandas…</div>
+          ) : demError ? (
+            <div style={{ padding: 18, textAlign: 'center', fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{demError}</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {[['Na fila', ['analise', 'aceita'], 'amber', 'clock'], ['Em produção', ['produzindo'], 'accent', 'printer'], ['Concluídas', ['concluida'], 'green', 'check'], ['Rejeitadas', ['rejeitada'], 'red', 'x']].map(([label, ks, kind, icon]) => (
+                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <span style={{ width: 38, height: 38, borderRadius: 10, background: uiTone(t, kind).bg, color: uiTone(t, kind).fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={icon} size={18} /></span>
+                  <div style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: t.text }}>{label}</div>
+                  <span style={{ fontSize: 20, fontWeight: 850, color: t.text }}>{demCount(ks)}</span>
                 </div>
-                {printing && (
-                  <div style={{ marginTop: 11 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, fontWeight: 700, marginBottom: 5 }}><span style={{ color: t.muted }}>Progresso</span><span style={{ color: t.accentText }}>{p.prog}%</span></div>
-                    <div style={{ height: 6, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${p.prog}%`, borderRadius: 5, background: uiTone(t, 'green').fg }} /></div>
-                  </div>
-                )}
-              </div>
-            ); })}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
       </div>
-      {edit && <P3PrinterModal t={t} printer={edit} onClose={() => setEdit(null)} onSave={savePrinter} onDelete={delPrinter} />}
+      {novo && <P3ProdModal t={t} parts={parts} enviando={enviando} erro={erro} onClose={() => setNovo(false)} onSubmit={submit} />}
+      <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }
@@ -242,80 +340,8 @@ function P3Dashboard({ t }) {
 // ---------- Histórico de Produção ----------
 // P3_HIST_SEED removido — Histórico renderiza 100% de useFRProductions (GET /producao-3d/productions).
 
-function P3HistModal({ t, rec, onClose, onSave }) {
-  const novo = !rec.id;
-  const [f, setF] = useStateP3({ peca: rec.peca || '', code: rec.code || '', qtd: String(rec.qtd ?? ''), fil: rec.fil || 'PLA Azul', temp: rec.temp || '', teste: rec.teste || false, obs: rec.obs || '', melhoria: rec.melhoria || '', impacto: rec.impacto || '' });
-  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  const [pecaOpen, setPecaOpen] = useStateP3(false);
-  const sugest = f.peca.trim() ? P3_PECAS.filter((p) => p.nome.toLowerCase().includes(f.peca.toLowerCase()) || p.code.includes(f.peca)).slice(0, 6) : P3_PECAS.slice(0, 6);
-  const pickPeca = (p) => { setF((s) => ({ ...s, peca: p.nome, code: p.code, fil: p.fil || s.fil })); setPecaOpen(false); };
-  const field = { boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
-  const ta = { ...field, height: 'auto', padding: '11px 13px', resize: 'vertical' };
-  const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
-  const sela = { ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' };
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(580px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={novo ? 'plus' : 'pencil'} size={19} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{novo ? 'Registrar produção própria' : 'Anotações da produção'}</div><div style={{ fontSize: 12.5, color: t.muted }}>{novo ? 'Peça feita por conta própria (sem demanda).' : rec.id + ' · ' + rec.peca}</div></div>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-        </div>
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {novo && (
-            <React.Fragment>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <div style={{ flex: 1, position: 'relative' }}>
-                  <label style={lab}>Peça</label>
-                  <input value={f.peca} onChange={(e) => { set('peca', e.target.value); setPecaOpen(true); }} onFocus={() => setPecaOpen(true)} placeholder="Buscar peça do catálogo…" style={field} />
-                  {pecaOpen && sugest.length > 0 && (
-                    <React.Fragment>
-                      <div onClick={() => setPecaOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
-                      <div className="fr-scroll" style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, marginTop: 4, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6, maxHeight: 230, overflowY: 'auto' }}>
-                        {sugest.map((p) => (
-                          <button key={p.code} onClick={() => pickPeca(p)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', borderRadius: 9 }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                            <span style={{ width: 30, height: 30, borderRadius: 8, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={15} /></span>
-                            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{p.nome}</div><div style={{ fontSize: 11, color: t.muted }}>{p.code} · {p.fil} · {p.tempo}</div></div>
-                            <Icon name="plus" size={15} style={{ color: t.accentText }} />
-                          </button>
-                        ))}
-                      </div>
-                    </React.Fragment>
-                  )}
-                </div>
-                <div style={{ width: 130 }}><label style={lab}>SKU</label><input value={f.code} onChange={(e) => set('code', e.target.value)} placeholder="5.03.0000" style={field} /></div>
-              </div>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <div style={{ width: 110 }}><label style={lab}>Quantidade</label><input value={f.qtd} onChange={(e) => set('qtd', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="1" style={field} /></div>
-                <div style={{ flex: 1 }}><label style={lab}>Temperatura</label><input value={f.temp} onChange={(e) => set('temp', e.target.value)} placeholder="Ex: 210°C" style={field} /></div>
-                <div style={{ flex: 1 }}>
-                  <label style={lab}>Filamento</label>
-                  <div style={{ position: 'relative' }}><select value={f.fil} onChange={(e) => set('fil', e.target.value)} style={sela}>{P3_FILAMENTOS.map((c) => <option key={c}>{c}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 15, color: t.muted, pointerEvents: 'none' }} /></div>
-                </div>
-              </div>
-            </React.Fragment>
-          )}
-          <button onClick={() => set('teste', !f.teste)} style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', borderRadius: 12, background: f.teste ? uiTone(t, 'amber').bg : t.elevated, border: `1px solid ${f.teste ? frHexToRgba('#f59e0b', 0.4) : t.border}` }}>
-            <span style={{ width: 22, height: 22, borderRadius: 7, display: 'grid', placeItems: 'center', flexShrink: 0, background: f.teste ? uiTone(t, 'amber').fg : 'transparent', color: '#fff', border: `1.5px solid ${f.teste ? 'transparent' : t.borderStrong}` }}>{f.teste && <Icon name="check" size={13} />}</span>
-            <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Peça de teste</div><div style={{ fontSize: 11.5, color: t.muted }}>Marque se foi uma impressão de teste/validação.</div></div>
-            <Icon name="zap" size={18} style={{ color: f.teste ? uiTone(t, 'amber').fg : t.faint }} />
-          </button>
-          <div><label style={lab}>Observação da peça</label><textarea value={f.obs} onChange={(e) => set('obs', e.target.value)} rows={2} placeholder="Ex: feita com filamento diferente, exigiu cama a 60°C…" style={ta} /></div>
-          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.accentText, textTransform: 'uppercase', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 7 }}><Icon name="zap" size={14} /> Anotações de melhoria</div>
-            <div style={{ marginBottom: 14 }}><label style={lab}>O que foi melhorado</label><textarea value={f.melhoria} onChange={(e) => set('melhoria', e.target.value)} rows={2} placeholder="Ex: aumentei o fluxo para 105%, reduzi velocidade…" style={ta} /></div>
-            <div><label style={lab}>Impacto da melhoria</label><textarea value={f.impacto} onChange={(e) => set('impacto', e.target.value)} rows={2} placeholder="Ex: refugo caiu de 3 para 0 peças, acabamento melhor…" style={ta} /></div>
-          </div>
-        </div>
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-          <Btn t={t} icon="check" onClick={() => { if (novo && !f.peca.trim()) return; onSave({ ...rec, peca: f.peca.trim() || rec.peca, code: f.code.trim() || rec.code, qtd: parseInt(f.qtd) || rec.qtd || 1, fil: f.fil, temp: f.temp.trim(), teste: f.teste, obs: f.obs.trim(), melhoria: f.melhoria.trim(), impacto: f.impacto.trim() }, novo); }}>{novo ? 'Registrar' : 'Salvar'}</Btn>
-        </div>
-      </div>
-    </div>
-  );
-}
+// P3HistModal REMOVIDO — virou o P3ProdModal do Dashboard (POST real). O antigo so chamava
+// onSave em state local, e desde a peca 1 nem renderizado era: registrava producao em lugar nenhum.
 
 function P3Historico({ t }) {
   const { items: prods, loading, error, reload } = useFRProductions();
@@ -567,82 +593,112 @@ function P3Demandas({ t }) {
   );
 }
 
-const P3_CATS = ['Componentes', 'Embalagem', 'Protótipo', 'Ferramenta'];
-const P3_FILAMENTOS = ['PLA Azul', 'PLA Branco', 'PETG Preto', 'ABS Cinza', 'TPU Flex'];
+// P3_CATS / P3_FILAMENTOS REMOVIDOS — "Etiqueta" e "Tipo de filamento" eram selects de valores
+// inventados: o GET /parts não devolve categoria e chumba material:'Padrão', e o PUT /parts/:id só
+// aceita { productionMinutes, filamentGrams, image, description }. Sem coluna, sem campo.
 
-function P3EditModal({ t, peca, onClose, onSave, onDelete }) {
-  const novo = !peca.code;
-  const [f, setF] = useStateP3({ nome: peca.nome || '', code: peca.code || '', cat: peca.cat || 'Componentes', fil: peca.fil || 'PLA Azul', gramas: String(peca.gramas ?? ''), tempo: peca.tempo || '', stock: String(peca.stock ?? 0), img: peca.img || '' });
+// ---------- Catálogo de Peças ----------
+// LIGA-PARCIAL honesto: lista de GET /producao-3d/parts (products WHERE is_3d = true), edição TÉCNICA
+// via PUT /producao-3d/parts/:id. Nome e SKU são exibidos como leitura — quem os altera é o
+// PUT /products/:id (outro módulo, outra permissão: produtos:edit). Ver P3_CAT_GAPS no final.
+function P3PartModal({ t, peca, onClose, onSave, salvando, erro }) {
+  const [f, setF] = useStateP3({ gramas: String(peca.gramas ?? 0), minutes: String(peca.minutes ?? 0), descricao: peca.descricao || '', image: peca.image || '' });
+  const [imgErro, setImgErro] = useStateP3(null);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  const onFile = (file) => { if (!file) return; const r = new FileReader(); r.onload = () => set('img', r.result); r.readAsDataURL(file); };
+  // Sem endpoint de upload: a imagem vira dataURL e é gravada em products.image_url como texto — que
+  // é exatamente o que já existe em produção (50 das 51 peças 3D guardam base64 aí, a maior com 97KB).
+  // Cap de 512KB: essa string volta em TODO GET /parts (hoje ~2,7MB só de imagem), e as quatro telas
+  // do módulo chamam esse GET. Sem trava, um PNG de câmera (5MB → ~6,7MB em base64) numa peça só
+  // dobraria o payload de todo mundo. 512KB dá 5× de folga sobre a maior imagem real de hoje.
+  const onFile = (file) => {
+    if (!file) return;
+    setImgErro(null);
+    const r = new FileReader();
+    r.onload = () => {
+      const url = String(r.result || '');
+      if (url.length > 512 * 1024) { setImgErro('Imagem grande demais (máx. ~380KB). Reduza antes de enviar.'); return; }
+      set('image', url);
+    };
+    r.readAsDataURL(file);
+  };
   const field = { boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
+  const ta = { ...field, height: 'auto', padding: '11px 13px', resize: 'vertical' };
   const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
-  const sela = { ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' };
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(540px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={novo ? 'plus' : 'pencil'} size={19} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{novo ? 'Nova peça' : 'Editar peça'}</div><div style={{ fontSize: 12.5, color: t.muted }}>{novo ? 'Cadastre uma peça para impressão 3D.' : peca.code}</div></div>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="pencil" size={19} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Editar peça</div><div style={{ fontSize: 12.5, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peca.code} · {peca.nome}</div></div>
+          <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div>
             <label style={lab}>Imagem da peça</label>
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
               <div style={{ width: 96, height: 96, borderRadius: 12, overflow: 'hidden', flexShrink: 0, border: `1px solid ${t.border}`, background: t.elevated, display: 'grid', placeItems: 'center', color: t.faint }}>
-                {f.img ? <img src={window.__asset(f.img)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <Icon name="box" size={28} />}
+                {f.image ? <img src={window.__asset(f.image)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <Icon name="box" size={28} />}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', height: 38, padding: '0 14px', borderRadius: 10, fontSize: 13, fontWeight: 700, color: t.accentText, background: t.accentSoft }}>
                   <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => onFile(e.target.files[0])} />
-                  <Icon name="upload" size={15} /> {f.img ? 'Trocar imagem' : 'Enviar imagem'}
+                  <Icon name="upload" size={15} /> {f.image ? 'Trocar imagem' : 'Enviar imagem'}
                 </label>
-                {f.img && <button onClick={() => set('img', '')} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: uiTone(t, 'red').fg }}>Remover</button>}
+                {f.image && <button onClick={() => set('image', '')} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: uiTone(t, 'red').fg }}>Remover</button>}
               </div>
             </div>
+            {imgErro && <div style={{ fontSize: 12, fontWeight: 700, color: uiTone(t, 'red').fg, marginTop: 8 }}>{imgErro}</div>}
           </div>
-          <div><label style={lab}>Nome da peça</label><input value={f.nome} onChange={(e) => set('nome', e.target.value)} placeholder="Ex: Copinho 3D" style={field} /></div>
+          {/* Nome e SKU: leitura. O PUT deste módulo não os aceita — editá-los é outro endpoint. */}
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lab}>SKU</label><input value={f.code} onChange={(e) => set('code', e.target.value)} placeholder="5.03.0000" style={field} /></div>
-            <div style={{ flex: 1 }}>
-              <label style={lab}>Etiqueta</label>
-              <div style={{ position: 'relative' }}><select value={f.cat} onChange={(e) => set('cat', e.target.value)} style={sela}>{P3_CATS.map((c) => <option key={c}>{c}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 15, color: t.muted, pointerEvents: 'none' }} /></div>
-            </div>
+            <div style={{ flex: 1, minWidth: 0 }}><label style={lab}>Nome da peça</label><div style={{ ...field, lineHeight: '44px', color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peca.nome}</div></div>
+            <div style={{ width: 140 }}><label style={lab}>SKU</label><div style={{ ...field, lineHeight: '44px', color: t.muted }}>{peca.code}</div></div>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             <div style={{ flex: 1 }}><label style={lab}>Filamento gasto (g/un)</label><input value={f.gramas} onChange={(e) => set('gramas', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="0" style={field} /></div>
-            <div style={{ flex: 1 }}>
-              <label style={lab}>Tipo de filamento</label>
-              <div style={{ position: 'relative' }}><select value={f.fil} onChange={(e) => set('fil', e.target.value)} style={sela}>{P3_FILAMENTOS.map((c) => <option key={c}>{c}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 15, color: t.muted, pointerEvents: 'none' }} /></div>
-            </div>
+            <div style={{ flex: 1 }}><label style={lab}>Tempo de impressão (min/un)</label><input value={f.minutes} onChange={(e) => set('minutes', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="0" style={field} /></div>
           </div>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lab}>Tempo gasto (por un)</label><input value={f.tempo} onChange={(e) => set('tempo', e.target.value)} placeholder="Ex: 1h 05min" style={field} /></div>
-            <div style={{ width: 120 }}><label style={lab}>Em estoque</label><input value={f.stock} onChange={(e) => set('stock', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="0" style={field} /></div>
-          </div>
+          <div><label style={lab}>Descrição</label><textarea value={f.descricao} onChange={(e) => set('descricao', e.target.value)} rows={3} placeholder="Ex: peça do descedor, imprimir com suporte…" style={ta} /></div>
+          {erro && <div style={{ padding: '11px 13px', borderRadius: 11, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 12.5, fontWeight: 700 }}>{erro}</div>}
         </div>
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-          {!novo ? <button onClick={() => onDelete(peca.code)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 42, padding: '0 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}><Icon name="trash" size={15} /> Excluir</button> : <span />}
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-            <Btn t={t} icon="check" onClick={() => f.nome.trim() && f.code.trim() && onSave({ nome: f.nome.trim(), code: f.code.trim(), cat: f.cat, fil: f.fil, gramas: parseInt(f.gramas) || 0, tempo: f.tempo.trim() || '—', stock: parseInt(f.stock) || 0, img: f.img }, peca.code)}>{novo ? 'Cadastrar' : 'Salvar'}</Btn>
-          </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <Btn t={t} kind="ghost" onClick={() => !salvando && onClose()}>Cancelar</Btn>
+          <button onClick={() => !salvando && onSave({ productionMinutes: parseInt(f.minutes) || 0, filamentGrams: parseInt(f.gramas) || 0, image: f.image || null, description: f.descricao.trim() || null })}
+            style={{ all: 'unset', cursor: salvando ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: salvando ? t.elevated : t.accent, color: salvando ? t.faint : '#fff' }}>
+            <Icon name={salvando ? 'refresh' : 'check'} size={17} style={salvando ? { animation: 'fr-spin .7s linear infinite' } : undefined} /> {salvando ? 'Salvando…' : 'Salvar'}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-// ---------- Catálogo de Peças ----------
 function P3Catalogo({ t }) {
+  const { items: pecas, loading, error, reload } = useFR3DParts();
   const [q, setQ] = useStateP3('');
-  const [pecas, setPecas] = useStateP3(P3_PECAS);
   const [edit, setEdit] = useStateP3(null);
+  const [salvando, setSalvando] = useStateP3(false);
+  const [erro, setErro] = useStateP3(null);
+  const [toast, setToast] = useStateP3(null);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
   const ql = q.trim().toLowerCase();
-  const view = pecas.filter((p) => !ql || p.nome.toLowerCase().includes(ql) || p.code.includes(ql));
-  const save = (np, oldCode) => { setPecas((xs) => oldCode ? xs.map((x) => (x.code === oldCode ? np : x)) : [np, ...xs]); setEdit(null); };
-  const del = (code) => { setPecas((xs) => xs.filter((x) => x.code !== code)); setEdit(null); };
+  const view = pecas.filter((p) => !ql || p.nome.toLowerCase().includes(ql) || p.code.toLowerCase().includes(ql));
+
+  // PUT reescreve as 4 colunas SEMPRE (o UPDATE não é parcial) → o modal manda as 4, inclusive as que
+  // o operador não tocou. Mandar só o campo alterado apagaria os outros três com NULL.
+  const save = async (payload) => {
+    if (salvando) return;
+    setErro(null);
+    setSalvando(true);
+    try {
+      await window.FRApi.put('/producao-3d/parts/' + edit.product_id, payload);
+      setEdit(null);
+      reload();
+      setToast({ kind: 'ok', msg: 'Peça atualizada.' });
+    } catch (e) { setErro(p3Err(e)); }   // no erro: modal aberto com o que foi digitado
+    finally { setSalvando(false); }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}>
@@ -655,47 +711,72 @@ function P3Catalogo({ t }) {
             <Icon name="search" size={18} />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar peça…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
           </label>
-          <Btn t={t} icon="plus" onClick={() => setEdit({})}>Nova peça</Btn>
+          {/* Btn "Nova peça" REMOVIDO — não há POST /producao-3d/parts. Ver P3_CAT_GAPS. */}
+          <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
         </div>
       </div>
+      {loading && pecas.length === 0 ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando catálogo…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 20 }}>
-        {view.map((p) => {
-          const out = p.stock === 0;
-          return (
-            <Card t={t} key={p.code} hover style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-              <div style={{ position: 'relative' }}>
-                {p.img
-                  ? <img src={window.__asset(p.img)} alt={p.nome} style={{ display: 'block', width: '100%', height: 220, objectFit: 'cover', background: '#e9ebf0' }} />
-                  : <image-slot id={`p3d-${p.code}`} shape="rect" placeholder="Render da peça" style={{ display: 'block', width: '100%', height: 220, background: '#e9ebf0' }}></image-slot>}
-                <span style={{ position: 'absolute', top: 0, left: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.04em', padding: '6px 13px', borderTopLeftRadius: 16, borderBottomRightRadius: 12, color: '#fff', background: t.accent }}>{p.cat}</span>
-                <span style={{ position: 'absolute', top: 12, right: 12, fontSize: 11, fontWeight: 800, padding: '5px 11px', borderRadius: 999, color: '#fff', background: out ? '#ef4444' : '#10b981' }}>{out ? 'Esgotado' : `${p.stock} em estoque`}</span>
-                <button onClick={() => setEdit(p)} title="Editar peça" style={{ all: 'unset', cursor: 'pointer', position: 'absolute', bottom: 10, right: 10, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)' }}><Icon name="pencil" size={16} /></button>
-              </div>
-              <div style={{ padding: 18, flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: t.muted }}>{p.code}</div>
-                <div style={{ fontSize: 17, fontWeight: 850, color: t.text, margin: '7px 0 14px', lineHeight: 1.25 }}>{p.nome}</div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>
-                  <div style={{ flex: 1, padding: '9px 11px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}><Icon name="zap" size={11} /> FILAMENTO</div>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginTop: 3 }}>{p.gramas}g</div>
-                    <div style={{ fontSize: 10.5, color: t.muted }}>{p.fil}</div>
-                  </div>
-                  <div style={{ flex: 1, padding: '9px 11px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}><Icon name="clock" size={11} /> TEMPO</div>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginTop: 3 }}>{p.tempo}</div>
-                    <div style={{ fontSize: 10.5, color: t.muted }}>por unidade</div>
-                  </div>
+        {view.map((p) => (
+          <Card t={t} key={p.product_id} hover style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+            <div style={{ position: 'relative' }}>
+              {p.image
+                ? <img src={window.__asset(p.image)} alt={p.nome} style={{ display: 'block', width: '100%', height: 220, objectFit: 'cover', background: '#e9ebf0' }} />
+                : <div style={{ display: 'grid', placeItems: 'center', width: '100%', height: 220, background: '#e9ebf0', color: '#9aa3b2' }}><Icon name="box" size={42} /></div>}
+              {/* Badges "Etiqueta" e "N em estoque" REMOVIDOS: nenhum dos dois existe no GET /parts. */}
+              <button onClick={() => { setErro(null); setEdit(p); }} title="Editar peça" style={{ all: 'unset', cursor: 'pointer', position: 'absolute', bottom: 10, right: 10, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)' }}><Icon name="pencil" size={16} /></button>
+            </div>
+            <div style={{ padding: 18, flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: t.muted }}>{p.code}</div>
+              <div style={{ fontSize: 17, fontWeight: 850, color: t.text, margin: '7px 0 14px', lineHeight: 1.25 }}>{p.nome}</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>
+                <div style={{ flex: 1, padding: '9px 11px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}><Icon name="zap" size={11} /> FILAMENTO</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginTop: 3 }}>{p.gramas}g</div>
+                  <div style={{ fontSize: 10.5, color: t.muted }}>por unidade</div>
+                </div>
+                <div style={{ flex: 1, padding: '9px 11px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}><Icon name="clock" size={11} /> TEMPO</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginTop: 3 }}>{p3Minutes(p.minutes)}</div>
+                  <div style={{ fontSize: 10.5, color: t.muted }}>por unidade</div>
                 </div>
               </div>
-            </Card>
-          );
-        })}
-        {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma peça" sub="Ajuste a busca ou cadastre uma nova peça." /></Card></div>}
+            </div>
+          </Card>
+        ))}
+        {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma peça" sub={ql ? 'Nenhuma peça bate com a busca.' : 'Nenhum produto marcado como 3D no catálogo.'} /></Card></div>}
       </div>
-      {edit && <P3EditModal t={t} peca={edit} onClose={() => setEdit(null)} onSave={save} onDelete={del} />}
+      )}
+      {edit && <P3PartModal t={t} peca={edit} salvando={salvando} erro={erro} onClose={() => setEdit(null)} onSave={save} />}
+      <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }
+
+// P3_CAT_GAPS — o que o Catálogo NÃO liga, e por quê (entrada da Onda 2):
+//  1. CRIAR peça: não existe POST /producao-3d/parts. O POST /products aceita is_3d/production_minutes/
+//     filament_grams/image_url e criaria uma peça 3D válida, MAS é outro módulo (permissão produtos:add,
+//     não separacoes:edit) e exige sku no formato C.SS.NNNN + unit/min_stock/preços. Cadastrar peça pelo
+//     módulo 3D é decisão de produto, não de fiação — fica fora até alguém decidir.
+//  2. EXCLUIR peça: DELETE /products/:id só ARQUIVA (active = false) e o get3DParts filtra apenas por
+//     is_3d = true, SEM `AND active = true`. Ligar o botão produziria a pior mentira possível: "peça
+//     excluída" e a peça continua no catálogo depois do refetch. Onda 2 precisa do filtro no get3DParts
+//     (ou de um DELETE dedicado) ANTES de existir botão de excluir.
+//  3. NOME/SKU: PUT /producao-3d/parts/:id não os aceita (só os 4 campos técnicos) → leitura no modal.
+//  4. ESTOQUE por peça: GET /parts não devolve saldo (quem tem é o GET /products, com stock{}) → o badge
+//     "N em estoque" saiu. Onda 2: ou o get3DParts faz LEFT JOIN stock, ou o catálogo cruza /products.
+//  5. UPLOAD de imagem: não há endpoint; a imagem vai como dataURL base64 dentro de products.image_url
+//     (cap de 512KB no modal) — mesmo formato dos dados que já estão lá. Onda 2: upload real + URL.
+//  6. PESO do GET /parts: ~2,7MB, quase tudo base64 de imagem, e SEM cache compartilhado — Dashboard,
+//     Histórico, Demandas e Catálogo baixam os 2,7MB cada um, por montagem de tela. Onda 2: ou o
+//     get3DParts para de devolver image no list (só no detalhe), ou o useFR3DParts vira cache único.
 
 function renderPage3D(active, props) {
   const t = frTokens(props.theme, P3_ACCENT, P3_ACCENT_T);
