@@ -442,3 +442,12 @@ function PageClientes({ t, readOnly }) {
 }
 
 window.PageClientes = PageClientes;
+
+// Expostos p/ as telas do módulo Produção (Recebimento/Apontamentos/Armazém), que escolhem a OP
+// pelo GET /clients real — NUNCA pelo FR_OPS_ATIVAS do seed acima (telas novas nascem sem a dívida).
+// isConcluido vai junto de propósito: é o normalizador de status da casa, e é ele que define
+// "OP aberta". O banco tem 16 OPs legadas em 'pendente' + 1 em 'em_andamento'; filtrar pela string
+// literal daria 1 OP e contradiria esta tela, que já exibe as 17 como "Em andamento". Compartilhar
+// o normalizador é o que impede as telas de divergirem.
+window.useFRClients = useFRClients;
+window.frIsOpConcluida = isConcluido;

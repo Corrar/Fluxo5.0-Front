@@ -15,27 +15,126 @@ const PG_ORDENS_SEED = [
   { id: 'OP-2055', produto: 'Esteira Transportadora 6M', cliente: 'Indústria Veloz', setor: 'Montagem', qtd: 1, feito: 1, status: 'concluida', prazo: '14/06', resp: 'Ana P.' },
   { id: 'OP-2052', produto: 'Suporte de Sensor (lote)', cliente: 'Mantiqueira', setor: 'Produção 3D', qtd: 50, feito: 22, status: 'producao', prazo: '19/06', resp: 'Davi M.' },
 ];
-const PG_APONTA_SEED = [
-  { id: 'AP-881', op: 'OP-2041', etapa: 'Cablagem', operador: 'Bruno T.', qtd: 1, tempo: '3h 20min', data: '17/06 · 10:15' },
-  { id: 'AP-879', op: 'OP-2052', etapa: 'Impressão', operador: 'Davi M.', qtd: 12, tempo: '5h 40min', data: '17/06 · 09:02' },
-  { id: 'AP-877', op: 'OP-2060', etapa: 'Acabamento', operador: 'Rafael S.', qtd: 1, tempo: '1h 10min', data: '16/06 · 16:30' },
-  { id: 'AP-874', op: 'OP-2055', etapa: 'Montagem final', operador: 'Ana P.', qtd: 1, tempo: '8h 00min', data: '14/06 · 17:45' },
-];
-const PG_ARMAZEM_SEED = [
-  { id: 'LT-501', sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm', op: 'OP-2041', recebido: 120, usado: 60, un: 'm' },
-  { id: 'LT-502', sku: '4.22.0190', nome: 'Disjuntor Tripolar 25A', op: 'OP-2041', recebido: 6, usado: 1, un: 'un' },
-  { id: 'LT-503', sku: '8.11.0334', nome: 'Tubo Inox 304 Ø40', op: 'OP-2038', recebido: 24, usado: 0, un: 'm' },
-  { id: 'LT-504', sku: '3.00.0101', nome: 'Filamento PLA Azul 1kg', op: 'OP-2052', recebido: 8, usado: 2, un: 'un' },
-  { id: 'LT-505', sku: '9.99.0238', nome: 'Parafuso Sextavado M8', op: 'OP-2038', recebido: 200, usado: 0, un: 'un' },
-  { id: 'LT-506', sku: '6.30.0012', nome: 'Tinta Epóxi Cinza 3,6L', op: 'OP-2060', recebido: 3, usado: 1, un: 'lt' },
-  { id: 'LT-507', sku: '8.11.0334', nome: 'Tubo Inox 304 Ø40', op: 'OP-2055', recebido: 20, usado: 14, un: 'm' },
-  { id: 'LT-508', sku: '5.30.0712', nome: 'Terminal Tubular 2,5mm²', op: 'OP-2041', recebido: 200, usado: 40, un: 'un' },
-  { id: 'LT-509', sku: '9.99.0238', nome: 'Parafuso Sextavado M8', op: 'OP-2041', recebido: 150, usado: 0, un: 'un' },
-];
-const PG_CONSUMO_SEED = [
-  { id: 'CM-330', lote: 'LT-501', op: 'OP-2041', destino: 'OP-2041', sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm', qtd: 60, un: 'm', operador: 'Bruno T.', data: '17/06 · 10:20', desvio: false },
-  { id: 'CM-328', lote: 'LT-504', op: 'OP-2052', destino: 'OP-2052', sku: '3.00.0101', nome: 'Filamento PLA Azul 1kg', qtd: 2, un: 'un', operador: 'Davi M.', data: '17/06 · 09:05', desvio: false },
-];
+// PG_APONTA_SEED / PG_ARMAZEM_SEED / PG_CONSUMO_SEED REMOVIDOS na peça 2 — Armazém e Apontamentos
+// renderizam 100% do backend real (/op-materials). O PG_ARMAZEM_SEED era o "lote por OP" com
+// recebido/usado em memória; virou a projeção do GET /balance. O PG_CONSUMO_SEED virou o GET /events.
+// O PG_APONTA_SEED (etapa/horas) já era código morto desde sempre: nenhuma tela o renderizava —
+// e continua SEM backend (productions_3d não tem etapa/hora; apontar HORA é outra peça, não esta).
+//
+// ⚠ PG_ORDENS_SEED (acima) FICA: o PGPainel ainda deriva "OPs ativas / em produção / concluídas"
+// dele, e o Painel não está no escopo desta peça. É a última ficção do módulo — as 3 telas desta
+// peça não o tocam. Ao ligar o Painel, ele sai e as OPs vêm do GET /clients (como aqui embaixo).
+
+// ==========================================================================
+// LIGAÇÃO AO BACKEND /op-materials — o armazém de material por OP (peça 1 do módulo).
+// Sub-razão do WIP: o físico central JÁ saiu no consume da separação; aqui vive o material que
+// está COM a OP. Saldo é PROJEÇÃO (o backend soma o razão), nunca um número guardado.
+// Hooks no padrão useFRClients / useFR3DParts.
+// ==========================================================================
+function pgErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function pgNum(v) { const f = window.FRAdapters && window.FRAdapters.parseNumber; return f ? f(v) : (parseFloat(v) || 0); }
+const pgGenKey = () => (crypto.randomUUID?.() ?? `pg-${Date.now()}-${Math.random().toString(16).slice(2)}`); // fallback p/ contexto não-seguro (http://IP-LAN)
+function pgDateTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso); if (isNaN(d.getTime())) return '—';
+  const p = (x) => String(x).padStart(2, '0');
+  return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' · ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+// Hook GET genérico -> { items, loading, error, reload }. path null/'' = não busca (sem OP escolhida).
+// reqId descarta resposta de requisição velha: trocar de OP rápido dispararia duas buscas e a
+// primeira poderia responder DEPOIS, pintando a tela com o saldo da OP errada.
+function pgUseGet(path) {
+  const R = window.React;
+  const [items, setItems] = R.useState([]);
+  const [loading, setLoading] = R.useState(!!path);
+  const [error, setError] = R.useState(null);
+  const mounted = R.useRef(true);
+  const reqId = R.useRef(0);
+  const load = R.useCallback(function () {
+    const my = ++reqId.current;
+    if (!path) { setItems([]); setLoading(false); setError(null); return; }
+    setLoading(true); setError(null);
+    window.FRApi.get(path, { skipLoading: true })
+      .then(function (res) {
+        if (!mounted.current || my !== reqId.current) return;
+        setItems(Array.isArray(res && res.data) ? res.data : []);
+        setLoading(false);
+      })
+      .catch(function (e) {
+        if (!mounted.current || my !== reqId.current) return;
+        setError(pgErr(e)); setLoading(false);
+      });
+  }, [path]);
+  R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  return { items: items, loading: loading, error: error, reload: load };
+}
+
+// A fila do Recebimento: 1 linha por (separação, item) ainda não recebido por inteiro.
+function useFROpPendingReceipts(sector) {
+  return pgUseGet('/op-materials/pending-receipts' + (sector ? '?sector=' + encodeURIComponent(sector) : ''));
+}
+// A projeção do saldo da OP: 1 linha por produto.
+function useFROpBalance(csid) { return pgUseGet(csid ? '/op-materials/balance/' + csid : ''); }
+// O extrato do razão da OP (LIMIT 50 no backend). tipo opcional: 'consumido' | 'recebido' | ...
+function useFROpEvents(csid, tipo) { return pgUseGet(csid ? '/op-materials/events/' + csid + (tipo ? '?event_type=' + tipo : '') : ''); }
+
+// Mutações. Devolvem a resposta; quem chama trata erro/toast (padrão das telas já ligadas).
+function frOpReceive(separationId, items, idemKey) {
+  return window.FRApi.post('/op-materials/receive', { separationId: separationId, items: items }, { headers: { 'X-Idempotency-Key': idemKey } });
+}
+function frOpConsume(clientServiceId, productId, qty, idemKey) {
+  return window.FRApi.post('/op-materials/consume', { clientServiceId: clientServiceId, productId: productId, qty: qty }, { headers: { 'X-Idempotency-Key': idemKey } });
+}
+Object.assign(window, { useFROpPendingReceipts, useFROpBalance, useFROpEvents, frOpReceive, frOpConsume, pgErr, pgGenKey, pgDateTime, pgNum });
+
+// ---------- Toast (erro/sucesso) — mesmo visual das telas já ligadas ----------
+function PGToast({ t, toast, onClose }) {
+  if (!toast) return null;
+  return (
+    <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
+      <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
+      <span style={{ fontSize: 13, fontWeight: 600 }}>{toast.msg}</span>
+      <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', opacity: 0.7, flexShrink: 0 }}><Icon name="x" size={16} /></button>
+    </div>
+  );
+}
+window.PGToast = PGToast;
+
+// ---------- Seletor de OP (compartilhado por Apontamentos e Armazém) ----------
+// As OPs vêm do GET /clients REAL (decisão C) — NUNCA do window.FR_OPS_ATIVAS, que é montado do
+// seed estático de pages_clientes e está dessincronizado do banco (dívida documentada lá).
+// "OP aberta" = !frIsOpConcluida(status), o MESMO normalizador que a tela Clientes usa. Filtrar
+// pela string literal 'em_andamento' devolveria 1 OP das 17 abertas (16 são legado 'pendente') e
+// contradiria a Clientes, que já as exibe como "Em andamento".
+function pgOpsAbertas(clientes) {
+  const isConcl = window.frIsOpConcluida || function () { return false; };
+  const out = [];
+  (clientes || []).forEach((c) => (c.ops || []).forEach((o) => {
+    if (!isConcl(o.s)) out.push({ id: o.id, op_code: o.op_code, cliente: c.nome });
+  }));
+  return out.sort((a, b) => String(a.op_code).localeCompare(String(b.op_code)));
+}
+
+function PGOpPicker({ t, ops, value, onChange, loading, error }) {
+  const sela = { boxSizing: 'border-box', width: '100%', height: 46, borderRadius: 12, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none', appearance: 'none', WebkitAppearance: 'none', paddingRight: 34, cursor: 'pointer' };
+  return (
+    <div style={{ maxWidth: 420 }}>
+      <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Ordem de Produção</label>
+      {error ? (
+        <div style={{ fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg }}>{error}</div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <select value={value} onChange={(e) => onChange(e.target.value)} style={sela} disabled={loading}>
+            <option value="">{loading ? 'Carregando OPs…' : ops.length ? 'Selecione a OP…' : 'Nenhuma OP aberta'}</option>
+            {ops.map((o) => <option key={o.id} value={o.id}>OP {o.op_code} · {o.cliente}</option>)}
+          </select>
+          <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 12, top: 16, color: t.muted, pointerEvents: 'none' }} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------- Painel ----------
 function PGPainel({ t, ordens, setActive }) {
@@ -175,255 +274,257 @@ function PGOrdens({ t, ordens, setOrdens }) {
   );
 }
 
-// ---------- Apontamentos por OP ----------
-function PGAponta({ t, ordens, consumos }) {
-  const ops = [...new Set(consumos.map((c) => c.op))];
-  const exportar = (op) => {
-    const rows = consumos.filter((c) => !op || c.op === op);
-    const head = 'OP,Material,SKU,Quantidade,Unidade,Operador,Quando,Apontada para';
-    const csv = [head, ...rows.map((c) => [c.op, '"' + c.nome + '"', c.sku, c.qtd, c.un, c.operador, c.data, c.destino || c.op].join(','))].join('\\n');
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = (op ? 'apontamentos-' + op : 'apontamentos-geral') + '.csv'; a.click();
+// ---------- Apontamentos ----------
+// O montador aponta consumo peça a peça: escolhe a OP, BIPA a etiqueta (Code 128 -> o SKU cai no
+// campo), informa a qtd e confirma -> POST /op-materials/consume. Abaixo, o extrato dos
+// apontamentos da OP (GET /events?event_type=consumido).
+//
+// A busca roda sobre o SALDO da OP (GET /balance), não sobre o catálogo /products: só dá pra
+// apontar o que a OP realmente recebeu. Bipar um SKU sem saldo aqui responde a verdade ("não tem
+// saldo nesta OP") em vez de deixar o operador digitar tudo pra tomar 400 no fim.
+//
+// FORA desta tela (mock antigo, sem coluna em op_material_events): etapa, tempo/horas, operador
+// digitado (vem do JWT), lote, máquina e o "desvio" (apontar p/ OP diferente da destinada).
+// Ver PG_GAPS no fim do arquivo.
+function PGAponta({ t }) {
+  const { items: clientes, loading: cliLoading, error: cliError } = window.useFRClients();
+  const [opId, setOpId] = useStatePG('');
+  const ops = React.useMemo(() => pgOpsAbertas(clientes), [clientes]);
+  const opSel = ops.find((o) => o.id === opId) || null;
+
+  const { items: saldo, loading: balLoading, error: balError, reload: reloadBal } = useFROpBalance(opId);
+  const { items: eventos, loading: evLoading, error: evError, reload: reloadEv } = useFROpEvents(opId, 'consumido');
+
+  const [q, setQ] = useStatePG('');
+  const [sel, setSel] = useStatePG(null);          // produto escolhido (linha do saldo)
+  const [qtd, setQtd] = useStatePG('');
+  const [idemKey, setIdemKey] = useStatePG(null);  // âncora gerada ao ESCOLHER a peça (abre o form)
+  const [busy, setBusy] = useStatePG(false);
+  const [toast, setToast] = useStatePG(null);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+  const skuRef = React.useRef(null);
+  const qtdRef = React.useRef(null);
+
+  // Foco automático no campo do SKU: o leitor Elgin digita e dá Enter sozinho — se o campo não
+  // estiver focado, a bipada se perde. Refoca ao trocar de OP e depois de cada apontamento.
+  React.useEffect(() => { if (opId && !sel && skuRef.current) skuRef.current.focus(); }, [opId, sel]);
+
+  const comSaldo = saldo.filter((s) => pgNum(s.saldo) > 0);
+  // Bipada/Enter: casa SKU exato primeiro (é o que o scanner entrega); só então tenta nome.
+  const buscar = () => {
+    const term = q.trim().toLowerCase();
+    if (!term) return;
+    const hit = comSaldo.find((s) => String(s.sku).toLowerCase() === term)
+      || comSaldo.find((s) => String(s.sku).toLowerCase().includes(term) || String(s.name).toLowerCase().includes(term));
+    if (!hit) {
+      const noCatalogo = saldo.find((s) => String(s.sku).toLowerCase() === term);
+      setToast({ kind: 'err', msg: noCatalogo ? `${noCatalogo.sku} está zerado nesta OP — nada a apontar.` : `"${q.trim()}" não tem saldo nesta OP.` });
+      setQ('');
+      return;
+    }
+    setSel(hit); setQ(''); setIdemKey(pgGenKey());   // âncora nasce aqui e sobrevive a erro
+    setQtd(String(pgNum(hit.saldo)));
+    setTimeout(() => qtdRef.current && qtdRef.current.select(), 0);
   };
+  const cancelar = () => { setSel(null); setQtd(''); setIdemKey(null); };
+
+  const confirmar = async () => {
+    if (busy || !sel) return;
+    const n = parseInt(qtd) || 0;
+    if (!(n > 0)) { setToast({ kind: 'err', msg: 'Informe uma quantidade maior que zero.' }); return; }
+    setBusy(true);
+    try {
+      await frOpConsume(opId, sel.product_id, n, idemKey);
+      setSel(null); setQtd(''); setIdemKey(null);       // só o SUCESSO fecha o form e queima a chave
+      reloadBal(); reloadEv();
+      setToast({ kind: 'ok', msg: `Apontado: ${n} ${sel.unit || ''} de ${sel.name}.` });
+      setTimeout(() => skuRef.current && skuRef.current.focus(), 0);
+    } catch (e) {
+      // NO ERRO: form aberto e MESMA idemKey (retry idempotente). O 400 do guard traz o saldo real.
+      setToast({ kind: 'err', msg: pgErr(e) });
+      reloadBal();
+    } finally { setBusy(false); }
+  };
+
+  const field = { boxSizing: 'border-box', height: 46, borderRadius: 12, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
+
   return (
     <div>
-      <PageHeader t={t} title="Apontamentos" subtitle="Materiais apontados por Ordem de Produção — quem apontou e quando."
-        actions={<Btn t={t} kind="ghost" icon="download" onClick={() => exportar(null)}>Relatório geral</Btn>} />
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="kanban" label="OPs com apontamentos" value={ops.length} kind="accent" />
-        <KPI t={t} mini icon="out" label="Total de apontamentos" value={consumos.length} kind="amber" />
-        <KPI t={t} mini icon="alert" label="Desvios de OP" value={consumos.filter((c) => c.desvio).length} kind="red" />
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {ops.length === 0 && <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Sem apontamentos" sub="Ainda não há materiais apontados a nenhuma OP." /></Card>}
-        {ops.map((op) => {
-          const ord = ordens.find((o) => o.id === op) || {};
-          const finalizada = ord.status === 'concluida';
-          const rows = consumos.filter((c) => c.op === op);
-          const totalUn = rows.reduce((a, c) => a + c.qtd, 0);
-          return (
-            <Card t={t} key={op} style={{ overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 18px', borderBottom: `1px solid ${t.border}`, flexWrap: 'wrap' }}>
-                <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 800, color: t.text, padding: '4px 10px', borderRadius: 8, background: t.accentSoft }}>{op}</span>
-                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{ord.produto || '—'}</div><div style={{ fontSize: 12, color: t.muted }}>{ord.cliente || ''} · {rows.length} apontamentos · {totalUn} un</div></div>
-              {finalizada ? <Badge t={t} kind="green" dot>Finalizada</Badge> : <Badge t={t} kind="blue" dot>Em produção</Badge>}
-                <button onClick={() => exportar(op)} title="Exportar relatório da OP" style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 36, padding: '0 13px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, color: t.accentText, background: t.accentSoft }}><Icon name="download" size={15} /> Relatório</button>
-              </div>
-              <div style={{ overflowX: 'auto' }} className="fr-scroll">
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560, fontSize: 13 }}>
-                  <thead><tr>{['Material', 'Qtd', 'Operador', 'Quando', 'Apontada p/'].map((h, k) => <th key={h} style={{ textAlign: k === 1 ? 'center' : 'left', padding: '11px 18px', fontSize: 10, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {rows.map((c, i) => (
-                      <tr key={c.id}>
-                        <td style={{ padding: '11px 18px', borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}><div style={{ fontWeight: 600, color: t.text }}>{c.nome}</div><div style={{ fontSize: 11, color: t.muted }}>{c.sku} · {c.id}</div></td>
-                        <td style={{ padding: '11px 18px', textAlign: 'center', fontWeight: 800, color: uiTone(t, 'red').fg, borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>-{c.qtd} {c.un}</td>
-                        <td style={{ padding: '11px 18px', color: t.text, borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.operador}</td>
-                        <td style={{ padding: '11px 18px', color: t.muted, borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.data}</td>
-                        <td style={{ padding: '11px 18px', borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.desvio ? <Badge t={t} kind="amber" dot>{c.destino} (desvio)</Badge> : <Badge t={t} kind="gray">{c.destino || c.op}</Badge>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+      <PageHeader t={t} title="Apontamentos" subtitle="Bipe a etiqueta da peça e aponte o consumo contra a Ordem de Produção." />
+      <Card t={t} style={{ padding: 20, marginBottom: 20 }}>
+        <PGOpPicker t={t} ops={ops} value={opId} onChange={(v) => { setOpId(v); cancelar(); }} loading={cliLoading} error={cliError} />
 
-// ---------- Armazém por OP + apontar uso ----------
-function PGLoteModal({ t, lote, ordens, onClose, onSave }) {
-  const saldo = lote.recebido - lote.usado;
-  const [qtd, setQtd] = useStatePG(String(saldo));
-  const [destino, setDestino] = useStatePG(lote.op);
-  const [opOpen, setOpOpen] = useStatePG(false);
-  const [maquina, setMaquina] = useStatePG('');
-  const n = Math.max(0, Math.min(saldo, parseInt(qtd) || 0));
-  const desvio = destino !== lote.op;
-  const opsList = ordens.filter((o) => o.status !== 'concluida');
-  const maquinasOP = (window.FR_MAQUINAS || []).filter((mq) => mq.op === destino);
-  React.useEffect(() => { setMaquina(''); }, [destino]);
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'visible' }}>
-        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={20} /></span>
-          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 16, fontWeight: 850, color: t.text }}>{lote.nome}</div><div style={{ fontSize: 12, color: t.muted }}>{lote.sku} · saldo {saldo} {lote.un}</div></div>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-        </div>
-        <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-            <Icon name="exchange" size={15} style={{ color: t.accentText }} />
-            <span style={{ fontSize: 12.5, color: t.muted }}>Material destinado à <b style={{ color: t.text }}>{lote.op}</b></span>
-          </div>
-          {/* recebido / consumido / saldo */}
-          <div style={{ display: 'flex', gap: 10 }}>
-            {[['Recebido', lote.recebido, 'blue'], ['Consumido', lote.usado, 'amber'], ['Saldo', saldo, 'green']].map(([l, v, k]) => (
-              <div key={l} style={{ flex: 1, padding: '13px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}`, textAlign: 'center' }}>
-                <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase' }}>{l}</div>
-                <div style={{ fontSize: 22, fontWeight: 850, color: uiTone(t, k).fg, marginTop: 4 }}>{v} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{lote.un}</span></div>
+        {opId && (
+          <div style={{ marginTop: 18, paddingTop: 18, borderTop: `1px solid ${t.border}` }}>
+            {balError ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{balError}</span>
+                <Btn t={t} kind="ghost" icon="refresh" onClick={() => reloadBal()}>Tentar novamente</Btn>
               </div>
-            ))}
-          </div>
-          <div style={{ height: 8, borderRadius: 6, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${Math.round((lote.usado / lote.recebido) * 100)}%`, borderRadius: 6, background: t.accent }} /></div>
-
-          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 12 }}>Apontar uso</div>
-            <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Quantidade usada</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button onClick={() => setQtd(String(Math.max(0, n - 1)))} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', fontSize: 20, color: t.text, border: `1px solid ${t.border}` }}>–</button>
-              <input value={qtd} onChange={(e) => setQtd(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={{ width: 90, height: 44, textAlign: 'center', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 20, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
-              <button onClick={() => setQtd(String(Math.min(saldo, n + 1)))} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', fontSize: 20, color: t.accentText, border: `1px solid ${t.border}` }}>+</button>
-              <span style={{ fontSize: 13, color: t.muted }}>{lote.un} · máx {saldo}</span>
-            </div>
-          </div>
-          <div style={{ position: 'relative' }}>
-            <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Apontar para a OP</label>
-            <button onClick={() => setOpOpen((o) => !o)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 11, border: `1px solid ${opOpen ? t.accent : t.border}`, background: t.elevated }}>
-              <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: t.text }}>{destino} {!desvio && <span style={{ fontSize: 11.5, fontWeight: 600, color: uiTone(t, 'green').fg }}>· destinada</span>}{desvio && <span style={{ fontSize: 11.5, fontWeight: 600, color: uiTone(t, 'amber').fg }}>· desvio</span>}</span>
-              <Icon name="chevronDown" size={16} style={{ color: t.muted }} />
-            </button>
-            {opOpen && <div onClick={() => setOpOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />}
-            {opOpen && (
-              <div className="fr-scroll" style={{ position: 'absolute', zIndex: 10, top: 'calc(100% + 6px)', left: 0, right: 0, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6, maxHeight: 220, overflowY: 'auto' }}>
-                {opsList.map((o) => { const isDest = o.id === lote.op; return (
-                  <button key={o.id} onClick={() => { setDestino(o.id); setOpOpen(false); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 10px', borderRadius: 9, background: destino === o.id ? t.hover : 'transparent' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = destino === o.id ? t.hover : 'transparent'; }}>
-                    <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: t.accentText }}>{o.id}</span>
-                    <span style={{ fontSize: 12.5, color: t.text, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.produto}</span>
-                    {isDest && <Badge t={t} kind="green">destinada</Badge>}
-                  </button>
-                ); })}
+            ) : balLoading && !saldo.length ? (
+              <div style={{ fontSize: 13.5, color: t.muted }}>Carregando o saldo da OP…</div>
+            ) : !sel ? (
+              <React.Fragment>
+                <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Bipe ou digite o SKU</label>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 240, maxWidth: 420, ...field }}>
+                    <Icon name="barcode" size={18} style={{ color: t.muted, flexShrink: 0 }} />
+                    <input ref={skuRef} value={q} onChange={(e) => setQ(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); buscar(); } }}
+                      placeholder="Aguardando a bipada…" autoFocus
+                      style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
+                  </div>
+                  <Btn t={t} icon="search" onClick={buscar}>Buscar</Btn>
+                </div>
+                <div style={{ fontSize: 12, color: t.muted, marginTop: 8 }}>
+                  {comSaldo.length ? `${comSaldo.length} material(is) com saldo nesta OP.` : 'Esta OP não tem material com saldo — receba antes, na tela de Recebimento.'}
+                </div>
+              </React.Fragment>
+            ) : (
+              <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Peça</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{sel.name}</div>
+                  <div style={{ fontSize: 12, color: t.muted, marginTop: 3 }}>
+                    {sel.sku} · disponível na OP: <b style={{ color: t.accentText }}>{pgNum(sel.saldo)} {sel.unit || ''}</b>
+                  </div>
+                </div>
+                <div style={{ width: 130 }}>
+                  <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Quantidade</label>
+                  <input ref={qtdRef} value={qtd} onChange={(e) => setQtd(e.target.value.replace(/[^0-9]/g, ''))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmar(); } }}
+                    inputMode="numeric" style={{ ...field, width: '100%', fontWeight: 800 }} />
+                </div>
+                <Btn t={t} kind="ghost" onClick={cancelar}>Cancelar</Btn>
+                <button onClick={confirmar} disabled={busy}
+                  style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 46, padding: '0 20px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: busy ? t.elevated : t.accent, color: busy ? t.faint : '#fff' }}>
+                  <Icon name={busy ? 'refresh' : 'check'} size={17} style={busy ? { animation: 'fr-spin .7s linear infinite' } : undefined} /> {busy ? 'Apontando…' : 'Apontar consumo'}
+                </button>
               </div>
             )}
-            {desvio && <div style={{ fontSize: 11.5, color: uiTone(t, 'amber').fg, marginTop: 8, fontWeight: 600 }}>⚠ Material será apontado para uma OP diferente da destinada.</div>}
           </div>
+        )}
+      </Card>
 
-          {/* máquina (alimenta a árvore do produto) */}
-          <div>
-            <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Máquina da OP <span style={{ color: t.faint, textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>· monta a árvore do produto</span></label>
-            {maquinasOP.length === 0
-              ? <div style={{ fontSize: 12, color: t.faint, padding: '10px 12px', borderRadius: 10, background: t.elevated, border: `1px dashed ${t.border}` }}>Nenhuma máquina cadastrada nesta OP (cadastre em Montagem de Máquinas).</div>
-              : <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {maquinasOP.map((mq) => { const on = maquina === mq.id; return (
-                    <button key={mq.id} onClick={() => setMaquina(on ? '' : mq.id)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 13px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.text, border: `1px solid ${on ? t.accent : t.border}` }}>
-                      <Icon name="settings" size={14} /> {mq.nome} {on && <Icon name="check" size={14} />}
-                    </button>
-                  ); })}
-                </div>}
-            {maquina && <div style={{ fontSize: 11.5, color: uiTone(t, 'green').fg, marginTop: 8, fontWeight: 600 }}>✓ Este consumo entra na árvore do produto desta máquina.</div>}
+      {opId && (
+        <React.Fragment>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '4px 2px 12px', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint }}>
+              Apontado nesta OP {opSel ? '· OP ' + opSel.op_code : ''}
+            </div>
+            <Btn t={t} kind="ghost" icon="refresh" onClick={() => { reloadEv(); reloadBal(); }}>Atualizar</Btn>
           </div>
-        </div>
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-          <Btn t={t} icon="check" onClick={() => n > 0 && onSave(lote, n, destino, desvio, maquina)}>Apontar uso</Btn>
-        </div>
-      </div>
+          {evError ? (
+            <Card t={t} style={{ padding: 20, textAlign: 'center', color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>{evError}</Card>
+          ) : evLoading && !eventos.length ? (
+            <Card t={t} style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando apontamentos…</Card>
+          ) : eventos.length === 0 ? (
+            <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada apontado ainda" sub="Os consumos desta OP aparecem aqui assim que forem registrados." /></Card>
+          ) : (
+            <DataTable t={t} columns={[
+              { key: 'name', label: 'Material', render: (r) => (<div><div style={{ fontWeight: 700, color: t.text }}>{r.name}</div><div style={{ fontSize: 11, color: t.muted }}>{r.sku}</div></div>) },
+              { key: 'qty', label: 'Qtd', align: 'center', render: (r) => <span style={{ fontWeight: 800, color: uiTone(t, 'red').fg }}>-{pgNum(r.qty)} {r.unit || ''}</span> },
+              { key: 'user_name', label: 'Operador', render: (r) => r.user_name || '—' },
+              { key: 'created_at', label: 'Quando', render: (r) => pgDateTime(r.created_at) },
+            ]} rows={eventos} />
+          )}
+          <div style={{ fontSize: 11.5, color: t.faint, margin: '10px 2px 0' }}>Mostrando os 50 apontamentos mais recentes.</div>
+        </React.Fragment>
+      )}
+      <PGToast t={t} toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }
 
-function PGArmazem({ t, armazem, setArmazem, ordens, consumos, setConsumos }) {
-  const [tab, setTab] = useStatePG('lotes');
-  const [lote, setLote] = useStatePG(null);
-  const [toast, setToast] = useStatePG(false);
-  const [q, setQ] = useStatePG('');
-  const [verTudo, setVerTudo] = useStatePG([]);
-  const ql = q.trim().toLowerCase();
-  const apontar = (lt, qtd, destino, desvio, maquina) => {
-    setArmazem((xs) => xs.map((m) => (m.id === lt.id ? { ...m, usado: m.usado + qtd } : m)));
-    setConsumos((xs) => [{ id: 'CM-' + (340 + xs.length), lote: lt.id, op: lt.op, destino, sku: lt.sku, nome: lt.nome, qtd, un: lt.un, operador: 'Bruno T.', data: '17/06 · agora', desvio, maquina }, ...xs]);
-    if (maquina) { try { window.__frMaqQueue = window.__frMaqQueue || []; window.__frMaqQueue.push({ maquinaId: maquina, sku: lt.sku, nome: lt.nome, qtd, un: lt.un }); window.dispatchEvent(new CustomEvent('fr-maq-consumo', { detail: { maquinaId: maquina, sku: lt.sku, nome: lt.nome, qtd, un: lt.un } })); } catch (e) {} }
-    setLote(null); setToast(true); setTimeout(() => setToast(false), 2600);
-  };
-  const comSaldo = armazem.filter((m) => m.recebido - m.usado > 0).length;
-  const filtrado = armazem.filter((m) => !ql || m.nome.toLowerCase().includes(ql) || m.sku.includes(ql) || m.op.toLowerCase().includes(ql));
-  const ops = [...new Set(filtrado.map((m) => m.op))];
+// ---------- Armazém da Produção ----------
+// READ-ONLY nesta peça: a projeção do GET /balance (o que a OP recebeu, consumiu e ainda tem).
+// Apontar consumo é na tela de Apontamentos; transferir OP->OP é a peça 4. O antigo PGLoteModal
+// ("Apontar uso", com desvio e escolha de máquina) foi REMOVIDO — mexia em state local e era o
+// único emissor do evento de browser 'fr-maq-consumo'. Ver PG_GAPS.
+function PGArmazem({ t }) {
+  const { items: clientes, loading: cliLoading, error: cliError } = window.useFRClients();
+  const [opId, setOpId] = useStatePG('');
+  const [extrato, setExtrato] = useStatePG(false);
+  const ops = React.useMemo(() => pgOpsAbertas(clientes), [clientes]);
+  const opSel = ops.find((o) => o.id === opId) || null;
+  const { items: saldo, loading, error, reload } = useFROpBalance(opId);
+  const { items: eventos, loading: evLoading, reload: reloadEv } = useFROpEvents(extrato ? opId : '', '');
+
+  const tot = (k) => saldo.reduce((a, r) => a + pgNum(r[k]), 0);
+  const EV_LABEL = { recebido: ['Recebido', 'green'], consumido: ['Consumido', 'red'], devolvido: ['Devolvido', 'amber'], transferido_in: ['Transf. entrada', 'blue'], transferido_out: ['Transf. saída', 'gray'] };
+
   return (
-    <div style={{ position: 'relative' }}>
-      <PageHeader t={t} title="Armazém da Produção" subtitle="Materiais recebidos do almoxarifado, já destinados a uma OP." />
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="box" label="Lotes no armazém" value={armazem.length} kind="accent" />
-        <KPI t={t} mini icon="kanban" label="OPs com material" value={ops.length} kind="blue" />
-        <KPI t={t} mini icon="check" label="Com saldo" value={comSaldo} kind="green" />
-        <KPI t={t} mini icon="out" label="Apontamentos" value={consumos.length} kind="amber" />
-      </div>
-      <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 20 }}>
-        {[['lotes', 'Materiais por OP'], ['consumos', 'Apontamentos']].map(([k, label]) => { const on = tab === k; return (
-          <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', height: 36, padding: '0 16px', borderRadius: 999, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : t.muted }}>{label}</button>
-        ); })}
-      </div>
+    <div>
+      <PageHeader t={t} title="Armazém da Produção" subtitle="Material que está com a OP: o que ela recebeu do almoxarifado, o que já foi consumido e o que resta." />
+      <Card t={t} style={{ padding: 20, marginBottom: 20 }}>
+        <PGOpPicker t={t} ops={ops} value={opId} onChange={(v) => { setOpId(v); setExtrato(false); }} loading={cliLoading} error={cliError} />
+      </Card>
 
-      {tab === 'lotes' && (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, height: 46, padding: '0 14px', borderRadius: 12, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text', marginBottom: 20 }}>
-          <Icon name="search" size={18} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material ou OP no armazém…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
-        </label>
-      )}
+      {!opId ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Escolha uma OP" sub="Selecione a Ordem de Produção para ver o material que está com ela." /></Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      ) : loading && !saldo.length ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando o saldo da OP…</Card>
+      ) : (
+        <React.Fragment>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
+            <KPI t={t} mini icon="box" label="Materiais na OP" value={saldo.length} kind="accent" />
+            <KPI t={t} mini icon="download" label="Total recebido" value={tot('recebido')} kind="green" />
+            <KPI t={t} mini icon="zap" label="Total consumido" value={tot('consumido')} kind="amber" />
+            <KPI t={t} mini icon="clipboard" label="Com saldo" value={saldo.filter((r) => pgNum(r.saldo) > 0).length} kind="blue" />
+          </div>
 
-      {tab === 'lotes' ? (
-        ops.length === 0 ? <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada encontrado" sub="Nenhum material ou OP corresponde à busca." /></Card> : ops.map((op) => {
-          const lotes = filtrado.filter((m) => m.op === op);
-          const cli = (ordens.find((o) => o.id === op) || {});
-          return (
-            <div key={op} style={{ marginBottom: 24 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 800, color: t.text, padding: '4px 10px', borderRadius: 8, background: t.accentSoft }}>{op}</span>
-                <span style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{cli.produto || '—'}</span>
-                {cli.cliente && <span style={{ fontSize: 12, color: t.muted }}>· {cli.cliente}</span>}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
-                {(verTudo.includes(op) ? lotes : lotes.slice(0, 3)).map((m) => { const saldo = m.recebido - m.usado; const out = saldo === 0; const finalizada = (ordens.find((o) => o.id === m.op) || {}).status === 'concluida'; return (
-                  <Card t={t} key={m.id} hover={!finalizada} style={{ padding: 16, cursor: finalizada ? 'default' : 'pointer', opacity: finalizada ? 0.7 : 1 }}>
-                    <div onClick={() => !finalizada && !out && setLote(m)}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                        <div style={{ minWidth: 0 }}><div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{m.nome}</div><div style={{ display: 'flex', gap: 7, marginTop: 6 }}><Badge t={t} kind="gray">{m.sku}</Badge><Badge t={t} kind="gray">{m.id}</Badge></div></div>
-                        {finalizada ? <Badge t={t} kind="green" dot>OP finalizada</Badge> : out ? <Badge t={t} kind="green" dot>Consumido</Badge> : <Icon name="chevronRight" size={18} style={{ color: t.faint, flexShrink: 0 }} />}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 16 }}>
-                        <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>SALDO ATUAL</div><div style={{ fontSize: 26, fontWeight: 850, color: (out || finalizada) ? t.muted : t.accentText }}>{saldo} <span style={{ fontSize: 13, color: t.muted, fontWeight: 600 }}>{m.un}</span></div></div>
-                        {finalizada ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: t.muted }}><Icon name="lock" size={14} /> Bloqueado</span>
-                          : !out && <button onClick={(e) => { e.stopPropagation(); setLote(m); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 800, background: t.accent, color: '#fff' }}><Icon name="check" size={15} /> Apontar</button>}
-                      </div>
-                    </div>
-                  </Card>
-                ); })}
-              </div>
-              {lotes.length > 3 && (
-                <button onClick={() => setVerTudo((xs) => xs.includes(op) ? xs.filter((x) => x !== op) : [...xs, op])} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, height: 38, padding: '0 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, color: t.accentText, background: t.accentSoft }}>
-                  {verTudo.includes(op) ? <React.Fragment><Icon name="chevronDown" size={15} style={{ transform: 'rotate(180deg)' }} /> Ver menos</React.Fragment> : <React.Fragment><Icon name="chevronDown" size={15} /> Ver tudo ({lotes.length} materiais)</React.Fragment>}
-                </button>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '4px 2px 12px', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint }}>
+              Saldo por material {opSel ? '· OP ' + opSel.op_code : ''}
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Btn t={t} kind="ghost" icon="file" onClick={() => { const n = !extrato; setExtrato(n); if (n) setTimeout(() => reloadEv(), 0); }}>{extrato ? 'Ocultar extrato' : 'Ver extrato'}</Btn>
+              <Btn t={t} kind="ghost" icon="refresh" onClick={() => { reload(); if (extrato) reloadEv(); }}>Atualizar</Btn>
+            </div>
+          </div>
+
+          {saldo.length === 0 ? (
+            <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada nesta OP" sub="Esta OP ainda não recebeu material. Confirme o recebimento na tela de Recebimento." /></Card>
+          ) : (
+            <DataTable t={t} columns={[
+              { key: 'name', label: 'Material', render: (r) => (<div><div style={{ fontWeight: 700, color: t.text }}>{r.name}</div><div style={{ fontSize: 11, color: t.muted }}>{r.sku}</div></div>) },
+              { key: 'recebido', label: 'Recebido', align: 'center', render: (r) => pgNum(r.recebido) },
+              { key: 'consumido', label: 'Consumido', align: 'center', render: (r) => pgNum(r.consumido) },
+              { key: 'devolvido', label: 'Devolvido', align: 'center', render: (r) => pgNum(r.devolvido) },
+              // transferido_in/out somados numa coluna: a peça 4 (transferência OP->OP) ainda não
+              // escreve nenhum dos dois, então hoje isto é sempre 0 — fica pronto pro dia que for.
+              { key: 'transferido', label: 'Transferido', align: 'center', render: (r) => { const v = pgNum(r.transferido_in) - pgNum(r.transferido_out); return v === 0 ? '—' : (v > 0 ? '+' : '') + v; } },
+              { key: 'saldo', label: 'Saldo', align: 'center', render: (r) => { const v = pgNum(r.saldo); return <span style={{ fontWeight: 850, fontSize: 15, color: v > 0 ? t.text : t.faint }}>{v} <span style={{ fontSize: 11, fontWeight: 600, color: t.muted }}>{r.unit || ''}</span></span>; } },
+            ]} rows={saldo} />
+          )}
+
+          {extrato && (
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint, margin: '4px 2px 12px' }}>Extrato do razão da OP</div>
+              {evLoading && !eventos.length ? (
+                <Card t={t} style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando extrato…</Card>
+              ) : eventos.length === 0 ? (
+                <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Extrato vazio" sub="Nenhum movimento registrado nesta OP." /></Card>
+              ) : (
+                <React.Fragment>
+                  <DataTable t={t} columns={[
+                    { key: 'event_type', label: 'Movimento', render: (r) => { const [lb, k] = EV_LABEL[r.event_type] || [r.event_type, 'gray']; return <Badge t={t} kind={k}>{lb}</Badge>; } },
+                    { key: 'name', label: 'Material', render: (r) => (<div><div style={{ fontWeight: 700, color: t.text }}>{r.name}</div><div style={{ fontSize: 11, color: t.muted }}>{r.sku}</div></div>) },
+                    { key: 'qty', label: 'Qtd', align: 'center', render: (r) => { const neg = r.event_type === 'consumido' || r.event_type === 'devolvido' || r.event_type === 'transferido_out'; return <span style={{ fontWeight: 800, color: neg ? uiTone(t, 'red').fg : uiTone(t, 'green').fg }}>{neg ? '-' : '+'}{pgNum(r.qty)} {r.unit || ''}</span>; } },
+                    { key: 'user_name', label: 'Quem', render: (r) => r.user_name || '—' },
+                    { key: 'created_at', label: 'Quando', render: (r) => pgDateTime(r.created_at) },
+                  ]} rows={eventos} />
+                  <div style={{ fontSize: 11.5, color: t.faint, margin: '10px 2px 0' }}>Mostrando os 50 movimentos mais recentes.</div>
+                </React.Fragment>
               )}
             </div>
-          );
-        })
-      ) : (
-        <Card t={t} style={{ overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }} className="fr-scroll">
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640, fontSize: 13.5 }}>
-              <thead><tr>{['Apontamento', 'Material', 'Destinada', 'Apontada p/', 'Qtd', 'Operador', 'Quando'].map((h, k) => <th key={h} style={{ textAlign: k === 4 ? 'center' : k === 6 ? 'right' : 'left', padding: '13px 18px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
-              <tbody>
-                {consumos.map((c, i) => (
-                  <tr key={c.id}>
-                    <td style={{ padding: '12px 18px', fontFamily: 'monospace', fontWeight: 700, color: t.text, borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.id}</td>
-                    <td style={{ padding: '12px 18px', color: t.text, borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}><div style={{ fontWeight: 600 }}>{c.nome}</div><div style={{ fontSize: 11, color: t.muted }}>{c.sku}</div></td>
-                    <td style={{ padding: '12px 18px', borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}><Badge t={t} kind="gray">{c.op}</Badge></td>
-                    <td style={{ padding: '12px 18px', borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.desvio ? <Badge t={t} kind="amber" dot>{c.destino}</Badge> : <Badge t={t} kind="green" dot>{c.destino}</Badge>}</td>
-                    <td style={{ padding: '12px 18px', textAlign: 'center', fontWeight: 800, color: uiTone(t, 'red').fg, borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}>-{c.qtd} {c.un}</td>
-                    <td style={{ padding: '12px 18px', color: t.muted, borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.operador}</td>
-                    <td style={{ padding: '12px 18px', textAlign: 'right', color: t.muted, borderBottom: i === consumos.length - 1 ? 'none' : `1px solid ${t.border}` }}>{c.data}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
-      {lote && <PGLoteModal t={t} lote={lote} ordens={ordens} onClose={() => setLote(null)} onSave={apontar} />}
-      {toast && (
-        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 70, display: 'flex', alignItems: 'center', gap: 10, padding: '13px 20px', borderRadius: 13, background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 13.5, boxShadow: '0 10px 30px rgba(0,0,0,.3)' }}><Icon name="check" size={18} /> Uso apontado com sucesso!</div>
+          )}
+        </React.Fragment>
       )}
     </div>
   );
@@ -431,11 +532,9 @@ function PGArmazem({ t, armazem, setArmazem, ordens, consumos, setConsumos }) {
 
 function PGModule(props) {
   const t = frTokens(props.theme, PG_ACCENT, PG_ACCENT_T);
-  const [ordens, setOrdens] = useStatePG(PG_ORDENS_SEED);
-  const [aponta, setAponta] = useStatePG(PG_APONTA_SEED);
-  const [armazem, setArmazem] = useStatePG(PG_ARMAZEM_SEED);
-  const [consumos, setConsumos] = useStatePG(PG_CONSUMO_SEED);
-  const p = { ...props, t, ordens, setOrdens, aponta, setAponta, armazem, setArmazem, consumos, setConsumos };
+  // ordens (PG_ORDENS_SEED) segue SÓ p/ o PGPainel — as 3 telas da peça 2 não recebem seed nenhum:
+  // Armazém/Apontamentos/Recebimento buscam do backend por conta própria. Ver PG_GAPS no fim.
+  const p = { ...props, t, ordens: PG_ORDENS_SEED };
   if (props.active === 'prod-armazem') return <PGArmazem {...p} />;
   if (props.active === 'prod-montagem') { const Mt = window.PGMontagem; return <Mt {...p} />; }
   if (props.active === 'prod-receb') return <PGRecebimento {...p} />;
@@ -444,3 +543,25 @@ function PGModule(props) {
 }
 function renderPageProd(active, props) { return <PGModule active={active} {...props} />; }
 window.renderPageProd = renderPageProd;
+
+// PG_GAPS — o que as 3 telas desta peça NÃO fazem, e por quê (entrada das próximas):
+//  1. ETAPA/HORAS: o PG_APONTA_SEED encenava etapa (Cablagem/Impressão) + tempo ('3h 20min'). NÃO
+//     tem coluna: op_material_events é material, não mão de obra. Apontar hora é outra peça e outra
+//     tabela. A tela Apontamentos, apesar do nome, aponta MATERIAL — que é o que o mock já fazia.
+//  2. DESVIO (apontar material da OP-A contra a OP-B): era a única regra cara do mock e saiu junto
+//     com o PGLoteModal. Hoje o consume amarra no client_service_id escolhido, então NÃO existe
+//     desvio — só se consome na OP que recebeu. Quando virar peça, o desenho certo é
+//     transferido_out(A) + transferido_in(B) + consumido(B) — a 008 já tem os event_types e o
+//     ref_event_id. Modelar como consumido(B) direto faria o saldo de B ficar negativo.
+//  3. LOTE: o mock tinha lote (LT-###) como grão. O razão é por (OP, produto) — lote não tem coluna.
+//     Se lote importar (validade/rastreio), é coluna nova em op_material_events.
+//  4. MÁQUINA + árvore do produto: o PGLoteModal era o ÚNICO emissor do CustomEvent
+//     'fr-maq-consumo', que montagem.jsx escuta (drain, ~505-526) pra somar material na BOM da
+//     máquina. Com o modal fora, esse listener nunca mais dispara. Os dois lados eram mock (a BOM
+//     da Montagem morre no F5), então nada real quebrou — mas a Montagem perdeu sua única fonte de
+//     material. op_material_events não tem machine_id: ligar Montagem exige decidir se a máquina é
+//     um eixo do consumo (coluna) ou um agregado à parte.
+//  5. PAINEL (prod-painel): fora do escopo desta peça — segue no PG_ORDENS_SEED, com 8 KPIs
+//     chumbados (34 concluídas, 3,9d lead time, 2 atrasadas, 4 setores, 6 meses).
+//  6. PGOrdens (kanban de OP, acima): código morto desde ANTES desta peça — sem rota e sem item de
+//     menu. Não removi por estar fora do escopo; quando ligar, a fonte é o GET /clients.
