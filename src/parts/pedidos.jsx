@@ -353,7 +353,14 @@ function PageMeusPedidos({ t: tBase, theme }) {
   // PEÇA 1: catálogo REAL (GET /products adaptado) — mesmo hook/pattern que a galeria de Produtos usa.
   const { items: frProdutos, loading: catLoading, error: catError } = window.useFRProducts();
   // Shape consumido por esta tela: cat ← tag (já vem MAIÚSCULO no adapter). ca/vida (EPI) inexistem em products → ausentes.
-  const CATALOGO = frProdutos.map((p) => ({ ...p, cat: p.tag || null }));
+  // NEUTRALIZAÇÃO (cadeado): itens EPI/FERRAMENTAS têm destino por funcionário que o backend AINDA não
+  // persiste (funcionario/justificativa/foto descartados no submit — ver "TODO PEÇA 4" em confirmar()).
+  // Escondemos essas categorias do catálogo para ninguém enviar input que some silenciosamente; sobra
+  // só o destino por OP, que persiste. Reverter esta linha quando a Peça 4 ligar as colunas no backend.
+  const PED_DESTINO_MOCK = new Set(['EPI', 'FERRAMENTAS']);
+  const CATALOGO = frProdutos
+    .map((p) => ({ ...p, cat: p.tag || null }))
+    .filter((p) => !PED_DESTINO_MOCK.has(p.cat));
   // PEÇA 2: histórico REAL (GET /requests/my). Sincroniza no estado local `pedidos` para preservar
   // as ações locais (confirmar/cancelar) até a Peça 3 ligar o backend de verdade.
   const { items: myReqItems, loading: histLoading, error: histError, reload: histReload } = useFRMyRequests();

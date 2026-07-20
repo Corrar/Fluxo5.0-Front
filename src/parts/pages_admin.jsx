@@ -1539,9 +1539,18 @@ const PAGE_TITLES = {
   quadrogestao: 'Quadro Gestão', reposicoes: 'Reposições', confronto: 'Confronto',
   controlesaida: 'Controle de Saída', criticos: 'Críticos', configuracoes: 'Configurações',
   permissoes: 'Permissões', auditoria: 'Auditoria', clientes: 'Clientes e OPs', painelti: 'Painel TI',
+  entradas: 'Entradas', relatorios: 'Relatórios', usuarios: 'Usuários',
+  'prod-painel': 'Painel', 'prod-montagem': 'Montagem de Máquinas',
 };
 
 function renderPage(active, props) {
+  // CADEADO (fonte da verdade: window.frIsLocked em data.jsx — FR_LOCKED_PAGES + prefixos dos
+  // módulos mock). Intercepta ANTES de qualquer dispatch de módulo ou página, então a tela mock
+  // NUNCA é instanciada — nenhum seed carrega, nenhuma chamada de rede dispara. Cobre as abas
+  // mock do Estoque/Produção, os módulos mock inteiros (rh-/cp-/dev-/at-/fin-) e as rotas mortas.
+  if (active && window.frIsLocked && window.frIsLocked(active)) {
+    return <EmDesenvolvimento t={props.t} title={PAGE_TITLES[active] || 'Em Desenvolvimento'} />;
+  }
   if (active && active.indexOf('p3d-') === 0) return renderPage3D(active, props);
   if (active && active.indexOf('dev-') === 0) return renderPageDev(active, props);
   if (active && active.indexOf('prod-') === 0) return renderPageProd(active, props);

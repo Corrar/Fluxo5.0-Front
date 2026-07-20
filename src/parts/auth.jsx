@@ -143,8 +143,12 @@ function ModuleSelector({ user, onEnter, onLogout }) {
   const rawRole = prof.role || (user && user.role) || '';
   const dispRole = (window.FRAccess && window.FRAccess.roleLabel) ? window.FRAccess.roleLabel(rawRole) : rawRole;
   const dispSector = prof.sector || (user && user.setor) || '';
+  // Módulos mock/incompletos (`locked:true`) aparecem no seletor VISÍVEIS com cadeado, porém
+  // NÃO são selecionáveis (allowed=false lá embaixo → card bloqueado "Em Desenvolvimento").
+  // As rotas compartilhadas funcionais (Clientes e OPs, Meus Pedidos) seguem acessíveis pelos
+  // módulos livres (Estoque, Produção). allowedCount conta só os que dá pra entrar.
   const visibleModules = MODULES.filter((m) => window.FRAuth.canAccessModule(m.id));
-  const allowedCount = visibleModules.length;
+  const allowedCount = visibleModules.filter((m) => !m.locked).length;
   const first = dispName.split(' ')[0] || '';
   const { mobile } = useFRViewport();
 
@@ -181,7 +185,7 @@ function ModuleSelector({ user, onEnter, onLogout }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(auto-fill, minmax(150px, 1fr))' : 'repeat(auto-fill, minmax(232px, 1fr))', gap: mobile ? 12 : 18, margin: mobile ? '26px 0 0' : '36px 0 0' }}>
             {visibleModules.map((m) => {
-              const allowed = window.FRAuth.canAccessModule(m.id); // sempre true aqui (lista já filtrada)
+              const allowed = window.FRAuth.canAccessModule(m.id) && !m.locked; // módulo mock (locked) fica visível mas bloqueado
               const selected = sel === m.id;
               return (
                 <button key={m.id} disabled={!allowed} onClick={() => allowed && setSel(m.id)}
@@ -202,7 +206,7 @@ function ModuleSelector({ user, onEnter, onLogout }) {
                     </span>
                     {allowed
                       ? <span style={{ width: 24, height: 24, borderRadius: '50%', display: 'grid', placeItems: 'center', border: `2px solid ${selected ? m.accent : '#dcdcdb'}`, background: selected ? m.accent : 'transparent', color: '#fff', transition: 'all .15s' }}>{selected && <Icon name="check" size={14} stroke={3} />}</span>
-                      : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: '#9ca3af' }}><Icon name="lock" size={13} /> {mobile ? '' : 'Sem acesso'}</span>}
+                      : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: '#9ca3af' }}><Icon name="lock" size={13} /> {mobile ? '' : (m.locked ? 'Em Desenvolvimento' : 'Sem acesso')}</span>}
                   </div>
                   <div>
                     <div style={{ fontSize: mobile ? 15 : 17, fontWeight: 800, letterSpacing: '-.01em' }}>{m.name}</div>

@@ -160,6 +160,7 @@ function NavRow({ t, item, active, expanded, collapsed, onSelect, onToggleExpand
       >
         <Icon name={item.icon} size={20} stroke={1.7} style={{ color: 'currentColor' }} />
         {!collapsed && <span style={{ flex: 1, fontSize: 14, fontWeight: isActive ? 650 : 500 }}>{item.name}</span>}
+        {!collapsed && item.locked && <Icon name="lock" size={13} style={{ color: 'currentColor', opacity: 0.55, flexShrink: 0 }} />}
         {!collapsed && item.badge && (
           <span style={{ fontSize: 10.5, fontWeight: 700, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, display: 'grid', placeItems: 'center',
             background: isActive ? hexToRgba('#ffffff', 0.25) : t.accentSoft, color: isActive ? t.onAccent : t.accentText }}>{item.badge}</span>
@@ -177,11 +178,12 @@ function NavRow({ t, item, active, expanded, collapsed, onSelect, onToggleExpand
               <div key={c.id} onClick={() => onSelect(c.id)} style={{
                 cursor: 'pointer', padding: '8px 12px 8px 44px', borderRadius: 9, fontSize: 13,
                 color: ca ? t.accentText : t.muted, fontWeight: ca ? 600 : 500,
-                transition: 'background .12s, color .12s',
+                transition: 'background .12s, color .12s', display: 'flex', alignItems: 'center', gap: 7,
               }}
               onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; if (!ca) e.currentTarget.style.color = t.text; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; if (!ca) e.currentTarget.style.color = t.muted; }}>
-                {c.name}
+                <span style={{ flex: 1, minWidth: 0 }}>{c.name}</span>
+                {c.locked && <Icon name="lock" size={12} style={{ color: 'currentColor', opacity: 0.55, flexShrink: 0 }} />}
               </div>
             );
           })}

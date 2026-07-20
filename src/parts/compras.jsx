@@ -716,12 +716,7 @@ function CPModule({ active, theme, setActive }) {
   const aprovarPc = (id) => setPc((xs) => xs.map((p) => (p.id === id ? { ...p, status: 'aprovado', aprovador: USER.name } : p)));
   const receber = (id, res) => {
     setPc((xs) => xs.map((p) => (p.id === id ? { ...p, status: 'recebido', doc: res && res.doc } : p)));
-    if (res && res.doc) {
-      const p = pc.find((x) => x.id === id) || {};
-      const fr = forn.find((f) => f.nome === p.forn) || {};
-      window.__finExtraAP = window.__finExtraAP || [];
-      window.__finExtraAP.unshift({ id: 'AP-' + Math.floor(3050 + Math.random() * 900), forn: p.forn, cat: fr.cat || 'Compras', cc: 'CC-100', doc: res.doc, valor: Math.round(res.totalReceb), venc: res.venc, status: 'aberto', origem: id });
-    }
+    // Bridge Compras→Financeiro (window.__finExtraAP) removido: ambos são módulos mock cadeados.
   };
   const avaliarForn = (nome, nota) => setForn((xs) => xs.map((f) => (f.nome === nome ? { ...f, nota: +nota } : f)));
   const addSc = (f) => { const n = 'SC-' + (332 + sc.length); setSc((xs) => [{ id: n, solicitante: f.solicitante, setor: f.setor, origem: f.origem || 'Compras', item: f.item.trim(), qtd: +f.qtd, un: f.un, prio: f.prio, cc: f.cc, just: f.just.trim() || '—', status: 'pendente', data: 'Agora' }, ...xs]); };

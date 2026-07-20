@@ -294,7 +294,7 @@ function FIDre({ t }) {
 // ---------- Container stateful ----------
 function FIModule({ active, theme, setActive }) {
   const t = frTokens(theme, FI_ACCENT, FI_ACCENT_T);
-  const [ap, setAp] = useStateFI([...(window.__finExtraAP || []), ...FI_AP_SEED]);
+  const [ap, setAp] = useStateFI([...FI_AP_SEED]);   // bridge window.__finExtraAP (Compras→Financeiro) removido
   const [ar, setAr] = useStateFI(FI_AR_SEED);
   const [bancos] = useStateFI(FI_BANCOS_SEED);
   const [toast, setToast] = useStateFI(null);

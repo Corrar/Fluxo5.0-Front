@@ -28,7 +28,8 @@ function bootActiveModule() {
     if (!id) return null;
     const A = window.FRAuth;
     if (!A || typeof A.canAccessModule !== 'function' || !A.canAccessModule(id)) return null;
-    return MODULES.find((x) => x.id === id) || null;
+    const m = MODULES.find((x) => x.id === id);
+    return (m && !m.locked) ? m : null;   // módulo mock cadeado não reabre no F5
   } catch (e) { return null; }
 }
 
@@ -121,7 +122,7 @@ function App() {
       {screen === 'login' && <LoginScreen onLogin={handleLogin} />}
       {screen === 'selector' && <ModuleSelector user={user} onEnter={handleEnter} onLogout={handleLogout} />}
       {screen === 'erp' && (
-        <ERPFrame user={user} initialMod={startMod} allowedModules={MODULES.filter((m) => window.FRAuth.canAccessModule(m.id))}
+        <ERPFrame user={user} initialMod={startMod} allowedModules={MODULES.filter((m) => !m.locked && window.FRAuth.canAccessModule(m.id))}
           onLogout={handleLogout} onSwitchModule={goToSelector} />
       )}
     </div>

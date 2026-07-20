@@ -4,12 +4,12 @@
 const MODULES = [
   { id: 'estoque',  name: 'Estoque ERP',  subtitle: 'Controle de inventário', icon: 'box',     accent: '#2563eb', accentText: '#7aa2ff' },
   { id: 'producao', name: 'Produção 3D',  subtitle: 'Fila de impressão',       icon: 'printer', accent: '#6366f1', accentText: '#818cf8' },
-  { id: 'rh',       name: 'RH',           subtitle: 'Pessoas & ponto',         icon: 'users',   accent: '#f59e0b', accentText: '#fbbf24' },
-  { id: 'compras',  name: 'Compras',      subtitle: 'Cotações & pedidos',      icon: 'cart',    accent: '#ec4899', accentText: '#f472b6' },
-  { id: 'dev',      name: 'Desenvolvedor', subtitle: 'Suporte & chamados',       icon: 'terminal', accent: '#0891b2', accentText: '#22d3ee' },
+  { id: 'rh',       name: 'RH',           subtitle: 'Pessoas & ponto',         icon: 'users',   accent: '#f59e0b', accentText: '#fbbf24', locked: true },
+  { id: 'compras',  name: 'Compras',      subtitle: 'Cotações & pedidos',      icon: 'cart',    accent: '#ec4899', accentText: '#f472b6', locked: true },
+  { id: 'dev',      name: 'Desenvolvedor', subtitle: 'Suporte & chamados',       icon: 'terminal', accent: '#0891b2', accentText: '#22d3ee', locked: true },
   { id: 'producaoger', name: 'Produção', subtitle: 'Ordens de produção',       icon: 'zap',     accent: '#7c3aed', accentText: '#a78bfa' },
-  { id: 'assistencia', name: 'Assistência Técnica', subtitle: 'OS & equipamentos',   icon: 'wrench',  accent: '#0d9488', accentText: '#2dd4bf' },
-  { id: 'financeiro', name: 'Financeiro', subtitle: 'Contas & fluxo de caixa', icon: 'dollar', accent: '#16a34a', accentText: '#4ade80' },
+  { id: 'assistencia', name: 'Assistência Técnica', subtitle: 'OS & equipamentos',   icon: 'wrench',  accent: '#0d9488', accentText: '#2dd4bf', locked: true },
+  { id: 'financeiro', name: 'Financeiro', subtitle: 'Contas & fluxo de caixa', icon: 'dollar', accent: '#16a34a', accentText: '#4ade80', locked: true },
 ];
 
 // Navigation for the Estoque module — reorganized into sections (MAIN/FAV pattern,
@@ -44,22 +44,22 @@ const NAV = [
         children: [
           { id: 'solicitacoes', name: 'Solicitações' },
           { id: 'pedidos',      name: 'Meus Pedidos' },
-          { id: 'encomendar',   name: 'Encomendar 3D' },
+          { id: 'encomendar',   name: 'Encomendar 3D', locked: true },
         ],
       },
       { id: 'quadrogestao', name: 'Quadro Gestão', icon: 'barChart2' },
-      { id: 'reposicoes',   name: 'Reposições',    icon: 'refresh' },
-      { id: 'confronto',    name: 'Confronto',     icon: 'clipboard' },
+      { id: 'reposicoes',   name: 'Reposições',    icon: 'refresh',   locked: true },
+      { id: 'confronto',    name: 'Confronto',     icon: 'clipboard', locked: true },
     ],
   },
   {
     label: 'Gestão Admin',
     items: [
-      { id: 'controlesaida', name: 'Controle de Saída', icon: 'briefcase' },
-      { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
-      { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
+      { id: 'controlesaida', name: 'Controle de Saída', icon: 'briefcase', locked: true },
+      { id: 'criticos',      name: 'Críticos',          icon: 'alert',     locked: true },
+      { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart',  locked: true },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
-      { id: 'painelti',      name: 'Painel TI',         icon: 'terminal' },
+      { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
   },
 ];
@@ -154,8 +154,8 @@ const NAV_PROD = [
   {
     label: 'Produção',
     items: [
-      { id: 'prod-painel',  name: 'Painel', icon: 'barChart2' },
-      { id: 'prod-montagem', name: 'Montagem de Máquinas', icon: 'settings' },
+      { id: 'prod-painel',  name: 'Painel', icon: 'barChart2', locked: true },
+      { id: 'prod-montagem', name: 'Montagem de Máquinas', icon: 'settings', locked: true },
       { id: 'prod-armazem', name: 'Armazém', icon: 'box' },
       { id: 'prod-receb',   name: 'Recebimento', icon: 'download' },
       { id: 'prod-aponta',  name: 'Apontamentos', icon: 'clipboard' },
@@ -213,4 +213,32 @@ MODULES[5].home = 'prod-painel';
 MODULES[6].home = 'at-painel';
 MODULES[7].home = 'fin-painel';
 
-Object.assign(window, { MODULES, NAV, NAV_3D, NAV_DEV, NAV_PROD, NAV_RH, NAV_COMPRAS, NAV_AT, NAV_FIN, USER, USERS, userCanAccess });
+// CADEADO — rotas cujo conteúdo é mock/incompleto e NÃO deve renderizar (nem seed, nem rede).
+// O roteador (renderPage, pages_admin.jsx) intercepta estas rotas ANTES de montar a página e
+// devolve <EmDesenvolvimento/> no lugar. Fonte única da verdade do cadeado por-página/rota.
+const FR_LOCKED_PAGES = new Set([
+  // Estoque — telas mock/incompletas (ficam visíveis no menu com ícone de cadeado)
+  'reposicoes', 'confronto', 'controlesaida', 'criticos', 'relatorios', 'painelti', 'encomendar',
+  // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
+  'entradas', 'requisicao',
+  // Produção — telas mock/incompletas (visíveis no menu com cadeado)
+  'prod-painel', 'prod-montagem',
+  // Config do módulo Dev (mock) — Dev é não-navegável, mas trava defensiva se a rota for atingida
+  'usuarios', 'permissoes', 'auditoria',
+  // Rotas mortas (fora de qualquer menu) — link direto vê o cadeado, não a tela mock
+  'tarefas', 'eletrica', 'avisos', 'calculadora',
+]);
+
+// Módulos inteiramente mock: ficam VISÍVEIS no seletor com cadeado (não-selecionáveis via
+// `locked:true` no MODULE), mas as rotas prefixadas deles também são travadas por defesa —
+// se qualquer id do módulo for atingido (localStorage velho etc.), cai no <EmDesenvolvimento>,
+// nunca na tela mock. As rotas compartilhadas funcionais (clientes, pedidos) NÃO têm prefixo
+// e por isso continuam livres (resolvem nos componentes reais do Estoque).
+const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
+function frIsLocked(id) {
+  if (!id) return false;
+  if (FR_LOCKED_PAGES.has(id)) return true;
+  return FR_LOCKED_MODULE_PREFIXES.some((p) => id.indexOf(p) === 0);
+}
+
+Object.assign(window, { MODULES, NAV, NAV_3D, NAV_DEV, NAV_PROD, NAV_RH, NAV_COMPRAS, NAV_AT, NAV_FIN, USER, USERS, userCanAccess, FR_LOCKED_PAGES, FR_LOCKED_MODULE_PREFIXES, frIsLocked });

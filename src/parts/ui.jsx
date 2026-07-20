@@ -236,4 +236,28 @@ function RingChart({ t, segs, size = 140, thickness = 16, center, gap = 0.04 }) 
   );
 }
 
-Object.assign(window, { Badge, Card, PageHeader, Btn, KPI, DataTable, EmptyState, BarChart, AreaChart, RingChart, uiTone: tone });
+// CADEADO reutilizável — renderiza NO LUGAR do conteúdo de abas/rotas mock ou incompletas.
+// Contrato: a tela mock NÃO é montada por trás deste componente (nenhum seed carregado,
+// nenhuma chamada de rede, nenhuma escrita). A interceptação acontece no roteador
+// (renderPage, em pages_admin.jsx) ANTES de instanciar a página. Ver window.FR_LOCKED_PAGES.
+function EmDesenvolvimento({ t, title, subtitle, tag = 'Em Desenvolvimento' }) {
+  return (
+    <div style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', padding: '40px 20px' }}>
+      <Card t={t} style={{ maxWidth: 460, width: '100%', padding: '44px 34px', textAlign: 'center' }}>
+        <div style={{ position: 'relative', width: 88, height: 88, margin: '0 auto 22px' }}>
+          <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: t.accentSoft, filter: 'blur(7px)' }} />
+          <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: '50%', display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}>
+            <Icon name="lock" size={36} stroke={1.75} />
+          </div>
+        </div>
+        <span style={{ display: 'inline-block', fontSize: 10.5, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: t.accentText, background: t.accentSoft, padding: '5px 12px', borderRadius: 999, marginBottom: 14 }}>{tag}</span>
+        <div style={{ fontSize: 21, fontWeight: 850, color: t.text, letterSpacing: '-.01em' }}>{title || 'Em Desenvolvimento'}</div>
+        <div style={{ fontSize: 13.5, color: t.muted, marginTop: 10, lineHeight: 1.5, maxWidth: 360, marginLeft: 'auto', marginRight: 'auto' }}>
+          {subtitle || 'Esta área ainda está em construção e será liberada em breve. O conteúdo fica indisponível até lá.'}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+Object.assign(window, { Badge, Card, PageHeader, Btn, KPI, DataTable, EmptyState, BarChart, AreaChart, RingChart, uiTone: tone, EmDesenvolvimento });
