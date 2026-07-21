@@ -12,6 +12,12 @@ const P3_DEMSTATUS = {
   produzindo: { label: 'Em produção', kind: 'accent', next: 'concluida', act: 'Finalizar peça', actIcon: 'check' },
   concluida:  { label: 'Concluída', kind: 'green' },
   rejeitada:  { label: 'Rejeitada', kind: 'red' },
+  // 'Cancelada' é escrita pelo BACKEND quando a solicitação de origem é cancelada
+  // (requests.controller: UPDATE demands_3d SET status='Cancelada' WHERE request_id=...) e pelo
+  // DELETE /demands/:id (soft-cancel). Sem esta entrada, p3AdaptDemand caía no fallback 'analise' e
+  // a demanda cancelada REAPARECIA na Fila com Aceitar/Recusar ativos — dava pra "produzir" algo já
+  // cancelado (o backend só barrava na conclusão). Sem `next`/`act`: é estado terminal, sem botões.
+  cancelada:  { label: 'Cancelada', kind: 'gray' },
 };
 
 // ==========================================================================
@@ -26,8 +32,8 @@ function p3RelTime(iso) { if (!iso) return ''; const d = new Date(iso); if (isNa
 function p3DateTime(iso) { if (!iso) return '—'; const d = new Date(iso); if (isNaN(d.getTime())) return '—'; const p = (x) => String(x).padStart(2, '0'); return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' · ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
 
 // Status da demanda: backend (real, capitalizado/acentuado) ↔ front (lowercase do P3_DEMSTATUS).
-const P3_DEM_BACK2FRONT = { 'Em análise': 'analise', 'Aceita': 'aceita', 'Em desenvolvimento': 'produzindo', 'Concluída': 'concluida', 'Rejeitada': 'rejeitada' };
-const P3_DEM_FRONT2BACK = { analise: 'Em análise', aceita: 'Aceita', produzindo: 'Em desenvolvimento', concluida: 'Concluída', rejeitada: 'Rejeitada' };
+const P3_DEM_BACK2FRONT = { 'Em análise': 'analise', 'Aceita': 'aceita', 'Em desenvolvimento': 'produzindo', 'Concluída': 'concluida', 'Rejeitada': 'rejeitada', 'Cancelada': 'cancelada' };
+const P3_DEM_FRONT2BACK = { analise: 'Em análise', aceita: 'Aceita', produzindo: 'Em desenvolvimento', concluida: 'Concluída', rejeitada: 'Rejeitada', cancelada: 'Cancelada' };
 
 // Adapters backend → shape das telas.
 function p3AdaptProduction(p) {
@@ -44,7 +50,11 @@ function p3AdaptDemand(d) {
   return { id: d.id, product_id: d.partId || null, requestId: d.requestId || null,
     qtd: p3Num(d.quantity), op: d.opNumber || '—', priority: d.priority || '',
     solicitante: d.requester || 'Sistema', quando: p3RelTime(d.createdAt),
-    status: P3_DEM_BACK2FRONT[d.status] || 'analise', statusBack: d.status, notas: d.notes || '' };
+    status: P3_DEM_BACK2FRONT[d.status] || 'analise', statusBack: d.status,
+    // notas (`notes`) e motivoRecusa (`rejection_reason`) são campos SEPARADOS no banco (migration 010).
+    // `notes` nasce com o resumo do pedido escrito pela requests.controller e vira anotação livre do
+    // operador; o motivo da recusa tem coluna própria pra não ser sobrescrito pela anotação.
+    notas: d.notes || '', motivoRecusa: d.rejectionReason || '' };
 }
 function p3AdaptPart(p) {
   p = p || {};
@@ -436,9 +446,14 @@ function P3Historico({ t }) {
 }
 
 // ---------- Quadro de Demandas ----------
-function P3DemandaCard({ t, d, onAdvance, onReject, busy }) {
+function P3DemandaCard({ t, d, onAdvance, onReject, onCancel, onSaveNotes, busy }) {
   const st = P3_DEMSTATUS[d.status] || P3_DEMSTATUS.analise;
-  const isHist = d.status === 'concluida' || d.status === 'rejeitada';
+  // 'cancelada' entra aqui: é terminal como concluida/rejeitada -> sem Aceitar/Recusar/Cancelar.
+  const isHist = d.status === 'concluida' || d.status === 'rejeitada' || d.status === 'cancelada';
+  const [editNota, setEditNota] = useStateP3(false);
+  const [rascunho, setRascunho] = useStateP3(d.notas || '');
+  // Some do modo edição quando a demanda muda ou quando o reload traz nota nova de fora.
+  React.useEffect(() => { setRascunho(d.notas || ''); setEditNota(false); }, [d.id, d.notas]);
   const img = d.img;
   return (
     <Card t={t} style={{ padding: 0, overflow: 'hidden' }}>
@@ -462,15 +477,51 @@ function P3DemandaCard({ t, d, onAdvance, onReject, busy }) {
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{d.solicitante}</div><div style={{ fontSize: 11, color: t.muted }}>{d.priority ? 'Prioridade ' + d.priority + ' · ' : ''}{d.quando}</div></div>
         </div>
 
-        {/* observações */}
-        {d.notas && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, padding: '11px 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-            <Icon name="file" size={15} style={{ color: t.muted, flexShrink: 0, marginTop: 1 }} />
+        {/* MOTIVO DA RECUSA — bloco próprio, lê rejection_reason (migration 010). Antes este rótulo
+            era usado sobre `notes` e exibia o RESUMO DO PEDIDO mal rotulado como motivo. */}
+        {d.status === 'rejeitada' && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, padding: '11px 13px', borderRadius: 11, background: uiTone(t, 'red').bg, border: `1px solid ${t.border}` }}>
+            <Icon name="x" size={15} style={{ color: uiTone(t, 'red').fg, flexShrink: 0, marginTop: 1 }} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 2 }}>{d.status === 'rejeitada' ? 'Motivo da recusa' : 'Observações'}</div>
-              <div style={{ fontSize: 12.5, color: d.status === 'rejeitada' ? uiTone(t, 'red').fg : t.muted, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{d.notas}</div>
+              <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 2 }}>Motivo da recusa</div>
+              <div style={{ fontSize: 12.5, color: uiTone(t, 'red').fg, lineHeight: 1.45, whiteSpace: 'pre-wrap', fontStyle: d.motivoRecusa ? 'normal' : 'italic' }}>
+                {/* NULL = recusada antes da 010 (o motivo nunca foi capturado) — dizer isso é mais
+                    honesto do que mostrar em branco ou reaproveitar a anotação. */}
+                {d.motivoRecusa || 'Motivo não registrado.'}
+              </div>
             </div>
           </div>
+        )}
+
+        {/* ANOTAÇÕES (`notes`) — nasce com o resumo do pedido e o operador complementa/edita. */}
+        {(d.notas || editNota) && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, padding: '11px 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
+            <Icon name="file" size={15} style={{ color: t.muted, flexShrink: 0, marginTop: 1 }} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase' }}>Anotações</div>
+                {!editNota && !busy && (
+                  <button onClick={() => setEditNota(true)} title="Editar anotação" style={{ all: 'unset', cursor: 'pointer', marginLeft: 'auto', color: t.muted, display: 'grid', placeItems: 'center' }}><Icon name="pencil" size={13} /></button>
+                )}
+              </div>
+              {editNota ? (
+                <div>
+                  <textarea value={rascunho} onChange={(e) => setRascunho(e.target.value)} rows={4} placeholder="Anotação da fábrica…"
+                    style={{ boxSizing: 'border-box', width: '100%', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '9px 11px', fontSize: 12.5, fontFamily: 'inherit', outline: 'none', resize: 'vertical' }} />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                    <button onClick={() => { setRascunho(d.notas || ''); setEditNota(false); }} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: t.muted, padding: '6px 10px' }}>Cancelar</button>
+                    <button onClick={() => onSaveNotes(d, rascunho)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 800, color: '#fff', background: t.accent, padding: '6px 13px', borderRadius: 8, opacity: busy ? 0.6 : 1 }}>Salvar</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12.5, color: t.muted, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{d.notas}</div>
+              )}
+            </div>
+          </div>
+        )}
+        {/* Sem anotação nenhuma: oferece criar (o bloco acima só aparece quando há texto). */}
+        {!d.notas && !editNota && !isHist && (
+          <button onClick={() => setEditNota(true)} style={{ all: 'unset', cursor: 'pointer', marginTop: 12, fontSize: 11.5, fontWeight: 700, color: t.muted, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="file" size={13} /> Adicionar anotação</button>
         )}
 
         {!isHist && (
@@ -478,6 +529,14 @@ function P3DemandaCard({ t, d, onAdvance, onReject, busy }) {
             <button onClick={() => !busy && onReject(d)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}`, opacity: busy ? 0.5 : 1 }}
               onMouseEnter={(e) => { if (!busy) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /> Recusar</button>
             <button onClick={() => !busy && onAdvance(d)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', flex: 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: '#fff', boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}`, opacity: busy ? 0.6 : 1 }}><Icon name={st.actIcon || 'check'} size={16} /> {st.act}</button>
+          </div>
+        )}
+        {/* Excluir demanda = SOFT-CANCEL no backend (status 'Cancelada'). Discreto de propósito:
+            é ação de exceção, não o caminho normal (o normal é Recusar, que pede motivo). */}
+        {!isHist && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+            <button onClick={() => !busy && onCancel(d)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 11.5, fontWeight: 700, color: t.faint, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: busy ? 0.5 : 1 }}
+              onMouseEnter={(e) => { if (!busy) e.currentTarget.style.color = uiTone(t, 'red').fg; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.faint; }}><Icon name="trash" size={13} /> Excluir demanda</button>
           </div>
         )}
         {isHist && (
@@ -524,6 +583,7 @@ function P3Demandas({ t }) {
   const [tab, setTab] = useStateP3('fila');
   const [busy, setBusy] = useStateP3(false);
   const [toast, setToast] = useStateP3(null);
+  const [rejectTarget, setRejectTarget] = useStateP3(null); // demanda aguardando motivo no P3RejectModal
   React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
   const busyRef = React.useRef(false); busyRef.current = busy;
 
@@ -531,7 +591,9 @@ function P3Demandas({ t }) {
   const groups = {
     fila: items.filter((x) => x.status === 'analise' || x.status === 'aceita'),
     produzindo: items.filter((x) => x.status === 'produzindo'),
-    historico: items.filter((x) => x.status === 'concluida' || x.status === 'rejeitada'),
+    // 'cancelada' entra no Histórico. Sem isto ela não casaria com nenhum grupo e sumiria das três
+    // abas — a demanda existiria no banco e seria invisível na tela.
+    historico: items.filter((x) => x.status === 'concluida' || x.status === 'rejeitada' || x.status === 'cancelada'),
   };
   const tabs = [['fila', 'Fila'], ['produzindo', 'Produzindo'], ['historico', 'Histórico']];
   const view = groups[tab];
@@ -551,16 +613,45 @@ function P3Demandas({ t }) {
     } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); } // 400 "Demanda já concluída/cancelada" (guard) → msg clara
     finally { setBusy(false); }
   };
-  // Recusar = muda status para 'Rejeitada'. O endpoint só aceita { status } — o MOTIVO NÃO é
-  // persistido (gap reportado); por isso confirmamos direto, sem coletar um texto que se perderia.
-  const reject = async (d) => {
+  // Recusar = abre o P3RejectModal p/ coletar o MOTIVO (obrigatório no modal). O endpoint agora
+  // aceita { status, reason } e grava em rejection_reason (coluna própria — migration 010), então o
+  // texto não se perde mais. Antes isto era um window.confirm sem motivo.
+  const reject = (d) => { if (!busyRef.current) setRejectTarget(d); };
+  const confirmReject = async (id, motivo) => {
     if (busyRef.current) return;
-    if (!window.confirm('Recusar a demanda de ' + d.qtd + '× ' + d.peca + '?')) return;
     setBusy(true);
     try {
-      await window.FRApi.put('/producao-3d/demands/' + d.id + '/status', { status: 'Rejeitada' });
+      await window.FRApi.put('/producao-3d/demands/' + id + '/status', { status: 'Rejeitada', reason: motivo });
+      setRejectTarget(null);
       reload();
-      setToast({ kind: 'ok', msg: 'Demanda recusada.' });
+      setToast({ kind: 'ok', msg: 'Demanda recusada — motivo registrado.' });
+    } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); }
+    finally { setBusy(false); }
+  };
+
+  // Anotação livre (`notes`). Campo distinto do motivo da recusa: salvar aqui não mexe em
+  // rejection_reason (garantido pelo backend, que só a toca na transição p/ 'Rejeitada').
+  const saveNotes = async (d, texto) => {
+    if (busyRef.current) return;
+    setBusy(true);
+    try {
+      await window.FRApi.put('/producao-3d/demands/' + d.id + '/notes', { notes: texto });
+      reload();
+      setToast({ kind: 'ok', msg: 'Anotação salva.' });
+    } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); }
+    finally { setBusy(false); }
+  };
+
+  // "Excluir" = soft-cancel (status 'Cancelada'); a linha fica no histórico. O backend recusa
+  // cancelar demanda Concluída (400) — a reversão de estoque é o DELETE da produção.
+  const cancelDemand = async (d) => {
+    if (busyRef.current) return;
+    if (!window.confirm('Excluir a demanda de ' + d.qtd + '× ' + d.peca + '?\n\nEla sai da fila e fica registrada como cancelada no histórico.')) return;
+    setBusy(true);
+    try {
+      await window.FRApi.delete('/producao-3d/demands/' + d.id);
+      reload();
+      setToast({ kind: 'ok', msg: 'Demanda cancelada.' });
     } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); }
     finally { setBusy(false); }
   };
@@ -585,9 +676,12 @@ function P3Demandas({ t }) {
       ) : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
         {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhuma demanda neste status." /></Card></div>}
-        {view.map((d) => <P3DemandaCard key={d.id} t={t} d={d} busy={busy} onAdvance={advance} onReject={reject} />)}
+        {view.map((d) => <P3DemandaCard key={d.id} t={t} d={d} busy={busy} onAdvance={advance} onReject={reject} onCancel={cancelDemand} onSaveNotes={saveNotes} />)}
       </div>
       )}
+      {/* P3RejectModal existia pronto no arquivo e NUNCA era renderizado (código morto). Agora é o
+          caminho da recusa: coleta o motivo obrigatório e manda { status, reason }. */}
+      {rejectTarget && <P3RejectModal t={t} demanda={rejectTarget} onClose={() => !busy && setRejectTarget(null)} onConfirm={confirmReject} />}
       <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
     </div>
   );
@@ -699,6 +793,21 @@ function P3Catalogo({ t }) {
     finally { setSalvando(false); }
   };
 
+  // Excluir peça = DELETE /products/:id, que ARQUIVA (active = false), não apaga. Só passou a ser
+  // honesto depois do `AND active = true` no get3DParts: antes a peça "excluída" voltava no refetch.
+  // Arquivar preserva o histórico (produções e movimentações antigas seguem apontando pro produto).
+  const remove = async (p) => {
+    if (salvando) return;
+    if (!window.confirm('Excluir a peça "' + p.nome + '" do catálogo 3D?\n\nEla é arquivada (não apagada): sai do catálogo, mas o histórico de produções e o estoque continuam intactos.')) return;
+    setSalvando(true);
+    try {
+      await window.FRApi.delete('/products/' + p.product_id);
+      reload();
+      setToast({ kind: 'ok', msg: 'Peça arquivada — saiu do catálogo.' });
+    } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); }   // 403 se faltar produtos:delete
+    finally { setSalvando(false); }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}>
@@ -732,6 +841,8 @@ function P3Catalogo({ t }) {
                 : <div style={{ display: 'grid', placeItems: 'center', width: '100%', height: 220, background: '#e9ebf0', color: '#9aa3b2' }}><Icon name="box" size={42} /></div>}
               {/* Badges "Etiqueta" e "N em estoque" REMOVIDOS: nenhum dos dois existe no GET /parts. */}
               <button onClick={() => { setErro(null); setEdit(p); }} title="Editar peça" style={{ all: 'unset', cursor: 'pointer', position: 'absolute', bottom: 10, right: 10, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)' }}><Icon name="pencil" size={16} /></button>
+              <button onClick={() => remove(p)} disabled={salvando} title="Excluir peça (arquiva)" style={{ all: 'unset', cursor: salvando ? 'not-allowed' : 'pointer', position: 'absolute', bottom: 10, right: 52, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)', opacity: salvando ? 0.5 : 1 }}
+                onMouseEnter={(e) => { if (!salvando) e.currentTarget.style.background = uiTone(t, 'red').fg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(8,10,16,.7)'; }}><Icon name="trash" size={16} /></button>
             </div>
             <div style={{ padding: 18, flex: 1, display: 'flex', flexDirection: 'column' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: t.muted }}>{p.code}</div>
@@ -765,10 +876,13 @@ function P3Catalogo({ t }) {
 //     filament_grams/image_url e criaria uma peça 3D válida, MAS é outro módulo (permissão produtos:add,
 //     não separacoes:edit) e exige sku no formato C.SS.NNNN + unit/min_stock/preços. Cadastrar peça pelo
 //     módulo 3D é decisão de produto, não de fiação — fica fora até alguém decidir.
-//  2. EXCLUIR peça: DELETE /products/:id só ARQUIVA (active = false) e o get3DParts filtra apenas por
-//     is_3d = true, SEM `AND active = true`. Ligar o botão produziria a pior mentira possível: "peça
-//     excluída" e a peça continua no catálogo depois do refetch. Onda 2 precisa do filtro no get3DParts
-//     (ou de um DELETE dedicado) ANTES de existir botão de excluir.
+//  2. EXCLUIR peça: ✅ FECHADO. O get3DParts passou a filtrar `AND active = true`, então o
+//     DELETE /products/:id (que ARQUIVA, active=false) virou honesto: excluiu, sai do catálogo e não
+//     volta no refetch. O botão está no card. Arquivar preserva o histórico de produções/estoque.
+//     NOTA de RBAC: o catálogo 3D roda em separacoes:edit, mas o DELETE /products/:id exige
+//     produtos:delete (outro módulo). Hoje isso não bloqueia ninguém — admin faz bypass total
+//     (auth.ts) e almoxarife, o único outro papel com separacoes:edit, também tem produtos:delete.
+//     Se algum papel novo ganhar 3D sem produtos:delete, o botão passa a dar 403 (tratado em toast).
 //  3. NOME/SKU: PUT /producao-3d/parts/:id não os aceita (só os 4 campos técnicos) → leitura no modal.
 //  4. ESTOQUE por peça: GET /parts não devolve saldo (quem tem é o GET /products, com stock{}) → o badge
 //     "N em estoque" saiu. Onda 2: ou o get3DParts faz LEFT JOIN stock, ou o catálogo cruza /products.
