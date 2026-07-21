@@ -56,7 +56,7 @@ const NAV = [
     label: 'Gestão Admin',
     items: [
       { id: 'controlesaida', name: 'Controle de Saída', icon: 'briefcase', locked: true },
-      { id: 'criticos',      name: 'Críticos',          icon: 'alert',     locked: true },
+      { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
       { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart',  locked: true },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
       { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
@@ -218,7 +218,8 @@ MODULES[7].home = 'fin-painel';
 // devolve <EmDesenvolvimento/> no lugar. Fonte única da verdade do cadeado por-página/rota.
 const FR_LOCKED_PAGES = new Set([
   // Estoque — telas mock/incompletas (ficam visíveis no menu com ícone de cadeado)
-  'reposicoes', 'confronto', 'controlesaida', 'criticos', 'relatorios', 'painelti', 'encomendar',
+  // 'criticos' SAIU: ligada ao GET /products/low-stock (RBAC estoque_critico:view), sem mock.
+  'reposicoes', 'confronto', 'controlesaida', 'relatorios', 'painelti', 'encomendar',
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)

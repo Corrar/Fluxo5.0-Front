@@ -1379,28 +1379,84 @@ function PageControleSaida({ t }) {
 }
 
 // ---------- Críticos ----------
+// LIGAÇÃO AO BACKEND: GET /products/low-stock (RBAC estoque_critico:view). O endpoint agrega o
+// saldo POOLED por produto (op_id IS NULL) e devolve só quem está <= min_stock, já ordenado pelo
+// disponível ascendente — a tela não refiltra nem reordena, só apresenta.
+function crtNum(v) { const f = window.FRAdapters && window.FRAdapters.parseNumber; return f ? f(v) : (parseFloat(v) || 0); }
+function crtErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+
+function crtAdapt(r) {
+  r = r || {};
+  return {
+    id: r.id, nome: r.name || '—', sku: r.sku || '—', un: r.unit || '',
+    disp: crtNum(r.disponivel), min: crtNum(r.min_stock),
+    // Bônus do endpoint: quanto já foi pedido e ainda não atendido (requests abertas/aprovadas).
+    demanda: crtNum(r.demanda_reprimida),
+  };
+}
+
+function useFRLowStock() {
+  const R = window.React;
+  const [items, setItems] = R.useState([]);
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const mounted = R.useRef(true);
+  const load = R.useCallback(function () {
+    setError(null);
+    window.FRApi.get('/products/low-stock', { skipLoading: true })
+      .then(function (res) { if (!mounted.current) return; const rows = Array.isArray(res && res.data) ? res.data : []; setItems(rows.map(crtAdapt)); setLoading(false); })
+      .catch(function (e) { if (!mounted.current) return; setError(crtErr(e)); setLoading(false); });
+  }, []);
+  R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  return { items: items, loading: loading, error: error, reload: load };
+}
+
 function PageCriticos({ t }) {
-  const rows = [
-    { nome: 'Filamento PLA Azul 1kg', sku: '3.00.0101', disp: 8, min: 20, un: 'un' },
-    { nome: 'Tinta Epóxi Cinza 3,6L', sku: '6.30.0012', disp: 5, min: 12, un: 'lt' },
-    { nome: 'Chapa Aço 1020 2mm', sku: '1.02.0044', disp: 12, min: 15, un: 'ch' },
-    { nome: 'Rolamento 6204ZZ', sku: '4.10.0233', disp: 4, min: 30, un: 'un' },
-  ];
+  const { items: rows, loading, error, reload } = useFRLowStock();
+  // Ruptura = disponível ZERADO (ou negativo). O mock usava `disp <= 5`, um limiar inventado que não
+  // significava nada; ruptura de verdade é não ter o item.
+  const emRuptura = rows.filter((r) => r.disp <= 0).length;
+
   return (
     <div>
       <PageHeader t={t} title="Itens Críticos" subtitle="Materiais abaixo do estoque mínimo — priorize a reposição."
-        actions={<Btn t={t} icon="refresh">Gerar reposição</Btn>} />
+        actions={
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
+            {/* INERTE de propósito: o destino natural é POST /replenishments, mas a tela Reposições
+                ainda está cadeada — criar a reposição aqui geraria um registro que o usuário não tem
+                onde ver, editar ou autorizar. Religar junto com o destrave de Reposições. */}
+            <span title="Disponível quando a tela Reposições for destravada." style={{ display: 'inline-flex', alignItems: 'center', gap: 9, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: t.panel, color: t.faint, border: `1px solid ${t.border}`, cursor: 'not-allowed' }}>
+              <Icon name="refresh" size={17} /> Gerar reposição
+            </span>
+          </div>
+        } />
+
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="alert" label="Abaixo do mínimo" value={rows.length} kind="red" />
-        <KPI t={t} mini icon="box" label="Em ruptura" value="1" kind="amber" />
-        <KPI t={t} mini icon="barChart" label="Cobertura média" value="9 d" kind="blue" />
+        <KPI t={t} mini icon="alert" label="Abaixo do mínimo" value={loading ? '—' : rows.length} kind="red" />
+        <KPI t={t} mini icon="box" label="Em ruptura" value={loading ? '—' : emRuptura} kind="amber" />
+        {/* KPI "Cobertura média" REMOVIDO: exigia taxa de consumo histórica e o payload não tem nada
+            que a derive. Era um "9 d" chumbado. Volta quando houver série de consumo. */}
       </div>
+
+      {loading && rows.length === 0 ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando itens críticos…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      ) : rows.length === 0 ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhum item crítico" sub="Todo o estoque está acima do mínimo configurado." /></Card>
+      ) : (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
         {rows.map((r) => {
-          const pct = Math.min(100, Math.round((r.disp / r.min) * 100));
-          const ruptura = r.disp <= 5;
+          // min = 0 (produto sem mínimo configurado, que só entra na lista se zerou) faria disp/min
+          // virar Infinity/NaN e quebrar a barra — barra cheia quando não há mínimo pra comparar.
+          const pct = r.min > 0 ? Math.min(100, Math.round((r.disp / r.min) * 100)) : 100;
+          const ruptura = r.disp <= 0;
           return (
-            <Card t={t} key={r.sku} hover style={{ padding: 18, borderLeft: `3px solid ${uiTone(t, ruptura ? 'red' : 'amber').fg}` }}>
+            <Card t={t} key={r.id || r.sku} hover style={{ padding: 18, borderLeft: `3px solid ${uiTone(t, ruptura ? 'red' : 'amber').fg}` }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{r.nome}</div>
@@ -1413,10 +1469,16 @@ function PageCriticos({ t }) {
                 <div style={{ textAlign: 'right' }}><div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>MÍNIMO</div><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{r.min}</div></div>
               </div>
               <div style={{ height: 7, borderRadius: 6, background: t.hover, overflow: 'hidden', marginTop: 12 }}><div style={{ height: '100%', width: `${pct}%`, borderRadius: 6, background: uiTone(t, ruptura ? 'red' : 'amber').fg }} /></div>
+              {r.demanda > 0 && (
+                <div style={{ marginTop: 10, fontSize: 11.5, color: t.muted, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Icon name="cart" size={13} /> {r.demanda} {r.un} já solicitados e não atendidos
+                </div>
+              )}
             </Card>
           );
         })}
       </div>
+      )}
     </div>
   );
 }
