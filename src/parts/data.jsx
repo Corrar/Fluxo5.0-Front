@@ -57,7 +57,7 @@ const NAV = [
     items: [
       { id: 'controlesaida', name: 'Controle de Saída', icon: 'briefcase', locked: true },
       { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
-      { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart',  locked: true },
+      { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
       { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
@@ -218,10 +218,12 @@ MODULES[7].home = 'fin-painel';
 // devolve <EmDesenvolvimento/> no lugar. Fonte única da verdade do cadeado por-página/rota.
 const FR_LOCKED_PAGES = new Set([
   // Estoque — telas mock/incompletas (ficam visíveis no menu com ícone de cadeado)
-  // 'criticos' SAIU: ligada ao GET /products/low-stock (RBAC estoque_critico:view), sem mock.
+  // 'criticos' SAIU: ligada ao GET /products/low-stock (RBAC 'estoque_critico'), sem mock.
   // 'encomendar' SAIU: vitrine em GET /producao-3d/parts + envio real via POST /requests (split
   //   separar/produzir feito pelo backend). Trilhas por categoria removidas (sem fonte de dado).
-  'reposicoes', 'confronto', 'controlesaida', 'relatorios', 'painelti',
+  // 'relatorios' SAIU: ligada aos 5 endpoints de sistema (RBAC 'relatorios'). Só KPIs com lastro —
+  //   giro, cobertura-em-dias e rupturas-no-trimestre ficaram de fora por falta de série histórica.
+  'reposicoes', 'confronto', 'controlesaida', 'painelti',
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)

@@ -804,25 +804,289 @@ function PageUsuarios({ t }) {
 }
 
 
+// ---------- Relatórios ----------
+// LIGAÇÃO REAL aos 5 endpoints de sistema (RBAC 'relatorios'):
+//   GET /dashboard/stats            -> valor do estoque, itens abaixo do mínimo
+//   GET /reports/managerial         -> top 5 saídas, série 6 meses, status de compra
+//   GET /reports/general?start&end  -> linhas cruas de entrada/saída + estoque (a tela agrega)
+//   GET /reports/available-dates    -> limites do seletor de período
+//   GET /transactions/recent        -> extrato dos 15 últimos movimentos
+//
+// KPIs QUE NÃO EXISTEM AQUI, e por quê (o stub os mostrava chumbados):
+//   - GIRO DE ESTOQUE: precisa do estoque MÉDIO do período; nenhum endpoint expõe série histórica
+//     de saldo (o `stock` é estado atual). O stock_ledger tem `on_hand_after` por movimento e
+//     poderia sustentar isso no futuro, mas nenhuma rota o publica e o histórico começou agora.
+//   - COBERTURA em dias "universal": só faz sentido em R$ e por período explícito; como número
+//     único misturando kg/L/un seria ilusão.
+//   - RUPTURAS "no trimestre": exige histórico de cruzamentos do zero. Ficou "em ruptura AGORA",
+//     que é derivável do saldo atual.
+//   - CONSUMO POR CATEGORIA: `products` não tem categoria. Substituído por consumo POR SETOR, que
+//     tem lastro real (`destino_setor` vem nas linhas de saída).
+const REL_PARADO_DIAS = 60;   // limiar de "item parado" (sem movimento há N dias)
+
+function relMoney(v) {
+  const n = Number(v) || 0;
+  return 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function relMoneyShort(v) {
+  const n = Number(v) || 0;
+  if (Math.abs(n) >= 1000) return 'R$ ' + (n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'k';
+  return relMoney(n);
+}
+function relErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function relISO(d) { return d.toISOString().slice(0, 10); }
+function relDia(iso) { if (!iso) return '—'; const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleDateString('pt-BR'); }
+function relDiasDesde(iso) { if (!iso) return null; const d = new Date(iso); if (isNaN(d)) return null; return Math.floor((Date.now() - d.getTime()) / 86400000); }
+
+// Baixa um CSV montado no cliente. Export REAL (não é "Excel"/xlsx — é CSV, que o Excel abre);
+// o rótulo diz CSV de propósito, pra não prometer um formato que não geramos.
+function relBaixarCSV(nome, colunas, linhas) {
+  const esc = (v) => { const s = v == null ? '' : String(v); return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = [colunas.map((c) => esc(c.label)).join(';')]
+    .concat(linhas.map((r) => colunas.map((c) => esc(typeof c.get === 'function' ? c.get(r) : r[c.key])).join(';')))
+    .join('\r\n');
+  // BOM: sem ele o Excel abre acentuação quebrada em pt-BR.
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nome; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
 function PageRelatorios({ t }) {
-  const cat = [
-    { label: 'Usinagem', v: 86, accent: true }, { label: 'Elétrica', v: 64 }, { label: '3D', v: 48, accent: true },
-    { label: 'Mecânica', v: 72 }, { label: 'Acab.', v: 38 }, { label: 'Outros', v: 28 },
-  ];
+  const R = window.React;
+  const [stats, setStats] = R.useState(null);
+  const [ger, setGer] = R.useState(null);          // managerial
+  const [geral, setGeral] = R.useState(null);      // general (depende do período)
+  const [extrato, setExtrato] = R.useState([]);
+  const [periodo, setPeriodo] = R.useState(null);  // { start, end }
+  const [loading, setLoading] = R.useState(true);
+  const [carregandoPeriodo, setCarregandoPeriodo] = R.useState(false);
+  const [erro, setErro] = R.useState(null);
+  const mounted = R.useRef(true);
+
+  // 1ª carga: os 3 endpoints sem parâmetro + os limites de data pro seletor.
+  R.useEffect(() => {
+    mounted.current = true;
+    Promise.all([
+      window.FRApi.get('/dashboard/stats', { skipLoading: true }),
+      window.FRApi.get('/reports/managerial', { skipLoading: true }),
+      window.FRApi.get('/transactions/recent', { skipLoading: true }),
+      window.FRApi.get('/reports/available-dates', { skipLoading: true }),
+    ]).then(([a, b, c, d]) => {
+      if (!mounted.current) return;
+      setStats(a.data); setGer(b.data); setExtrato(Array.isArray(c.data) ? c.data : []);
+      // available-dates volta {min_date:null,max_date:null} quando não há movimento nenhum —
+      // nesse caso o seletor cai nos últimos 30 dias em vez de ficar sem intervalo.
+      const hoje = new Date();
+      const min = d.data && d.data.min_date ? String(d.data.min_date).slice(0, 10) : relISO(new Date(hoje.getTime() - 30 * 86400000));
+      const max = d.data && d.data.max_date ? String(d.data.max_date).slice(0, 10) : relISO(hoje);
+      setPeriodo({ start: min, end: max });
+      setLoading(false);
+    }).catch((e) => { if (mounted.current) { setErro(relErr(e)); setLoading(false); } });
+    return () => { mounted.current = false; };
+  }, []);
+
+  // /reports/general exige startDate/endDate (400 sem) -> só dispara quando há período.
+  R.useEffect(() => {
+    if (!periodo) return;
+    setCarregandoPeriodo(true);
+    window.FRApi.get(`/reports/general?startDate=${periodo.start}&endDate=${periodo.end}`, { skipLoading: true })
+      .then((r) => { if (mounted.current) { setGeral(r.data); setCarregandoPeriodo(false); } })
+      .catch((e) => { if (mounted.current) { setErro(relErr(e)); setCarregandoPeriodo(false); } });
+  }, [periodo && periodo.start, periodo && periodo.end]);
+
+  // ---- derivações (só do que os endpoints realmente dão) ----
+  const saidas = R.useMemo(() => {
+    if (!geral) return [];
+    return [].concat(geral.saidas_separacoes || [], geral.saidas_solicitacoes || [], geral.saidas_reposicoes || []);
+  }, [geral]);
+
+  // Consumo por SETOR em R$ — substituto honesto do "por categoria". `destino_setor` vem nas
+  // linhas de separação e solicitação; reposição traz "Cliente: X".
+  const porSetor = R.useMemo(() => {
+    const m = {};
+    saidas.forEach((s) => {
+      const k = (s.destino_setor || 'Não informado').trim() || 'Não informado';
+      m[k] = (m[k] || 0) + (Number(s.quantidade) || 0) * (Number(s.preco_unitario) || 0);
+    });
+    return Object.keys(m).map((k) => ({ label: k, v: m[k] })).sort((a, b) => b.v - a.v).slice(0, 8);
+  }, [saidas]);
+
+  const totalSaidaRS = R.useMemo(() => saidas.reduce((a, s) => a + (Number(s.quantidade) || 0) * (Number(s.preco_unitario) || 0), 0), [saidas]);
+
+  const estoqueRows = (geral && geral.estoque) || [];
+  const emRuptura = R.useMemo(() => estoqueRows.filter((r) => (Number(r.disponivel) || 0) <= 0).length, [estoqueRows]);
+  const parados = R.useMemo(() => estoqueRows
+    .map((r) => ({ ...r, dias: relDiasDesde(r.ultima_movimentacao) }))
+    .filter((r) => (Number(r.quantidade) || 0) > 0 && (r.dias === null || r.dias >= REL_PARADO_DIAS))
+    .sort((a, b) => (b.dias === null ? 1e9 : b.dias) - (a.dias === null ? 1e9 : a.dias)), [estoqueRows]);
+
+  const hist = (ger && ger.history) || [];
+  const temMovimentoHist = hist.some((h) => Number(h.entradas) > 0 || Number(h.saidas) > 0);
+  const topProd = (ger && ger.topProducts) || [];
+  const compra = (ger && ger.purchaseStatus) || [];
+
+  if (loading) return <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando relatórios…</Card>;
+  if (erro) return (
+    <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+      <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{erro}</div>
+      <div style={{ fontSize: 12.5, color: t.muted }}>Os relatórios exigem a permissão <b>relatorios</b>.</div>
+    </Card>
+  );
+
+  const exportar = () => relBaixarCSV(
+    `relatorio_saidas_${periodo.start}_a_${periodo.end}.csv`,
+    [
+      { label: 'Data', get: (r) => relDia(r.data) },
+      { label: 'Tipo', key: 'tipo' }, { label: 'Produto', key: 'produto' }, { label: 'SKU', key: 'sku' },
+      { label: 'Setor/Destino', key: 'destino_setor' }, { label: 'OP', key: 'op_code' },
+      { label: 'Quantidade', key: 'quantidade' }, { label: 'Unidade', key: 'unidade' },
+      { label: 'Preço unit.', key: 'preco_unitario' },
+      { label: 'Total', get: (r) => ((Number(r.quantidade) || 0) * (Number(r.preco_unitario) || 0)).toFixed(2) },
+    ],
+    saidas,
+  );
+
+  const secao = (titulo, extra, children) => (
+    <Card t={t} style={{ padding: 22, marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{titulo}</div>
+        {extra}
+      </div>
+      {children}
+    </Card>
+  );
+  const vazio = (msg) => <div style={{ padding: '26px 0', textAlign: 'center', fontSize: 13, color: t.muted }}>{msg}</div>;
+
   return (
     <div>
       <PageHeader t={t} title="Relatórios" subtitle="Indicadores de estoque, consumo e custos."
-        actions={<><Btn t={t} icon="file" kind="ghost">PDF</Btn><Btn t={t} icon="download">Exportar Excel</Btn></>} />
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} icon="barChart" label="Giro de estoque" value="4,8x" sub="ao ano" kind="accent" />
-        <KPI t={t} icon="out" label="Consumo médio" value="R$ 18,9k" sub="por mês" kind="amber" />
-        <KPI t={t} icon="box" label="Cobertura" value="32 dias" sub="estoque atual" kind="green" />
-        <KPI t={t} icon="alert" label="Rupturas" value="3" sub="no trimestre" kind="red" />
-      </div>
-      <Card t={t} style={{ padding: 22 }}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 22 }}>Consumo por categoria (R$ mil)</div>
-        <BarChart t={t} data={cat} height={200} />
+        actions={<>
+          {/* PDF fica INERTE: não há gerador no projeto e nenhuma lib de PDF no bundle. Prometer o
+              botão sem gerar arquivo seria pior que dizer que ainda não existe. */}
+          <span title="Exportação em PDF ainda não implementada — use o CSV." style={{ display: 'inline-flex', alignItems: 'center', gap: 9, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: t.panel, color: t.faint, border: `1px solid ${t.border}`, cursor: 'not-allowed' }}>
+            <Icon name="file" size={17} /> PDF
+          </span>
+          <Btn t={t} icon="download" onClick={exportar}>Exportar CSV</Btn>
+        </>} />
+
+      {/* período — alimenta o /reports/general */}
+      <Card t={t} style={{ padding: '14px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        <Icon name="calendar" size={17} style={{ color: t.accentText }} />
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: t.muted }}>Período</span>
+        <input type="date" value={periodo.start} max={periodo.end} onChange={(e) => setPeriodo((p) => ({ ...p, start: e.target.value }))}
+          style={{ height: 38, padding: '0 10px', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+        <span style={{ color: t.faint }}>até</span>
+        <input type="date" value={periodo.end} min={periodo.start} onChange={(e) => setPeriodo((p) => ({ ...p, end: e.target.value }))}
+          style={{ height: 38, padding: '0 10px', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+        {carregandoPeriodo && <span style={{ fontSize: 12, color: t.muted }}>atualizando…</span>}
+        <span style={{ marginLeft: 'auto', fontSize: 12.5, color: t.muted }}>Saídas no período: <b style={{ color: t.text }}>{relMoney(totalSaidaRS)}</b></span>
       </Card>
+
+      {/* KPIs — todos com lastro */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
+        <KPI t={t} icon="barChart" label="Valor do estoque" value={relMoneyShort(stats.totalValue)} sub="a preço de custo" kind="accent" />
+        <KPI t={t} icon="alert" label="Abaixo do mínimo" value={stats.lowStock} sub="itens" kind="amber" />
+        <KPI t={t} icon="box" label="Em ruptura" value={geral ? emRuptura : '—'} sub="agora" kind="red" />
+        <KPI t={t} icon="clock" label="Itens parados" value={geral ? parados.length : '—'} sub={`sem saída há ${REL_PARADO_DIAS}+ dias`} kind="blue" />
+      </div>
+
+      {/* entradas × saídas — 6 meses (quantidade) */}
+      {secao('Entradas × Saídas — últimos 6 meses',
+        <span style={{ fontSize: 11.5, color: t.faint }}>em quantidade (o endpoint não devolve R$ nesta série)</span>,
+        !temMovimentoHist ? vazio('Sem movimento registrado nos últimos 6 meses.') : (
+          <>
+            <AreaChart t={t} height={180} labels={hist.map((h) => h.name)}
+              series={[
+                { data: hist.map((h) => Number(h.entradas) || 0), color: uiTone(t, 'green').fg },
+                { data: hist.map((h) => Number(h.saidas) || 0), color: uiTone(t, 'amber').fg, fill: false },
+              ]} />
+            <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: t.muted }}><span style={{ width: 16, height: 3, borderRadius: 2, background: uiTone(t, 'green').fg }} /> Entradas</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: t.muted }}><span style={{ width: 16, height: 3, borderRadius: 2, background: uiTone(t, 'amber').fg }} /> Saídas</span>
+            </div>
+          </>
+        ))}
+
+      {/* consumo por setor (R$) — substitui o "por categoria" */}
+      {secao('Consumo por setor (R$) — no período',
+        <span style={{ fontSize: 11.5, color: t.faint }}>substitui “por categoria”: o cadastro não tem categoria</span>,
+        porSetor.length === 0 ? vazio('Sem saídas no período selecionado.')
+          : <BarChart t={t} height={200} data={porSetor.map((s, i) => ({ label: s.label.length > 14 ? s.label.slice(0, 13) + '…' : s.label, v: s.v, accent: i < 3, label2: relMoneyShort(s.v) }))} />)}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 18, marginBottom: 18 }}>
+        {/* top 5 produtos por saída */}
+        <Card t={t} style={{ padding: 22 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 18 }}>Top 5 produtos por saída</div>
+          {topProd.length === 0 ? vazio('Nenhuma saída concluída registrada.') : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+              {topProd.map((p, i) => {
+                const max = Math.max(...topProd.map((x) => Number(x.total) || 0)) || 1;
+                const pct = Math.round(((Number(p.total) || 0) / max) * 100);
+                return (
+                  <div key={p.name + i}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, marginBottom: 5 }}>
+                      <span style={{ color: t.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+                      <span style={{ color: t.muted, fontWeight: 800, flexShrink: 0 }}>{Number(p.total) || 0}</span>
+                    </div>
+                    <div style={{ height: 7, borderRadius: 6, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: pct + '%', borderRadius: 6, background: t.accent }} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        {/* status de compra */}
+        <Card t={t} style={{ padding: 22 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 18 }}>Status de compra</div>
+          {compra.length === 0 ? vazio('Nenhum produto ativo com status de compra.') : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+              <RingChart t={t} size={140} thickness={16}
+                center={{ value: compra.reduce((a, c) => a + (Number(c.value) || 0), 0), sub: 'produtos' }}
+                segs={compra.map((c, i) => ({ label: c.name, value: Number(c.value) || 0, color: uiTone(t, ['accent', 'amber', 'green', 'blue', 'red'][i % 5]).fg }))} />
+              <div style={{ flex: 1, minWidth: 130, display: 'flex', flexDirection: 'column', gap: 9 }}>
+                {compra.map((c, i) => (
+                  <div key={c.name + i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <span style={{ width: 11, height: 11, borderRadius: 3, background: uiTone(t, ['accent', 'amber', 'green', 'blue', 'red'][i % 5]).fg, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12.5, color: t.text, flex: 1, textTransform: 'capitalize' }}>{c.name}</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 800, color: t.text }}>{c.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* itens parados */}
+      {secao(`Itens parados — sem movimento há ${REL_PARADO_DIAS}+ dias`,
+        parados.length > 0 ? <span style={{ fontSize: 11.5, color: t.faint }}>{parados.length} item(ns) · capital imobilizado {relMoneyShort(parados.reduce((a, r) => a + (Number(r.quantidade) || 0) * (Number(r.preco) || 0), 0))}</span> : null,
+        !geral ? vazio('Carregando…') : parados.length === 0 ? vazio('Nenhum item parado — todo o estoque teve movimento recente.') : (
+          <DataTable t={t}
+            columns={[{ key: 'sku', label: 'SKU' }, { key: 'produto', label: 'Produto' }, { key: 'qtd', label: 'Em estoque', align: 'right' },
+              { key: 'valor', label: 'Valor', align: 'right' }, { key: 'quando', label: 'Última movimentação', align: 'right' }]}
+            rows={parados.slice(0, 20).map((r) => ({
+              sku: r.sku || '—', produto: r.produto,
+              qtd: Number(r.quantidade) || 0,
+              valor: relMoney((Number(r.quantidade) || 0) * (Number(r.preco) || 0)),
+              quando: r.dias === null ? 'nunca movimentou' : `${relDia(r.ultima_movimentacao)} (${r.dias}d)`,
+            }))} />
+        ))}
+
+      {/* extrato */}
+      {secao('Últimos 15 movimentos', null,
+        extrato.length === 0 ? vazio('Nenhuma movimentação registrada no sistema.') : (
+          <DataTable t={t}
+            columns={[{ key: 'quando', label: 'Data' }, { key: 'tipo', label: 'Tipo' }, { key: 'sku', label: 'SKU' },
+              { key: 'produto', label: 'Produto' }, { key: 'qtd', label: 'Qtd', align: 'right' }]}
+            rows={extrato.map((m) => ({
+              quando: relDia(m.created_at),
+              tipo: <Badge t={t} kind={m.type === 'in' ? 'green' : 'amber'}>{m.type === 'in' ? 'Entrada' : 'Saída'}</Badge>,
+              sku: m.product_sku || '—', produto: m.product_name || '—', qtd: Number(m.amount) || 0,
+            }))} />
+        ))}
     </div>
   );
 }
