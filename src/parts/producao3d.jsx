@@ -61,8 +61,11 @@ function p3AdaptPart(p) {
   // description entra no shape porque o PUT /parts/:id reescreve as QUATRO colunas de uma vez
   // (SET production_minutes, filament_grams, image_url, description). Sem ler a descrição atual não
   // dá pra reenviá-la, e salvar tempo/filamento apagaria a descrição da peça. Ver o save do P3Catalogo.
+  // disponivel/pedidos: aditivos, usados pela Vitrine 3D (Encomendar). Catálogo/Dashboard/Demandas
+  // ignoram — por isso o mesmo hook serve as quatro telas.
   return { product_id: p.id, code: p.code || '', nome: p.name || '', image: p.image || null,
-    gramas: p3Num(p.filamentGrams), minutes: p3Num(p.productionMinutes), descricao: p.description || '' };
+    gramas: p3Num(p.filamentGrams), minutes: p3Num(p.productionMinutes), descricao: p.description || '',
+    disponivel: p3Num(p.disponivel), pedidos: p3Num(p.pedidos) };
 }
 
 // Hook GET genérico → { items, loading, error, reload }.

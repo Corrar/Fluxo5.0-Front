@@ -175,21 +175,33 @@ function PageCalculadora({ t }) {
 }
 
 // ---------- Encomendar 3D (Vitrine) ----------
-const VITRINE_PECAS = [
-  { code: '5.03.0002', nome: 'COPINHO 3D', cat: 'Componentes 3D', req: 410, stock: 1, img: 'assets/peca-copinho-3d.png', badge: { t: 'stock', v: '1 em Stock' } },
-  { code: '5.03.0005', nome: 'COPINHO CENTRAL 3D', cat: 'Componentes 3D', req: 300, stock: 0, img: 'assets/peca-copinho-central-3d.png', badge: { t: 'time', v: '1h 5min/un.' } },
-  { code: '5.03.0014', nome: 'ALOCADOR DE OVOS DA EMBALADORA DE AVIÁRIO', cat: 'Embalagem de Ovos', req: 320, stock: 0, img: 'assets/peca-alocador-ovos.png', badge: { t: 'time', v: '2h 6min/un.' } },
-  { code: '5.03.0023', nome: 'ARRUELA DISPENSADOR 3D', cat: 'Componentes 3D', req: 140, stock: 0, img: 'assets/peca-arruela-dispensador.png', badge: { t: 'time', v: '7min/un.' } },
-  { code: '5.03.0015', nome: 'BERÇO DE BANDEJA DA TATURANA IMPRESSO CENTRAL', cat: 'Embalagem de Ovos', req: 95, stock: 4, img: 'assets/peca-berco-taturana.png', badge: { t: 'stock', v: '4 em Stock' } },
-  { code: '5.03.0016', nome: 'CANECA DO DESCEDOR 3D', cat: 'Componentes 3D', req: 210, stock: 0, img: 'assets/peca-caneca-descedor.png', badge: { t: 'time', v: '1h 46min/un.' } },
-  { code: '5.03.0012', nome: 'CARAMBOLA 3D', cat: 'Componentes 3D', req: 180, stock: 39, img: 'assets/peca-carambola-vitrine.png', badge: { t: 'stock', v: '39 em Stock' } },
-  { code: '5.03.0029', nome: 'CAÍDA OVO EMBALADORA 3D', cat: 'Embalagem de Ovos', req: 260, stock: 6, img: 'assets/peca-caida-ovo.png', badge: { t: 'stock', v: '6 em Stock' } },
-  { code: '5.03.0031', nome: 'SEPARADOR DE BANDEJA 3D', cat: 'Embalagem de Ovos', req: 150, stock: 12, badge: { t: 'stock', v: '12 em Stock' } },
-  { code: '5.03.0044', nome: 'GUIA DA ESTEIRA 3D', cat: 'Componentes 3D', req: 90, stock: 0, badge: { t: 'time', v: '45min/un.' } },
-  { code: '5.03.0050', nome: 'SUPORTE DE SENSOR 3D', cat: 'Componentes 3D', req: 130, stock: 22, badge: { t: 'stock', v: '22 em Stock' } },
-  { code: '5.03.0061', nome: 'TAMPA DO DESCEDOR 3D', cat: 'Embalagem de Ovos', req: 70, stock: 0, badge: { t: 'time', v: '1h 12min/un.' } },
-];
-const VITRINE_SPECS = 'Densidade de preenchimento esparsa 25% · Loops de parede: 5 · Altura da camada: 0,2 · Altura da camada inicial: 0,2';
+// VITRINE_PECAS (12 peças chumbadas, com `req` e `cat` inventados) REMOVIDO — a vitrine renderiza
+// 100% de GET /producao-3d/parts, que passou a devolver `disponivel` (saldo pooled somado) e
+// `pedidos` (Σ quantity_requested de requests não-rejeitadas) além dos campos técnicos.
+//
+// O que NÃO voltou, e por quê:
+//   - TRILHAS POR CATEGORIA ("Embalagem de Ovos" / "Componentes 3D"): `products` não tem coluna de
+//     categoria e todas as peças 3D dividem a mesma tag ["3D"] — não há como derivar os dois grupos.
+//     No lugar entra uma grade única alfabética (o "Catálogo completo"). Volta se alguém criar a
+//     dimensão de categoria no schema; inventá-la aqui seria repor o mock com outro nome.
+//   - VITRINE_SPECS (densidade/loops/altura de camada): parâmetros de fatiamento que não existem em
+//     lugar nenhum do backend. O hero passa a mostrar a descrição real da peça.
+const VITRINE_SPECS_FALLBACK = 'Peça de fabricação sob demanda no setor de Produção 3D.';
+
+function vitMinutes(m) { m = Math.round(m || 0); if (!m) return '—'; const h = Math.floor(m / 60), mm = m % 60; return (h ? h + 'h ' : '') + mm + 'min'; }
+
+// Adapta a peça do catálogo 3D para o shape que os componentes da vitrine já consomem
+// ({code, nome, img, stock, req, badge}) — mantém VitrinePoster/VitrineBadge/SolicitarPecaModal
+// intactos e concentra a tradução num lugar só.
+function vitAdapt(p) {
+  const stock = p.disponivel || 0;
+  return {
+    product_id: p.product_id, code: p.code, nome: p.nome, img: p.image || null,
+    stock: stock, req: p.pedidos || 0, minutes: p.minutes || 0, descricao: p.descricao || '',
+    // Em estoque -> badge verde com o saldo; sem estoque -> laranja com o tempo de impressão.
+    badge: stock > 0 ? { t: 'stock', v: stock + ' em Stock' } : { t: 'time', v: vitMinutes(p.minutes) + '/un.' },
+  };
+}
 
 function VitrineBadge({ p }) {
   const stock = p.badge.t === 'stock';
@@ -313,34 +325,98 @@ function PageEncomendar({ t: tBase, theme }) {
   const [sel, setSel] = useStateR(null);
   const [cart, setCart] = useStateR([]);
   const [cartOpen, setCartOpen] = useStateR(false);
+  // OP é OBRIGATÓRIA: peça 3D tem tag ["3D"], que não está nos exemptTags do requests.controller
+  // (camisetas/epi/ferramentas/insumos) -> sem op_code o POST /requests devolve OP_OBRIGATORIA_TAGS.
+  const [opCode, setOpCode] = useStateR('');
+  const [setor, setSetor] = useStateR('');
+  const [enviando, setEnviando] = useStateR(false);
+
+  // Catálogo real (mesmo hook das 4 telas do módulo 3D) + OPs abertas pro seletor.
+  // Ambos são globals de outros parts; chamados incondicionalmente (regras de hooks) e já definidos
+  // em tempo de render — os imports de main.jsx completam antes do primeiro render do React.
+  const { items: parts, loading, error, reload } = window.useFR3DParts();
+  const { items: clients } = window.useFRClients();
+  const pecas = React.useMemo(() => parts.map(vitAdapt), [parts]);
+  // OPs abertas, achatadas de clients[].ops[] (shape do adaptClient em pages_clientes.jsx:84):
+  // { op_code, n, s, total_cost } — o status canônico vive em `s.s`, e não há `description`.
+  // O backend recusa OP 'finalizada'/'encerrada' (OP_FINALIZADA), então filtramos as terminais aqui
+  // pra não oferecer no select uma OP que o POST vai rejeitar.
+  const ops = React.useMemo(() => {
+    const TERMINAIS = ['concluido', 'concluida', 'finalizada', 'encerrada'];
+    const out = [];
+    (clients || []).forEach((c) => (c.ops || []).forEach((s) => {
+      if (s && s.op_code && TERMINAIS.indexOf(String(s.s || '')) === -1) out.push({ op: s.op_code, cliente: c.nome || '' });
+    }));
+    return out.sort((a, b) => String(a.op).localeCompare(String(b.op)));
+  }, [clients]);
+
   const solicitar = (peca) => setSel(peca);
-  const addToCart = ({ peca, qtd, separar, produzir, tipo }) => {
+  const addToCart = ({ peca, qtd }) => {
     setSel(null);
     setCart((xs) => {
       const i = xs.findIndex((x) => x.peca.code === peca.code);
-      if (i >= 0) { const n = [...xs]; const q2 = n[i].qtd + qtd; n[i] = { peca, qtd: q2, separar: Math.min(q2, peca.stock || 0), produzir: Math.max(0, q2 - (peca.stock || 0)) }; return n; }
-      return [...xs, { peca, qtd, separar, produzir }];
+      const recalc = (p, q2) => ({ peca: p, qtd: q2, separar: Math.min(q2, p.stock || 0), produzir: Math.max(0, q2 - (p.stock || 0)) });
+      if (i >= 0) { const n = [...xs]; n[i] = recalc(peca, n[i].qtd + qtd); return n; }
+      return [...xs, recalc(peca, qtd)];
     });
     setToast(`${peca.nome} adicionada ao pedido`);
     setTimeout(() => setToast(null), 2200);
   };
   const setCartQtd = (code, qtd) => setCart((xs) => xs.map((x) => x.peca.code === code ? { ...x, qtd, separar: Math.min(qtd, x.peca.stock || 0), produzir: Math.max(0, qtd - (x.peca.stock || 0)) } : x).filter((x) => x.qtd > 0));
   const removeCart = (code) => setCart((xs) => xs.filter((x) => x.peca.code !== code));
-  const enviarTudo = () => {
-    const sep = cart.reduce((a, x) => a + x.separar, 0);
-    const prod = cart.reduce((a, x) => a + x.produzir, 0);
-    setCart([]); setCartOpen(false);
-    setToast(prod > 0 ? `${cart.length} peças enviadas · ${sep} p/ separação + ${prod} em produção 3D` : `${cart.length} peças enviadas p/ separação`);
-    setTimeout(() => setToast(null), 3400);
+
+  // ENVIO REAL: um único POST /requests com a quantidade TOTAL por peça. Quem faz o split é o
+  // backend (requests.controller): reserva o que há em estoque e joga o restante em demands_3d,
+  // que alimenta o Kanban do módulo 3D. O separar/produzir da tela é só PREVIEW — se o estoque
+  // mudar entre a montagem do carrinho e o envio, o backend decide, não a tela.
+  const enviarTudo = async () => {
+    if (enviando || !cart.length) return;
+    if (!opCode) { setToast('Selecione a OP antes de enviar.'); setTimeout(() => setToast(null), 2600); return; }
+    setEnviando(true);
+    try {
+      await window.FRApi.post('/requests', {
+        sector: setor.trim() || 'Produção 3D',
+        op_code: opCode,
+        items: cart.map((x) => ({ product_id: x.peca.product_id, quantity: x.qtd })),
+      });
+      const sep = cart.reduce((a, x) => a + x.separar, 0);
+      const prod = cart.reduce((a, x) => a + x.produzir, 0);
+      const n = cart.length;
+      setCart([]); setCartOpen(false); setOpCode(''); setSetor('');
+      reload(); // saldo e ranking mudaram
+      setToast(prod > 0 ? `${n} peça(s) enviada(s) · ${sep} p/ separação + ${prod} em produção 3D` : `${n} peça(s) enviada(s) p/ separação`);
+      setTimeout(() => setToast(null), 3800);
+    } catch (e) {
+      const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setToast(g ? g(e) : 'Falha ao enviar o pedido.');
+      setTimeout(() => setToast(null), 4200);
+    } finally { setEnviando(false); }
   };
+
   const cartQ = cart.reduce((a, x) => a + x.qtd, 0);
   const ql = q.trim().toLowerCase();
 
-  const hero = [...VITRINE_PECAS].sort((a, b) => b.req - a.req)[0];
-  const maisSolicitadas = [...VITRINE_PECAS].sort((a, b) => b.req - a.req).slice(0, 8);
-  const cats = ['Embalagem de Ovos', 'Componentes 3D'];
-  const results = VITRINE_PECAS.filter((p) => !ql || p.nome.toLowerCase().includes(ql) || p.code.includes(ql));
+  const porPedidos = React.useMemo(() => [...pecas].sort((a, b) => b.req - a.req), [pecas]);
+  const hero = porPedidos[0] || null;
+  // Só entra na trilha quem tem histórico (req > 0) — sem pedido nenhum, "Mais Solicitadas" seria
+  // uma ordenação arbitrária disfarçada de ranking.
+  const maisSolicitadas = porPedidos.filter((p) => p.req > 0).slice(0, 8);
+  const results = pecas.filter((p) => !ql || p.nome.toLowerCase().includes(ql) || String(p.code).toLowerCase().includes(ql));
   const vit3dMobile = typeof window !== 'undefined' && window.innerWidth <= 640;
+
+  if (loading && pecas.length === 0) return <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando vitrine…</Card>;
+  if (error) return (
+    <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+      <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+      <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+    </Card>
+  );
+  if (!pecas.length) return (
+    <div>
+      <h1 style={{ margin: '0 0 18px', fontSize: 27, fontWeight: 850, letterSpacing: '-.02em', color: t.text, display: 'flex', alignItems: 'center', gap: 11 }}><Icon name="printer" size={25} style={{ color: t.accentText }} /> Vitrine 3D</h1>
+      <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma peça 3D no catálogo" sub="Marque produtos como 3D no Catálogo de Peças para que apareçam aqui." /></Card>
+    </div>
+  );
 
   return (
     <div style={{ position: 'relative' }}>
@@ -377,7 +453,7 @@ function PageEncomendar({ t: tBase, theme }) {
                 <VitrineBadge p={hero} />
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: 'rgba(255,255,255,.9)' }}><Icon name="send" size={14} /> {hero.req} solicitações</span>
               </div>
-              <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,.82)', lineHeight: 1.55, maxWidth: 440 }}>{VITRINE_SPECS}</p>
+              <p style={{ margin: 0, fontSize: 13, color: 'rgba(255,255,255,.82)', lineHeight: 1.55, maxWidth: 440 }}>{hero.descricao || VITRINE_SPECS_FALLBACK}</p>
               <div style={{ display: 'flex', gap: 12, marginTop: 22 }}>
                 <button onClick={() => solicitar(hero)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 13, fontSize: 14, fontWeight: 800, background: '#fff', color: '#06301f', boxShadow: '0 8px 20px rgba(0,0,0,.25)' }}><Icon name="send" size={17} /> Solicitar Peça</button>
               </div>
@@ -390,10 +466,20 @@ function PageEncomendar({ t: tBase, theme }) {
             </div>
           </div>
 
-          <VitrineRow t={t} title="Mais Solicitadas" items={maisSolicitadas} slotPrefix="vitrine-top" onSolicitar={solicitar} />
-          {cats.map((cat) => (
-            <VitrineRow key={cat} t={t} title={cat} items={VITRINE_PECAS.filter((p) => p.cat === cat).sort((a, b) => b.req - a.req)} slotPrefix={`vitrine-${cat === 'Embalagem de Ovos' ? 'emb' : 'comp'}`} onSolicitar={solicitar} />
-          ))}
+          {/* Ranking REAL (Σ quantity_requested de requests não-rejeitadas). Se ninguém pediu nada
+              ainda, a trilha some em vez de virar uma ordenação arbitrária chamada de "mais pedidas". */}
+          {maisSolicitadas.length > 0 && (
+            <VitrineRow t={t} title="Mais Solicitadas" items={maisSolicitadas} slotPrefix="vitrine-top" onSolicitar={solicitar} />
+          )}
+
+          {/* Trilhas por categoria REMOVIDAS: `products` não tem categoria e todas as peças 3D têm a
+              mesma tag ["3D"]. No lugar, o catálogo inteiro em grade alfabética. */}
+          <div style={{ marginBottom: 30 }}>
+            <h2 style={{ margin: '0 0 14px', fontSize: 17, fontWeight: 850, color: t.text, letterSpacing: '-.01em' }}>Catálogo completo <span style={{ fontSize: 13, fontWeight: 700, color: t.muted }}>({pecas.length})</span></h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+              {pecas.map((p) => <VitrinePoster key={p.code} t={t} p={p} slotPrefix="vitrine-all" onSolicitar={solicitar} />)}
+            </div>
+          </div>
         </div>
       )}
 
@@ -441,11 +527,32 @@ function PageEncomendar({ t: tBase, theme }) {
               ))}
             </div>
             <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}` }}>
+              {/* OP + setor: a OP é EXIGIDA pelo backend p/ peça 3D (tag "3D" não é isenta). Sem ela
+                  o POST volta OP_OBRIGATORIA_TAGS — por isso o botão fica travado até escolher. */}
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                <label style={{ flex: '1 1 220px', minWidth: 0 }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 5 }}>OP <span style={{ color: uiTone(t, 'red').fg }}>*</span></div>
+                  <select value={opCode} onChange={(e) => setOpCode(e.target.value)}
+                    style={{ boxSizing: 'border-box', width: '100%', height: 42, padding: '0 11px', borderRadius: 11, border: `1px solid ${opCode ? t.border : uiTone(t, 'red').fg}`, background: t.elevated, color: t.text, fontSize: 13.5, fontFamily: 'inherit', outline: 'none' }}>
+                    <option value="">{ops.length ? 'Selecione a OP…' : 'Nenhuma OP em andamento'}</option>
+                    {ops.map((o) => <option key={o.op} value={o.op}>{o.op}{o.cliente ? ' — ' + o.cliente : ''}</option>)}
+                  </select>
+                </label>
+                <label style={{ flex: '1 1 160px', minWidth: 0 }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 5 }}>Setor</div>
+                  <input value={setor} onChange={(e) => setSetor(e.target.value)} placeholder="Produção 3D"
+                    style={{ boxSizing: 'border-box', width: '100%', height: 42, padding: '0 11px', borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13.5, fontFamily: 'inherit', outline: 'none' }} />
+                </label>
+              </div>
               <div style={{ display: 'flex', gap: 18, marginBottom: 12, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12.5, color: t.muted }}>Separação <b style={{ color: uiTone(t, 'green').fg }}>{cart.reduce((a, x) => a + x.separar, 0)}</b></span>
                 <span style={{ fontSize: 12.5, color: t.muted }}>Produção 3D <b style={{ color: uiTone(t, 'amber').fg }}>{cart.reduce((a, x) => a + x.produzir, 0)}</b></span>
+                <span style={{ fontSize: 11.5, color: t.faint, marginLeft: 'auto' }}>prévia — o split final é do estoque no momento do envio</span>
               </div>
-              <button onClick={enviarTudo} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: t.accent, color: '#fff', boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` }}><Icon name="send" size={18} /> Enviar pedido ao setor 3D</button>
+              <button onClick={enviarTudo} disabled={enviando || !opCode}
+                style={{ all: 'unset', boxSizing: 'border-box', cursor: (enviando || !opCode) ? 'not-allowed' : 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: (enviando || !opCode) ? t.elevated : t.accent, color: (enviando || !opCode) ? t.faint : '#fff', boxShadow: (enviando || !opCode) ? 'none' : `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` }}>
+                <Icon name="send" size={18} /> {enviando ? 'Enviando…' : !opCode ? 'Selecione a OP para enviar' : 'Enviar pedido ao setor 3D'}
+              </button>
             </div>
           </div>
         </div>

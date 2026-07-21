@@ -44,7 +44,7 @@ const NAV = [
         children: [
           { id: 'solicitacoes', name: 'Solicitações' },
           { id: 'pedidos',      name: 'Meus Pedidos' },
-          { id: 'encomendar',   name: 'Encomendar 3D', locked: true },
+          { id: 'encomendar',   name: 'Encomendar 3D' },
         ],
       },
       { id: 'quadrogestao', name: 'Quadro Gestão', icon: 'barChart2' },
@@ -219,7 +219,9 @@ MODULES[7].home = 'fin-painel';
 const FR_LOCKED_PAGES = new Set([
   // Estoque — telas mock/incompletas (ficam visíveis no menu com ícone de cadeado)
   // 'criticos' SAIU: ligada ao GET /products/low-stock (RBAC estoque_critico:view), sem mock.
-  'reposicoes', 'confronto', 'controlesaida', 'relatorios', 'painelti', 'encomendar',
+  // 'encomendar' SAIU: vitrine em GET /producao-3d/parts + envio real via POST /requests (split
+  //   separar/produzir feito pelo backend). Trilhas por categoria removidas (sem fonte de dado).
+  'reposicoes', 'confronto', 'controlesaida', 'relatorios', 'painelti',
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)
