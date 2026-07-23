@@ -48,7 +48,7 @@ const NAV = [
         ],
       },
       { id: 'quadrogestao', name: 'Quadro Gestão', icon: 'barChart2' },
-      { id: 'reposicoes',   name: 'Reposições',    icon: 'refresh',   locked: true },
+      { id: 'reposicoes',   name: 'Reposições',    icon: 'refresh' },
       { id: 'confronto',    name: 'Confronto',     icon: 'clipboard', locked: true },
     ],
   },
@@ -223,7 +223,9 @@ const FR_LOCKED_PAGES = new Set([
   //   separar/produzir feito pelo backend). Trilhas por categoria removidas (sem fonte de dado).
   // 'relatorios' SAIU: ligada aos 5 endpoints de sistema (RBAC 'relatorios'). Só KPIs com lastro —
   //   giro, cobertura-em-dias e rupturas-no-trimestre ficaram de fora por falta de série histórica.
-  'reposicoes', 'confronto', 'controlesaida', 'painelti',
+  // 'reposicoes' SAIU: ligada a /replenishments (criar/editar/separar/enviar-parcial/reverter/
+  //   cancelar) + rastreio via GET /tracking/:code. Lifecycle da tela = o do backend.
+  'confronto', 'controlesaida', 'painelti',
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)

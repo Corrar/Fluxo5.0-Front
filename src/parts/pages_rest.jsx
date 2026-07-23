@@ -562,316 +562,314 @@ function PageEncomendar({ t: tBase, theme }) {
 }
 
 // ---------- Reposições ----------
+// LIGADA a /replenishments. REP_SEED (4 pedidos) e REP_CATALOGO (10 materiais) REMOVIDOS.
+//
+// LIFECYCLE — o da tela agora é o do backend, não um paralelo:
+//   pendente --authorize'reservar'--> em_preparo --authorize'entregar'--> concluido
+//      ^                                  |                                   |
+//      +------ authorize'reverter' -------+-----------------------------------+
+//   qualquer (≠concluido/cancelada) --DELETE--> cancelada
+// O 'enviado' do mock virou 'concluido': "confirmar envio" É o action='entregar' do backend, que dá
+// a BAIXA FÍSICA (StockService.consume). O mock parava antes disso e nunca debitava estoque.
 const REP_ENVIO_METODOS = [
   { id: 'correios-pac', nome: 'Correios — PAC', icon: 'truck' },
   { id: 'correios-sedex', nome: 'Correios — Sedex', icon: 'truck' },
   { id: 'jadlog', nome: 'Jadlog', icon: 'truck' },
   { id: 'transportadora', nome: 'Transportadora', icon: 'truck' },
-  { id: 'retirada', nome: 'Retirada no local', icon: 'home' },
+  { id: 'retirada', nome: 'Retirada no local', icon: 'box' },
 ];
-const REP_SEED = [
-  { n: 'REP-1024', cliente: 'Granja Loja Centro', cidade: 'Curitiba - PR', status: 'pendente', envio: null, itens: [
-    { sku: '9.99.0238', nome: 'Parafuso Sextavado M8', qtd: 40, sep: 0, estoque: 120, preco: 0.85 },
-    { sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm', qtd: 30, sep: 0, estoque: 18, preco: 3.2 },
-    { sku: '4.10.0233', nome: 'Rolamento 6204ZZ', qtd: 8, sep: 0, estoque: 24, preco: 12.4 },
-    { sku: '6.30.0205', nome: 'Disjuntor 25A', qtd: 6, sep: 0, estoque: 9, preco: 28 },
-  ] },
-  { n: 'REP-1023', cliente: 'Granja Filial Norte', cidade: 'Maringá - PR', status: 'pendente', envio: null, itens: [
-    { sku: '1.02.0044', nome: 'Chapa Aço 1020 2mm', qtd: 12, sep: 0, estoque: 30, preco: 145 },
-    { sku: '7.40.0150', nome: 'Arruela Lisa 8mm', qtd: 200, sep: 0, estoque: 500, preco: 0.2 },
-    { sku: '5.31.0022', nome: 'Conector RJ45', qtd: 50, sep: 0, estoque: 12, preco: 2.5 },
-  ] },
-  { n: 'REP-1019', cliente: 'Granja Depósito Sul', cidade: 'Joinville - SC', status: 'em_preparo', envio: null, itens: [
-    { sku: '3.00.0101', nome: 'Filamento PLA Azul', qtd: 4, sep: 4, estoque: 20, preco: 89.9 },
-    { sku: '9.99.0238', nome: 'Parafuso Sextavado M8', qtd: 60, sep: 35, estoque: 120, preco: 0.85 },
-    { sku: '4.10.0233', nome: 'Rolamento 6204ZZ', qtd: 10, sep: 0, estoque: 24, preco: 12.4 },
-  ] },
-  { n: 'REP-1011', cliente: 'Granja Loja Centro', cidade: 'Curitiba - PR', status: 'enviado', envio: { rastreio: 'BR123456789BR', metodo: 'correios-sedex' }, itens: [
-    { sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm', qtd: 6, sep: 6, estoque: 18, preco: 3.2 },
-    { sku: '7.40.0150', nome: 'Arruela Lisa 8mm', qtd: 100, sep: 100, estoque: 500, preco: 0.2 },
-  ] },
-];
-const repStatusMeta = { pendente: ['Pendente', 'amber'], em_preparo: ['Em preparo', 'blue'], concluido: ['Separado', 'green'], enviado: ['Enviado', 'green'] };
-const repValor = (r) => r.itens.reduce((a, i) => a + i.preco * i.qtd, 0);
+const repStatusMeta = {
+  pendente: ['Pendente', 'amber'], em_preparo: ['Em preparo', 'blue'],
+  concluido: ['Concluído', 'green'], cancelada: ['Cancelada', 'red'],
+};
+const repMetodoNome = (id) => (REP_ENVIO_METODOS.find((m) => m.id === id) || {}).nome || id || '—';
+function repErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function repNum(v) { const f = window.FRAdapters && window.FRAdapters.parseNumber; return f ? f(v) : (parseFloat(v) || 0); }
+function repMoney(v) { return 'R$ ' + repNum(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+// Backend -> shape da tela. `id` (uuid) é a identidade; `order_number` é só rótulo.
+function repAdapt(r) {
+  r = r || {};
+  return {
+    id: r.id, n: r.order_number || '—', cliente: r.client_name || '', cidade: r.city_state || '',
+    status: r.status || 'pendente',
+    // total_value é campo PRÓPRIO do backend. A tela NÃO recalcula preco×qtd: o mock fazia isso e
+    // superestimava o pedido entregue em parte (valorizava pelo pedido, não pelo entregue).
+    valor: repNum(r.total_value),
+    envio: r.tracking_code || r.shipping_info ? { rastreio: r.tracking_code || '', metodo: r.shipping_info || '' } : null,
+    itens: (r.items || []).map((i) => {
+      const p = i.products || {};
+      return {
+        id: i.id, product_id: i.product_id, sku: p.sku || '—', nome: p.name || '—', un: p.unit || '',
+        qtd: repNum(i.qty_requested), sep: repNum(i.quantity), preco: repNum(p.unit_price),
+        // stock_available é o LIVRE agora (já descontada a reserva deste pedido). O teto de separação
+        // é sep + disponivel: o que este item já segurou mais o que ainda sobra no estoque.
+        disponivel: repNum(p.stock_available),
+      };
+    }),
+  };
+}
+function useFRReplenishments() {
+  const R = window.React;
+  const [items, setItems] = R.useState([]);
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const mounted = R.useRef(true);
+  const load = R.useCallback(function () {
+    setError(null);
+    window.FRApi.get('/replenishments', { skipLoading: true })
+      .then((res) => { if (!mounted.current) return; const rows = Array.isArray(res && res.data) ? res.data : []; setItems(rows.map(repAdapt)); setLoading(false); })
+      .catch((e) => { if (!mounted.current) return; setError(repErr(e)); setLoading(false); });
+  }, []);
+  R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  return { items, loading, error, reload: load };
+}
+
 const repSepTot = (r) => r.itens.reduce((a, i) => a + i.sep, 0);
 const repQtdTot = (r) => r.itens.reduce((a, i) => a + i.qtd, 0);
 
-function RepItemRow({ t, it, onSep }) {
-  const maxSep = Math.min(it.qtd, it.estoque);
+function RepItemRow({ t, it, onSep, readOnly }) {
+  // Teto = o que este item já reservou + o que ainda está livre no estoque.
+  const maxSep = Math.min(it.qtd, it.sep + it.disponivel);
   const completo = it.sep >= it.qtd;
-  const disp = !completo && it.estoque > it.sep;     // há estoque para separar e ainda falta
+  const semEstoque = maxSep < it.qtd;
   const set = (v) => onSep(Math.max(0, Math.min(maxSep, v)));
-  const repMobile = typeof window !== 'undefined' && window.innerWidth <= 640;
-  const stepper = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-      <button onClick={() => set(it.sep - 1)} disabled={it.sep <= 0} style={{ all: 'unset', cursor: it.sep > 0 ? 'pointer' : 'not-allowed', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.muted, opacity: it.sep > 0 ? 1 : 0.4 }}><Icon name="minus" size={16} /></button>
-      <input value={it.sep} onChange={(e) => set(parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0)} inputMode="numeric" style={{ boxSizing: 'border-box', width: 64, height: 42, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 17, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
-      <button onClick={() => set(it.sep + 1)} disabled={it.sep >= maxSep} style={{ all: 'unset', cursor: it.sep < maxSep ? 'pointer' : 'not-allowed', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.accentText, opacity: it.sep < maxSep ? 1 : 0.4 }}><Icon name="plus" size={16} /></button>
-      <span style={{ fontSize: 13, color: t.faint, width: 38, textAlign: 'right' }}>/{it.qtd}</span>
-    </div>
-  );
-  if (repMobile) {
-    return (
-      <div style={{ padding: '14px 16px', borderRadius: 14, background: t.elevated, border: `1px solid ${completo ? frHexToRgba('#22c55e', 0.4) : disp ? frHexToRgba(t.accent, 0.32) : t.border}` }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
-          {disp && <span title="Disponível para separar" style={{ width: 9, height: 9, borderRadius: '50%', background: t.accent, flexShrink: 0, marginTop: 5, boxShadow: `0 0 0 4px ${frHexToRgba(t.accent, 0.18)}` }} />}
-          {completo && <Icon name="check" size={20} style={{ color: uiTone(t, 'green').fg, flexShrink: 0, marginTop: 1 }} />}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15.5, fontWeight: 700, color: t.text }}>{it.nome}</div>
-            <div style={{ fontSize: 12, color: t.muted, marginTop: 3 }}>SKU {it.sku} · pedido {it.qtd} · estoque {it.estoque}{it.estoque < it.qtd ? <b style={{ color: uiTone(t, 'red').fg }}> · falta estoque</b> : ''}</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: t.faint }}>Separar</span>
-          {stepper}
-        </div>
-      </div>
-    );
-  }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', borderRadius: 14, background: t.elevated, border: `1px solid ${completo ? frHexToRgba('#22c55e', 0.4) : disp ? frHexToRgba(t.accent, 0.32) : t.border}` }}>
-      {disp && <span title="Disponível para separar" style={{ width: 9, height: 9, borderRadius: '50%', background: t.accent, flexShrink: 0, boxShadow: `0 0 0 4px ${frHexToRgba(t.accent, 0.18)}` }} />}
-      {completo && <Icon name="check" size={20} style={{ color: uiTone(t, 'green').fg, flexShrink: 0 }} />}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: t.elevated, border: `1px solid ${completo ? frHexToRgba('#10b981', .4) : t.border}` }}>
+      <span style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', background: completo ? uiTone(t, 'green').bg : t.hover, color: completo ? uiTone(t, 'green').fg : t.muted }}>
+        <Icon name={completo ? 'check' : 'box'} size={16} />
+      </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: t.text }}>{it.nome}</div>
-        <div style={{ fontSize: 12.5, color: t.muted, marginTop: 2 }}>SKU {it.sku} · pedido {it.qtd} · estoque {it.estoque}{it.estoque < it.qtd ? <b style={{ color: uiTone(t, 'red').fg }}> · falta estoque</b> : ''}</div>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div>
+        <div style={{ fontSize: 11.5, color: t.muted }}>
+          {it.sku} · pedido {it.qtd}{it.un ? ' ' + it.un : ''} · livre {it.disponivel}
+          {semEstoque && <span style={{ color: uiTone(t, 'amber').fg, fontWeight: 700 }}> · estoque insuficiente</span>}
+        </div>
       </div>
-      {stepper}
+      {readOnly ? (
+        <span style={{ fontSize: 14, fontWeight: 850, color: t.text, flexShrink: 0 }}>{it.sep}/{it.qtd}</span>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+          <button onClick={() => set(it.sep - 1)} disabled={it.sep <= 0} style={{ all: 'unset', cursor: it.sep <= 0 ? 'not-allowed' : 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted, border: `1px solid ${t.border}`, opacity: it.sep <= 0 ? .4 : 1 }}>–</button>
+          <input value={it.sep} onChange={(e) => set(parseInt(String(e.target.value).replace(/[^0-9]/g, '')) || 0)} inputMode="numeric"
+            style={{ width: 52, height: 30, textAlign: 'center', borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+          <span style={{ fontSize: 12, color: t.faint, minWidth: 26 }}>/{it.qtd}</span>
+          <button onClick={() => set(it.sep + 1)} disabled={it.sep >= maxSep} style={{ all: 'unset', cursor: it.sep >= maxSep ? 'not-allowed' : 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.accentText, border: `1px solid ${t.border}`, opacity: it.sep >= maxSep ? .4 : 1 }}>+</button>
+        </div>
+      )}
     </div>
   );
 }
 
-function RepDetail({ t, rep, onClose, onUpdate }) {
-  const [step, setStep] = useStateR(rep.status === 'enviado' ? 'envio' : 'separar');
-  const [rastreio, setRastreio] = useStateR(rep.envio ? rep.envio.rastreio : '');
+// Detalhe em tela cheia: separar (reservar), enviar (entregar, PARCIAL permitido), reverter, rastrear.
+function RepDetail({ t, rep, busy, onClose, onReservar, onEntregar, onReverter, onRastrear }) {
+  const [sep, setSep] = useStateR(() => rep.itens.map((i) => i.sep));
+  const [step, setStep] = useStateR(rep.status === 'concluido' ? 'envio' : 'separar');
   const [metodo, setMetodo] = useStateR(rep.envio ? rep.envio.metodo : '');
-  const [soFalta, setSoFalta] = useStateR(false);
-  const sm = repStatusMeta[rep.status];
-  const sepTot = repSepTot(rep), qtdTot = repQtdTot(rep);
+  const [rastreio, setRastreio] = useStateR(rep.envio ? rep.envio.rastreio : '');
+  React.useEffect(() => { setSep(rep.itens.map((i) => i.sep)); }, [rep]);
+
+  const concluido = rep.status === 'concluido';
+  const cancelada = rep.status === 'cancelada';
+  const readOnly = concluido || cancelada || busy;
+  const sepTot = sep.reduce((a, b) => a + b, 0);
+  const qtdTot = repQtdTot(rep);
   const pct = qtdTot ? Math.round((sepTot / qtdTot) * 100) : 0;
-  const faltam = rep.itens.filter((i) => i.sep < Math.min(i.qtd, i.estoque)).length;
-  const tudoSeparado = rep.itens.every((i) => i.sep >= i.qtd);
-  const enviado = rep.status === 'enviado';
-
-  const setSep = (idx, v) => onUpdate({ ...rep, status: 'em_preparo', itens: rep.itens.map((it, i) => (i === idx ? { ...it, sep: v } : it)) });
-  const separarTudo = () => onUpdate({ ...rep, status: 'em_preparo', itens: rep.itens.map((it) => ({ ...it, sep: Math.min(it.qtd, it.estoque) })) });
-  const confirmEnvio = () => { onUpdate({ ...rep, status: 'enviado', envio: { rastreio: rastreio.trim(), metodo } }); };
-
-  const view = soFalta ? rep.itens.filter((i) => i.sep < Math.min(i.qtd, i.estoque)) : rep.itens;
-  const metodoNome = (id) => (REP_ENVIO_METODOS.find((m) => m.id === id) || {}).nome || '—';
-  const field = { boxSizing: 'border-box', height: 46, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none', width: '100%' };
+  // ENVIO PARCIAL PERMITIDO: basta ter separado ALGUMA coisa. O backend consome o separado e libera a
+  // reserva remanescente sozinho. O mock exigia sep >= qtd em TODOS os itens, o que travava para
+  // sempre qualquer pedido cujo estoque fosse menor que o pedido.
+  const podeEnviar = sepTot > 0;
+  const parcial = sepTot < qtdTot;
+  const itensPayload = () => rep.itens.map((i, idx) => ({ id: i.id, quantity: sep[idx] }));
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 65, background: t.bg, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: t.panel, overflow: 'hidden' }}>
-        {/* header */}
-        <div style={{ position: 'relative', padding: '26px 32px', background: `linear-gradient(135deg, ${t.accent}, ${frHexToRgba(t.accent, 0.72)})`, color: '#fff' }}>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 22, right: 26, display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, background: 'rgba(255,255,255,.18)', color: '#fff', fontSize: 13, fontWeight: 700 }}><Icon name="chevronLeft" size={16} /> Voltar</button>
-          <div style={{ maxWidth: 1500, margin: '0 auto', width: '100%' }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)', marginBottom: 12 }}><Icon name="refresh" size={13} /> {sm[0]}</div>
-            <div style={{ fontSize: 26, fontWeight: 850, letterSpacing: '-.01em' }}>{rep.n}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, fontSize: 14, color: 'rgba(255,255,255,.9)', flexWrap: 'wrap' }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="users" size={15} /> {rep.cliente}</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="mapPin" size={15} /> {rep.cidade}</span>
-            </div>
-          </div>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 65, background: t.bg, overflowY: 'auto' }} className="fr-scroll">
+      <div style={{ maxWidth: 880, margin: '0 auto', padding: '22px 20px 40px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 700, color: t.muted }}><Icon name="chevronLeft" size={18} /> Voltar</button>
+          <span style={{ marginLeft: 'auto' }}><Badge t={t} kind={repStatusMeta[rep.status] ? repStatusMeta[rep.status][1] : 'gray'} dot>{repStatusMeta[rep.status] ? repStatusMeta[rep.status][0] : rep.status}</Badge></span>
         </div>
 
-        {/* step switch when not shipped */}
-        {!enviado && (
-          <div style={{ display: 'flex', gap: 0, padding: '0 32px', borderBottom: `1px solid ${t.border}`, background: t.panel }}>
-            <div style={{ maxWidth: 1500, margin: '0 auto', width: '100%', display: 'flex' }}>
-            {[['separar', '1 · Separar materiais'], ['envio', '2 · Dados de envio']].map(([k, lb]) => (
-              <button key={k} onClick={() => setStep(k)} disabled={k === 'envio' && !tudoSeparado} style={{ all: 'unset', cursor: (k === 'envio' && !tudoSeparado) ? 'not-allowed' : 'pointer', padding: '15px 4px', marginRight: 24, fontSize: 13.5, fontWeight: 800, opacity: (k === 'envio' && !tudoSeparado) ? 0.4 : 1, color: step === k ? t.accentText : (k === 'envio' && !tudoSeparado) ? t.faint : t.muted, borderBottom: `2.5px solid ${step === k ? t.accent : 'transparent'}` }}>{lb}</button>
-            ))}
-            </div>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 24, fontWeight: 850, color: t.text, letterSpacing: '-.02em' }}>{rep.n}</div>
+          <div style={{ fontSize: 13.5, color: t.muted, marginTop: 3 }}>{rep.cliente} · {rep.cidade} · {repMoney(rep.valor)}</div>
+        </div>
+
+        {!concluido && !cancelada && (
+          <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 20 }}>
+            {[['separar', '1 · Separar materiais'], ['envio', '2 · Dados de envio']].map(([k, label]) => {
+              const on = step === k, dis = k === 'envio' && !podeEnviar;
+              return <button key={k} onClick={() => !dis && setStep(k)} disabled={dis} style={{ all: 'unset', cursor: dis ? 'not-allowed' : 'pointer', height: 36, padding: '0 16px', borderRadius: 999, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : dis ? t.faint : t.muted }}>{label}</button>;
+            })}
           </div>
         )}
 
-        <div className="fr-scroll" style={{ overflowY: 'auto', flex: 1, minHeight: 0, background: t.bg }}>
-          <div style={{ maxWidth: 1500, margin: '0 auto', padding: '26px 32px' }}>
-          {(step === 'separar' && !enviado) && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button onClick={() => setSoFalta((v) => !v)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 9, background: soFalta ? t.accent : t.elevated, color: soFalta ? t.onAccent : t.muted, border: `1px solid ${soFalta ? t.accent : t.border}` }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: soFalta ? t.onAccent : t.accent }} /> Disponível p/ separar {faltam ? `(${faltam})` : ''}
-                  </button>
-                </div>
-                <button onClick={separarTudo} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '7px 12px', borderRadius: 9, background: t.accentSoft }}><Icon name="check" size={14} /> Separar tudo disponível</button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {view.map((it) => <RepItemRow key={it.sku} t={t} it={it} onSep={(v) => setSep(rep.itens.indexOf(it), v)} />)}
-                {view.length === 0 && <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>Todos os itens disponíveis já foram separados. ✓</div>}
-              </div>
-            </>
-          )}
-
-          {(step === 'envio' || enviado) && (
-            <>
-              {enviado ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}` }}>
-                    <Icon name="check" size={18} style={{ color: uiTone(t, 'green').fg }} /> <span style={{ fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'green').fg }}>Pedido separado e enviado.</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                    <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>MÉTODO DE ENVIO</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="truck" size={16} style={{ color: t.accentText }} /> {metodoNome(rep.envio.metodo)}</div>
-                    </div>
-                    <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>CÓDIGO DE RASTREIO</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: rep.envio.rastreio ? t.text : t.faint, marginTop: 6, fontFamily: rep.envio.rastreio ? 'monospace' : 'inherit' }}>{rep.envio.rastreio || 'Não informado'}</div>
-                    </div>
-                  </div>
-                  <button onClick={() => onUpdate({ ...rep, _track: Date.now() })} disabled={!rep.envio.rastreio}
-                    style={{ all: 'unset', boxSizing: 'border-box', cursor: rep.envio.rastreio ? 'pointer' : 'not-allowed', width: '100%', height: 50, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, fontSize: 14.5, fontWeight: 800, background: rep.envio.rastreio ? t.accent : t.elevated, color: rep.envio.rastreio ? t.onAccent : t.faint, boxShadow: rep.envio.rastreio ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', border: rep.envio.rastreio ? 'none' : `1px solid ${t.border}` }}>
-                    <Icon name="mapPin" size={18} /> Rastrear encomenda
-                  </button>
-                  {!rep.envio.rastreio && <div style={{ fontSize: 12, color: t.faint, textAlign: 'center' }}>Sem código de rastreio — o rastreamento não está disponível para este envio.</div>}
-
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                      <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>Materiais enviados</span>
-                      <span style={{ fontSize: 12.5, color: t.muted }}>{rep.itens.length} {rep.itens.length === 1 ? 'item' : 'itens'} · {repSepTot(rep)} un</span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      {rep.itens.map((it) => (
-                        <div key={it.sku} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', borderRadius: 14, background: t.elevated, border: `1px solid ${t.border}` }}>
-                          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={19} /></span>
-                          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 16, fontWeight: 700, color: t.text }}>{it.nome}</div><div style={{ fontSize: 12.5, color: t.muted, marginTop: 2 }}>SKU {it.sku}</div></div>
-                          <div style={{ textAlign: 'right' }}><div style={{ fontSize: 10, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>ENVIADO</div><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{it.sep}</div></div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}`, fontSize: 12.5, color: t.muted }}>
-                    <Icon name="box" size={15} style={{ color: t.accentText }} /> {sepTot} de {qtdTot} un separadas · {pct}% do pedido
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Método de envio</label>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {REP_ENVIO_METODOS.map((m) => {
-                        const on = metodo === m.id;
-                        return <button key={m.id} onClick={() => setMetodo(m.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}><Icon name={m.icon} size={15} /> {m.nome}</button>;
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Código de rastreio <span style={{ color: t.faint, fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· opcional</span></label>
-                    <input value={rastreio} onChange={(e) => setRastreio(e.target.value.toUpperCase())} placeholder="Ex: BR123456789BR" style={{ ...field, fontFamily: 'monospace' }} />
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-          </div>
-        </div>
-
-        {/* footer actions */}
-        {!enviado && (
-          <div style={{ padding: '16px 32px', borderTop: `1px solid ${t.border}`, background: t.panel }}>
-          <div style={{ maxWidth: 1500, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 13, color: t.muted }}>
-              {step === 'separar' && !tudoSeparado
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Separe todos os itens para concluir ({faltam} {faltam === 1 ? 'pendente' : 'pendentes'})</span>
-                : <span>Total do pedido <b style={{ color: t.text }}>{fmtBRL(repValor(rep))}</b></span>}
+        {step === 'separar' && !concluido && !cancelada && (
+          <Card t={t} style={{ padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>Materiais <span style={{ color: t.muted, fontWeight: 600 }}>({sepTot}/{qtdTot} · {pct}%)</span></div>
+              <button onClick={() => setSep(rep.itens.map((i) => Math.min(i.qtd, i.sep + i.disponivel)))} disabled={readOnly}
+                style={{ all: 'unset', cursor: readOnly ? 'not-allowed' : 'pointer', fontSize: 12.5, fontWeight: 700, color: t.accentText, opacity: readOnly ? .5 : 1 }}>Separar tudo disponível</button>
             </div>
-            {step === 'separar'
-              ? <button onClick={() => tudoSeparado && setStep('envio')} disabled={!tudoSeparado} style={{ all: 'unset', boxSizing: 'border-box', cursor: tudoSeparado ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: tudoSeparado ? t.accent : t.elevated, color: tudoSeparado ? t.onAccent : t.faint, boxShadow: tudoSeparado ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none' }}>Concluir separação <Icon name="chevronRight" size={16} /></button>
-              : <button onClick={confirmEnvio} disabled={!metodo} style={{ all: 'unset', boxSizing: 'border-box', cursor: metodo ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: metodo ? t.accent : t.elevated, color: metodo ? t.onAccent : t.faint, boxShadow: metodo ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none' }}><Icon name="truck" size={16} /> Confirmar envio</button>}
-          </div>
-          </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              {rep.itens.map((it, idx) => (
+                <RepItemRow key={it.id} t={t} it={{ ...it, sep: sep[idx] }} readOnly={readOnly}
+                  onSep={(v) => setSep((xs) => xs.map((x, i) => (i === idx ? v : x)))} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+              <Btn t={t} kind="ghost" icon="check" onClick={() => onReservar(rep, itensPayload())}>{busy ? 'Salvando…' : 'Salvar separação'}</Btn>
+              <Btn t={t} icon="arrowRight" onClick={() => podeEnviar && setStep('envio')}>Ir para o envio</Btn>
+            </div>
+          </Card>
+        )}
+
+        {(step === 'envio' || concluido) && !cancelada && (
+          <Card t={t} style={{ padding: 20 }}>
+            {concluido ? (
+              <>
+                <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text, marginBottom: 16 }}>Envio</div>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <div style={{ flex: '1 1 200px', padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>MÉTODO DE ENVIO</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text, marginTop: 4 }}>{repMetodoNome(rep.envio && rep.envio.metodo)}</div>
+                  </div>
+                  <div style={{ flex: '1 1 200px', padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>CÓDIGO DE RASTREIO</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text, marginTop: 4, fontFamily: 'ui-monospace, monospace' }}>{(rep.envio && rep.envio.rastreio) || 'Não informado'}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
+                  {rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <button onClick={() => onRastrear(rep)} disabled={!(rep.envio && rep.envio.rastreio) || busy}
+                    style={{ all: 'unset', cursor: !(rep.envio && rep.envio.rastreio) || busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, color: !(rep.envio && rep.envio.rastreio) ? t.faint : t.accentText, border: `1px solid ${t.border}` }}>
+                    <Icon name="search" size={16} /> Rastrear encomenda
+                  </button>
+                  {/* Reverter desfaz a BAIXA FÍSICA (receive + reserve de volta) e limpa envio/rastreio. */}
+                  <Btn t={t} kind="ghost" icon="refresh" onClick={() => onReverter(rep)}>{busy ? 'Revertendo…' : 'Reverter entrega'}</Btn>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text, marginBottom: 4 }}>Dados de envio</div>
+                <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 16 }}>
+                  Confirmar o envio dá <b style={{ color: t.text }}>baixa física</b> de {sepTot} un. no estoque.
+                  {parcial && <span style={{ color: uiTone(t, 'amber').fg }}> Envio parcial: a reserva dos {qtdTot - sepTot} restantes é liberada.</span>}
+                </div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Método de envio *</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+                  {REP_ENVIO_METODOS.map((m) => {
+                    const on = metodo === m.id;
+                    return <button key={m.id} onClick={() => setMetodo(m.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}><Icon name={m.icon} size={15} /> {m.nome}</button>;
+                  })}
+                </div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Código de rastreio · opcional</div>
+                <input value={rastreio} onChange={(e) => setRastreio(e.target.value.toUpperCase())} placeholder="Ex: BR123456789BR"
+                  style={{ boxSizing: 'border-box', width: '100%', height: 44, padding: '0 14px', borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 14, fontFamily: 'ui-monospace, monospace', outline: 'none', marginBottom: 18 }} />
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button onClick={() => metodo && podeEnviar && onEntregar(rep, itensPayload(), metodo, rastreio.trim())} disabled={!metodo || !podeEnviar || busy}
+                    style={{ all: 'unset', cursor: (!metodo || !podeEnviar || busy) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 46, padding: '0 22px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: (!metodo || !podeEnviar || busy) ? t.elevated : t.accent, color: (!metodo || !podeEnviar || busy) ? t.faint : '#fff' }}>
+                    <Icon name="send" size={17} /> {busy ? 'Enviando…' : !metodo ? 'Escolha o método' : parcial ? `Confirmar envio parcial (${sepTot})` : 'Confirmar envio'}
+                  </button>
+                </div>
+              </>
+            )}
+          </Card>
+        )}
+
+        {cancelada && (
+          <Card t={t} style={{ padding: 20 }}>
+            <div style={{ fontSize: 13.5, color: t.muted, marginBottom: 14 }}>Pedido cancelado — a reserva de estoque foi liberada.</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}</div>
+          </Card>
         )}
       </div>
     </div>
   );
 }
 
-const REP_CATALOGO = [
-  { sku: '9.99.0238', nome: 'Parafuso Sextavado M8', estoque: 120, preco: 0.85 },
-  { sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm', estoque: 18, preco: 3.2 },
-  { sku: '4.10.0233', nome: 'Rolamento 6204ZZ', estoque: 24, preco: 12.4 },
-  { sku: '6.30.0205', nome: 'Disjuntor 25A', estoque: 9, preco: 28 },
-  { sku: '1.02.0044', nome: 'Chapa Aço 1020 2mm', estoque: 30, preco: 145 },
-  { sku: '7.40.0150', nome: 'Arruela Lisa 8mm', estoque: 500, preco: 0.2 },
-  { sku: '5.31.0022', nome: 'Conector RJ45', estoque: 12, preco: 2.5 },
-  { sku: '3.00.0101', nome: 'Filamento PLA Azul', estoque: 20, preco: 89.9 },
-  { sku: '2.11.0080', nome: 'Porca Sextavada M8', estoque: 200, preco: 0.5 },
-  { sku: '6.30.0012', nome: 'Tinta Epóxi Cinza 3,6L', estoque: 6, preco: 210 },
-];
-
-function RepNovoModal({ t, onClose, onSave }) {
-  const [cliente, setCliente] = useStateR('');
-  const [cidade, setCidade] = useStateR('');
-  const [itens, setItens] = useStateR([]);   // { sku, nome, qtd, estoque, preco }
+// Modal de criar/editar. `order_number` é campo do usuário: o backend NÃO o gera (coluna NOT NULL
+// preenchida pelo body). Vem sugerido a partir do maior existente, mas é editável — é número de
+// documento de negócio, não id técnico.
+function RepNovoModal({ t, edit, sugestaoNumero, produtos, salvando, erro, onClose, onSave }) {
+  const [numero, setNumero] = useStateR(edit ? edit.n : sugestaoNumero);
+  const [cliente, setCliente] = useStateR(edit ? edit.cliente : '');
+  const [cidade, setCidade] = useStateR(edit ? edit.cidade : '');
+  const [itens, setItens] = useStateR(edit ? edit.itens.map((i) => ({ product_id: i.product_id, sku: i.sku, nome: i.nome, qtd: i.qtd, preco: i.preco, disponivel: i.disponivel })) : []);
   const [q, setQ] = useStateR('');
   const ql = q.trim().toLowerCase();
-  const disponiveis = REP_CATALOGO.filter((c) => !ql || c.nome.toLowerCase().includes(ql) || c.sku.includes(ql));
-  const naLista = (sku) => itens.some((i) => i.sku === sku);
-  const addItem = (c) => { if (!naLista(c.sku)) setItens((xs) => [...xs, { ...c, qtd: 1 }]); };
-  const setQtd = (sku, v) => setItens((xs) => xs.map((i) => (i.sku === sku ? { ...i, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : i)));
-  const delItem = (sku) => setItens((xs) => xs.filter((i) => i.sku !== sku));
-  const valid = cliente.trim() && cidade.trim() && itens.length;
-  const total = itens.reduce((a, i) => a + i.preco * i.qtd, 0);
-  const field = { boxSizing: 'border-box', height: 46, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none', width: '100%' };
-  const lab = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 };
+  const cat = (produtos || []).filter((p) => !ql || p.nome.toLowerCase().includes(ql) || String(p.sku).toLowerCase().includes(ql)).slice(0, 40);
+  const naLista = (id) => itens.some((i) => i.product_id === id);
+  const addItem = (p) => !naLista(p.product_id) && setItens((xs) => xs.concat([{ ...p, qtd: 1 }]));
+  const setQtd = (id, v) => setItens((xs) => xs.map((i) => (i.product_id === id ? { ...i, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : i)));
+  const delItem = (id) => setItens((xs) => xs.filter((i) => i.product_id !== id));
+  const total = itens.reduce((a, i) => a + i.qtd * i.preco, 0);
+  const valid = numero.trim() && cliente.trim() && cidade.trim() && itens.length;
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(820px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="refresh" size={20} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Novo pedido de reposição</div><div style={{ fontSize: 12.5, color: t.muted }}>Defina o destino e os materiais solicitados.</div></div>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center' }}><Icon name="refresh" size={20} /></span>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{edit ? 'Editar pedido' : 'Novo pedido de reposição'}</div><div style={{ fontSize: 12.5, color: t.muted }}>{itens.length} item(ns) · {repMoney(total)}</div></div>
           <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
-
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, marginBottom: 22 }}>
-            <div><label style={lab}>Granja / Cliente</label><input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Granja Loja Centro" style={field} /></div>
-            <div><label style={lab}>Cidade</label><input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Ex: Curitiba - PR" style={field} /></div>
+        <div className="fr-scroll" style={{ overflowY: 'auto', padding: '18px 22px', flex: 1 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+            {[['Nº do pedido *', numero, setNumero, '1 1 150px'], ['Cliente / Granja *', cliente, setCliente, '1 1 200px'], ['Cidade - UF *', cidade, setCidade, '1 1 160px']].map(([lab, val, set, flex]) => (
+              <label key={lab} style={{ flex, minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 5 }}>{lab}</div>
+                <input value={val} onChange={(e) => set(e.target.value)} style={{ boxSizing: 'border-box', width: '100%', height: 42, padding: '0 12px', borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13.5, fontFamily: 'inherit', outline: 'none' }} />
+              </label>
+            ))}
           </div>
 
-          <label style={lab}>Materiais do pedido</label>
           {itens.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
-              {itens.map((it) => (
-                <div key={it.sku} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{it.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {it.sku} · estoque {it.estoque}</div></div>
-                  <input value={it.qtd} onChange={(e) => setQtd(it.sku, e.target.value)} inputMode="numeric" style={{ boxSizing: 'border-box', width: 60, height: 36, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 14, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
-                  <button onClick={() => delItem(it.sku)} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }} onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={15} /></button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+              {itens.map((i) => (
+                <div key={i.product_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.nome}</div>
+                    <div style={{ fontSize: 11, color: t.muted }}>{i.sku} · livre {i.disponivel} · {repMoney(i.preco)}</div>
+                  </div>
+                  <input value={i.qtd} onChange={(e) => setQtd(i.product_id, e.target.value)} inputMode="numeric"
+                    style={{ width: 60, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+                  <button onClick={() => delItem(i.product_id)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={15} /></button>
                 </div>
               ))}
             </div>
           )}
 
-          <div style={{ position: 'relative', marginBottom: 10 }}>
-            <Icon name="search" size={16} style={{ position: 'absolute', left: 13, top: 14, color: t.muted }} />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material por nome ou SKU…" style={{ ...field, paddingLeft: 40 }} />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto' }} className="fr-scroll">
-            {disponiveis.map((c) => {
-              const on = naLista(c.sku);
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, height: 42, padding: '0 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text', marginBottom: 10 }}>
+            <Icon name="search" size={17} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material por nome ou SKU…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }} className="fr-scroll">
+            {cat.length === 0 && <div style={{ padding: 14, textAlign: 'center', fontSize: 12.5, color: t.muted }}>Nenhum material encontrado.</div>}
+            {cat.map((p) => {
+              const dentro = naLista(p.product_id);
               return (
-                <button key={c.sku} onClick={() => addItem(c)} disabled={on} style={{ all: 'unset', boxSizing: 'border-box', cursor: on ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, border: `1px solid ${on ? frHexToRgba('#22c55e', 0.4) : t.border}`, background: on ? uiTone(t, 'green').bg : t.elevated }}
-                  onMouseEnter={(e) => { if (!on) e.currentTarget.style.borderColor = t.accent; }} onMouseLeave={(e) => { if (!on) e.currentTarget.style.borderColor = t.border; }}>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{c.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {c.sku} · estoque {c.estoque}</div></div>
-                  {on ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: uiTone(t, 'green').fg }}><Icon name="check" size={14} /> Na lista</span>
-                      : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: t.accentText }}><Icon name="plus" size={14} /> Adicionar</span>}
-                </button>
+                <div key={p.product_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 10, border: `1px solid ${t.border}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.nome}</div>
+                    <div style={{ fontSize: 11, color: t.muted }}>{p.sku} · livre {p.disponivel} · {repMoney(p.preco)}</div>
+                  </div>
+                  <button onClick={() => addItem(p)} disabled={dentro} style={{ all: 'unset', cursor: dentro ? 'default' : 'pointer', fontSize: 12, fontWeight: 700, padding: '6px 11px', borderRadius: 8, background: dentro ? t.hover : t.accentSoft, color: dentro ? t.faint : t.accentText }}>{dentro ? 'Na lista' : 'Adicionar'}</button>
+                </div>
               );
             })}
           </div>
         </div>
-
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 12.5, color: t.muted }}>{itens.length} {itens.length === 1 ? 'material' : 'materiais'} · total <b style={{ color: t.text }}>{fmtBRL(total)}</b></div>
-          <button onClick={() => valid && onSave({ cliente: cliente.trim(), cidade: cidade.trim(), itens: itens.map((i) => ({ sku: i.sku, nome: i.nome, qtd: i.qtd, sep: 0, estoque: i.estoque, preco: i.preco })) })} disabled={!valid}
-            style={{ all: 'unset', boxSizing: 'border-box', cursor: valid ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: valid ? t.accent : t.elevated, color: valid ? t.onAccent : t.faint, boxShadow: valid ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none' }}>
-            <Icon name="check" size={17} /> Criar pedido
+        {erro && <div style={{ padding: '10px 22px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
+          <button onClick={() => valid && !salvando && onSave({ order_number: numero.trim(), client_name: cliente.trim(), city_state: cidade.trim(), total_value: total, items: itens.map((i) => ({ product_id: i.product_id, qty_requested: i.qtd })) })}
+            disabled={!valid || salvando}
+            style={{ all: 'unset', cursor: (!valid || salvando) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: (!valid || salvando) ? t.elevated : t.accent, color: (!valid || salvando) ? t.faint : '#fff' }}>
+            <Icon name="check" size={17} /> {salvando ? 'Salvando…' : edit ? 'Salvar alterações' : 'Criar pedido'}
           </button>
         </div>
       </div>
@@ -880,80 +878,180 @@ function RepNovoModal({ t, onClose, onSave }) {
 }
 
 function PageReposicoes({ t }) {
-  const [reps, setReps] = useStateR(REP_SEED);
+  const { items: reps, loading, error, reload } = useFRReplenishments();
   const [tab, setTab] = useStateR('pendente');
   const [openId, setOpenId] = useStateR(null);
-  const [tracking, setTracking] = useStateR(null);
-  const [novoOpen, setNovoOpen] = useStateR(false);
-  const cur = reps.find((r) => r.n === openId);
+  const [modal, setModal] = useStateR(null);      // { edit } | { novo: true }
+  const [tracking, setTracking] = useStateR(null); // { code, loading, data, erro }
+  const [busy, setBusy] = useStateR(false);
+  const [erroModal, setErroModal] = useStateR(null);
+  const [toast, setToast] = useStateR(null);
+  const [produtos, setProdutos] = useStateR([]);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+  // Catálogo de materiais do modal (GET /products, com stock agregado pooled).
+  React.useEffect(() => {
+    window.FRApi.get('/products', { skipLoading: true })
+      .then((r) => setProdutos((Array.isArray(r.data) ? r.data : []).map((p) => ({
+        product_id: p.id, sku: p.sku || '—', nome: p.name || '—', preco: repNum(p.unit_price),
+        disponivel: Math.max(0, repNum(p.stock && p.stock.quantity_on_hand) - repNum(p.stock && p.stock.quantity_reserved)),
+      })))).catch(() => setProdutos([]));
+  }, []);
 
-  const criarPedido = (data) => {
-    const seq = 1024 + reps.length + 1;
-    const novo = { n: 'REP-' + seq, cliente: data.cliente, cidade: data.cidade, status: 'pendente', envio: null, itens: data.itens };
-    setReps((xs) => [novo, ...xs]);
-    setNovoOpen(false);
-    setTab('pendente');
-    setOpenId(novo.n);
+  const cur = reps.find((r) => r.id === openId) || null;
+  const tabs = [['pendente', 'Pendentes'], ['em_preparo', 'Em preparo'], ['concluido', 'Concluídos'], ['cancelada', 'Cancelados']];
+  const view = reps.filter((r) => r.status === tab);
+  // Sugestão do próximo número a partir do MAIOR existente no backend (não do tamanho do array, que
+  // era o do mock e colidia). Ainda é sugestão: o campo é editável e o backend não gera.
+  const proxNumero = React.useMemo(() => {
+    const nums = reps.map((r) => parseInt(String(r.n).replace(/\D/g, ''), 10)).filter((x) => !isNaN(x));
+    return 'REP-' + (nums.length ? Math.max.apply(null, nums) + 1 : 1001);
+  }, [reps]);
+
+  const run = async (fn, msgOk) => {
+    if (busy) return false;
+    setBusy(true);
+    try { await fn(); reload(); setToast({ kind: 'ok', msg: msgOk }); return true; }
+    catch (e) { setToast({ kind: 'err', msg: repErr(e) }); return false; }
+    finally { setBusy(false); }
   };
 
-  const onUpdate = (next) => {
-    if (next._track) { setTracking(next.n); return; }
-    setReps((xs) => xs.map((r) => (r.n === next.n ? next : r)));
+  const criar = async (payload) => {
+    setErroModal(null); setBusy(true);
+    try { await window.FRApi.post('/replenishments', payload); setModal(null); reload(); setToast({ kind: 'ok', msg: 'Pedido criado.' }); }
+    catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
   };
-  const tabMap = { pendente: ['pendente'], em_preparo: ['em_preparo'], enviado: ['enviado'] };
-  const view = reps.filter((r) => tabMap[tab].includes(r.status));
+  const editar = async (id, payload) => {
+    setErroModal(null); setBusy(true);
+    try { await window.FRApi.put('/replenishments/' + id, payload); setModal(null); reload(); setToast({ kind: 'ok', msg: 'Pedido atualizado.' }); }
+    catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
+  };
+  const reservar = (rep, items) => run(
+    () => window.FRApi.put(`/replenishments/${rep.id}/authorize`, { action: 'reservar', items }),
+    'Separação salva — estoque reservado.');
+  const entregar = async (rep, items, metodo, rastreio) => {
+    const tot = items.reduce((a, i) => a + i.quantity, 0);
+    const parcial = tot < repQtdTot(rep);
+    const okRes = await run(
+      () => window.FRApi.put(`/replenishments/${rep.id}/authorize`, { action: 'entregar', items, shipping_info: metodo, tracking_code: rastreio || null }),
+      parcial ? `Envio parcial confirmado — ${tot} un. baixadas, reserva restante liberada.` : `Envio confirmado — ${tot} un. baixadas do estoque.`);
+    if (okRes) setOpenId(null);
+  };
+  const reverter = (rep) => run(
+    () => window.FRApi.put(`/replenishments/${rep.id}/authorize`, { action: 'reverter', items: rep.itens.map((i) => ({ id: i.id, quantity: i.sep })) }),
+    'Entrega revertida — estoque devolvido e re-empenhado.');
+  const cancelar = (rep) => {
+    if (!window.confirm(`Cancelar o pedido ${rep.n}?\n\nA reserva de estoque é liberada. O pedido fica no histórico como cancelado.`)) return;
+    run(() => window.FRApi.delete('/replenishments/' + rep.id), 'Pedido cancelado — reserva liberada.').then((ok) => { if (ok) setOpenId(null); });
+  };
+  // Rastreio REAL: GET /tracking/:code. Depende de WONCA_API_KEY no ambiente — sem ela o backend
+  // devolve 503 e a tela diz isso, em vez de fingir que rastreou.
+  const rastrear = async (rep) => {
+    const code = rep.envio && rep.envio.rastreio;
+    if (!code) return;
+    setTracking({ code, loading: true });
+    try { const r = await window.FRApi.get('/tracking/' + encodeURIComponent(code), { skipLoading: true }); setTracking({ code, data: r.data }); }
+    catch (e) { setTracking({ code, erro: repErr(e) }); }
+  };
+
+  if (loading && reps.length === 0) return <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando reposições…</Card>;
+  if (error) return (
+    <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+      <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+      <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+    </Card>
+  );
 
   return (
     <div>
-      <PageHeader t={t} title="Reposições" subtitle="Pedidos de reposição das granjas — separe o material, defina o envio e rastreie a entrega."
-        actions={<Btn t={t} icon="plus" onClick={() => setNovoOpen(true)}>Novo pedido</Btn>} />
+      <PageHeader t={t} title="Reposições" subtitle="Pedidos de reposição para clientes — separação, envio e baixa de estoque."
+        actions={<><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="plus" onClick={() => { setErroModal(null); setModal({ novo: true }); }}>Novo pedido</Btn></>} />
+
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="refresh" label="Pendentes" value={reps.filter((r) => r.status === 'pendente').length} kind="amber" />
+        <KPI t={t} mini icon="clipboard" label="Pendentes" value={reps.filter((r) => r.status === 'pendente').length} kind="amber" />
         <KPI t={t} mini icon="box" label="Em preparo" value={reps.filter((r) => r.status === 'em_preparo').length} kind="blue" />
-        <KPI t={t} mini icon="truck" label="Enviados" value={reps.filter((r) => r.status === 'enviado').length} kind="green" />
-        <KPI t={t} mini icon="barChart" label="Valor total" value={fmtBRL(reps.reduce((a, r) => a + repValor(r), 0))} kind="accent" />
+        <KPI t={t} mini icon="check" label="Concluídos" value={reps.filter((r) => r.status === 'concluido').length} kind="green" />
+        <KPI t={t} mini icon="barChart" label="Valor em aberto" value={repMoney(reps.filter((r) => r.status === 'pendente' || r.status === 'em_preparo').reduce((a, r) => a + r.valor, 0))} kind="accent" />
       </div>
-      <Tabs t={t} value={tab} onChange={setTab} tabs={[['pendente', 'Pendentes'], ['em_preparo', 'Em Preparo'], ['enviado', 'Enviados']]} />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: 20 }}>
+
+      <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 20, flexWrap: 'wrap' }}>
+        {tabs.map(([k, label]) => { const on = tab === k, n = reps.filter((r) => r.status === k).length; return (
+          <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : t.muted }}>{label} <span style={{ fontSize: 11, fontWeight: 800, opacity: on ? 1 : .6 }}>({n})</span></button>
+        ); })}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+        {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhum pedido de reposição neste status." /></Card></div>}
         {view.map((r) => {
-          const sepTot = repSepTot(r), qtdTot = repQtdTot(r);
-          const pct = qtdTot ? Math.round((sepTot / qtdTot) * 100) : 0;
-          const sm = repStatusMeta[r.status];
+          const sepTot = repSepTot(r), qtdTot = repQtdTot(r), pct = qtdTot ? Math.round((sepTot / qtdTot) * 100) : 0;
+          const podeEditar = r.status === 'pendente';
+          const podeCancelar = r.status !== 'concluido' && r.status !== 'cancelada';
           return (
-            <Card t={t} key={r.n} hover onClick={() => setOpenId(r.n)} style={{ padding: 24, cursor: 'pointer' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{r.n}</span>
-                <Badge t={t} kind={sm[1]} dot>{sm[0]}</Badge>
+            <Card t={t} key={r.id} hover style={{ padding: 18 }}>
+              <div onClick={() => setOpenId(r.id)} style={{ cursor: 'pointer' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{r.n}</div>
+                    <div style={{ fontSize: 12.5, color: t.muted, marginTop: 2 }}>{r.cliente}</div>
+                    <div style={{ fontSize: 11.5, color: t.faint }}>{r.cidade}</div>
+                  </div>
+                  <Badge t={t} kind={repStatusMeta[r.status] ? repStatusMeta[r.status][1] : 'gray'} dot>{repStatusMeta[r.status] ? repStatusMeta[r.status][0] : r.status}</Badge>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 14 }}>
+                  <div><div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>VALOR</div><div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{repMoney(r.valor)}</div></div>
+                  <div style={{ textAlign: 'right', fontSize: 11.5, color: t.muted }}>{r.itens.length} item(ns)<br />{sepTot}/{qtdTot} separado</div>
+                </div>
+                <div style={{ height: 7, borderRadius: 6, background: t.hover, overflow: 'hidden', marginTop: 10 }}><div style={{ height: '100%', width: pct + '%', borderRadius: 6, background: t.accent }} /></div>
+                {r.status === 'concluido' && r.envio && (
+                  <div style={{ marginTop: 10, fontSize: 11.5, color: t.muted, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <span>{repMetodoNome(r.envio.metodo)}</span>
+                    <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.envio.rastreio || '—'}</span>
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 15.5, color: t.text, fontWeight: 700, marginTop: 14 }}>{r.cliente}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: t.muted, marginTop: 5 }}><Icon name="mapPin" size={14} /> {r.cidade}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: t.muted, marginTop: 7 }}><Icon name="box" size={14} /> {r.itens.length} materiais · {qtdTot} un</div>
-              {r.status === 'enviado'
-                ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 18, padding: '11px 14px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}`, fontSize: 12.5, color: t.muted }}><Icon name="truck" size={15} style={{ color: t.accentText }} /> {(REP_ENVIO_METODOS.find((m) => m.id === r.envio.metodo) || {}).nome}{r.envio.rastreio ? <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: t.text, fontWeight: 700 }}>{r.envio.rastreio}</span> : ''}</div>
-                : <>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 9px' }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: t.faint }}>{sepTot}/{qtdTot} separados</span>
-                      <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{fmtBRL(repValor(r))}</span>
-                    </div>
-                    <div style={{ height: 9, borderRadius: 6, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${pct}%`, borderRadius: 6, background: pct === 100 ? uiTone(t, 'green').fg : t.accent }} /></div>
-                  </>}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 16, fontSize: 13, fontWeight: 700, color: t.accentText }}>{r.status === 'enviado' ? 'Ver envio' : 'Gerenciar separação'} <Icon name="chevronRight" size={16} /></div>
+              {(podeEditar || podeCancelar) && (
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.border}` }}>
+                  {/* Editar só em 'pendente': o PUT /:id remove itens que sumirem da lista, e remover
+                      um item já reservado deixaria a reserva órfã (o backend não guarda contra isso). */}
+                  {podeEditar && <button onClick={() => { setErroModal(null); setModal({ edit: r }); }} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 11.5, fontWeight: 700, color: t.muted, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="pencil" size={13} /> Editar</button>}
+                  {podeCancelar && <button onClick={() => cancelar(r)} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', fontSize: 11.5, fontWeight: 700, color: t.faint, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                    onMouseEnter={(e) => { if (!busy) e.currentTarget.style.color = uiTone(t, 'red').fg; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.faint; }}><Icon name="trash" size={13} /> Cancelar</button>}
+                </div>
+              )}
             </Card>
           );
         })}
-        {view.length === 0 && <div style={{ gridColumn: '1 / -1', padding: 40, textAlign: 'center', fontSize: 13.5, color: t.muted }}>Nenhum pedido nesta aba.</div>}
       </div>
-      {novoOpen && <RepNovoModal t={t} onClose={() => setNovoOpen(false)} onSave={criarPedido} />}
-      {cur && <RepDetail t={t} rep={cur} onClose={() => setOpenId(null)} onUpdate={onUpdate} />}
+
+      {modal && <RepNovoModal t={t} edit={modal.edit} sugestaoNumero={proxNumero} produtos={produtos} salvando={busy} erro={erroModal}
+        onClose={() => !busy && setModal(null)}
+        onSave={(payload) => (modal.edit ? editar(modal.edit.id, payload) : criar(payload))} />}
+
+      {cur && <RepDetail t={t} rep={cur} busy={busy} onClose={() => setOpenId(null)}
+        onReservar={reservar} onEntregar={entregar} onReverter={reverter} onRastrear={rastrear} />}
+
       {tracking && (
-        <div onClick={() => setTracking(null)} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(440px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, padding: 26, textAlign: 'center' }}>
-            <div style={{ width: 56, height: 56, borderRadius: 16, margin: '0 auto 16px', display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="mapPin" size={28} /></div>
-            <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>Rastreamento da encomenda</div>
-            <div style={{ fontSize: 13, color: t.muted, marginTop: 8, lineHeight: 1.55 }}>O rastreamento em tempo real será exibido aqui através da <b style={{ color: t.text }}>integração com a API da transportadora</b>.</div>
-            <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}`, fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: t.text }}>{(reps.find((r) => r.n === tracking).envio || {}).rastreio}</div>
-            <button onClick={() => setTracking(null)} style={{ all: 'unset', cursor: 'pointer', marginTop: 18, height: 44, borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, width: '100%' }}>Fechar</button>
+        <div onClick={() => setTracking(null)} style={{ position: 'fixed', inset: 0, zIndex: 71, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, padding: 24, boxShadow: t.shadow }}>
+            <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginBottom: 4 }}>Rastreamento</div>
+            <div style={{ fontSize: 13, color: t.muted, fontFamily: 'ui-monospace, monospace', marginBottom: 16 }}>{tracking.code}</div>
+            {tracking.loading && <div style={{ fontSize: 13, color: t.muted }}>Consultando transportadora…</div>}
+            {tracking.erro && (
+              <div style={{ fontSize: 13, color: uiTone(t, 'amber').fg, background: uiTone(t, 'amber').bg, padding: '12px 14px', borderRadius: 11, lineHeight: 1.5 }}>
+                {tracking.erro}
+                <div style={{ fontSize: 11.5, color: t.muted, marginTop: 6 }}>O rastreio usa a API Wonca (GET /tracking/:code) e exige a variável <b>WONCA_API_KEY</b> no ambiente do backend.</div>
+              </div>
+            )}
+            {tracking.data && <pre style={{ margin: 0, fontSize: 11.5, color: t.text, background: t.elevated, padding: 14, borderRadius: 11, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(tracking.data, null, 2)}</pre>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Btn t={t} kind="ghost" onClick={() => setTracking(null)}>Fechar</Btn></div>
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
+          <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{toast.msg}</span>
+          <button onClick={() => setToast(null)} style={{ all: 'unset', cursor: 'pointer', opacity: .7, flexShrink: 0 }}><Icon name="x" size={16} /></button>
         </div>
       )}
     </div>
