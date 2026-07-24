@@ -154,7 +154,7 @@ const NAV_PROD = [
   {
     label: 'Produção',
     items: [
-      { id: 'prod-painel',  name: 'Painel', icon: 'barChart2', locked: true },
+      { id: 'prod-painel',  name: 'Painel', icon: 'barChart2' },
       { id: 'prod-montagem', name: 'Montagem de Máquinas', icon: 'settings', locked: true },
       { id: 'prod-armazem', name: 'Armazém', icon: 'box' },
       { id: 'prod-receb',   name: 'Recebimento', icon: 'download' },
@@ -232,7 +232,9 @@ const FR_LOCKED_PAGES = new Set([
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)
-  'prod-painel', 'prod-montagem',
+  // 'prod-painel' SAIU: OPs do GET /clients + KPIs do GET /op-materials/summary; os 5
+  //   indicadores sem fonte (lead time, atrasadas, gráfico...) foram removidos da tela.
+  'prod-montagem',
   // Config do módulo Dev (mock) — Dev é não-navegável, mas trava defensiva se a rota for atingida
   'usuarios', 'permissoes', 'auditoria',
   // Rotas mortas (fora de qualquer menu) — link direto vê o cadeado, não a tela mock

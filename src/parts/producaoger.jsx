@@ -8,22 +8,15 @@ const PG_STATUS = {
   qualidade:  { label: 'Qualidade', kind: 'amber', next: 'concluida', act: 'Aprovar & concluir' },
   concluida:  { label: 'Concluída', kind: 'green' },
 };
-const PG_ORDENS_SEED = [
-  { id: 'OP-2041', produto: 'Painel Elétrico QGBT-12', cliente: 'Mantiqueira', setor: 'Elétrica', qtd: 4, feito: 1, status: 'producao', prazo: '20/06', resp: 'Bruno T.' },
-  { id: 'OP-2038', produto: 'Bancada Inox 2,4M', cliente: 'Granja São José', setor: 'Usinagem', qtd: 2, feito: 0, status: 'planejada', prazo: '24/06', resp: 'Carlos M.' },
-  { id: 'OP-2060', produto: 'Protótipo Gabinete 3D', cliente: 'Denester', setor: 'Produção 3D', qtd: 1, feito: 1, status: 'qualidade', prazo: '18/06', resp: 'Rafael S.' },
-  { id: 'OP-2055', produto: 'Esteira Transportadora 6M', cliente: 'Indústria Veloz', setor: 'Montagem', qtd: 1, feito: 1, status: 'concluida', prazo: '14/06', resp: 'Ana P.' },
-  { id: 'OP-2052', produto: 'Suporte de Sensor (lote)', cliente: 'Mantiqueira', setor: 'Produção 3D', qtd: 50, feito: 22, status: 'producao', prazo: '19/06', resp: 'Davi M.' },
-];
 // PG_APONTA_SEED / PG_ARMAZEM_SEED / PG_CONSUMO_SEED REMOVIDOS na peça 2 — Armazém e Apontamentos
 // renderizam 100% do backend real (/op-materials). O PG_ARMAZEM_SEED era o "lote por OP" com
 // recebido/usado em memória; virou a projeção do GET /balance. O PG_CONSUMO_SEED virou o GET /events.
 // O PG_APONTA_SEED (etapa/horas) já era código morto desde sempre: nenhuma tela o renderizava —
 // e continua SEM backend (productions_3d não tem etapa/hora; apontar HORA é outra peça, não esta).
-//
-// ⚠ PG_ORDENS_SEED (acima) FICA: o PGPainel ainda deriva "OPs ativas / em produção / concluídas"
-// dele, e o Painel não está no escopo desta peça. É a última ficção do módulo — as 3 telas desta
-// peça não o tocam. Ao ligar o Painel, ele sai e as OPs vêm do GET /clients (como aqui embaixo).
+// PG_ORDENS_SEED REMOVIDO na peça do Painel (24/07/2026) — era a última ficção do módulo: o
+// PGPainel agora deriva as OPs do GET /clients (window.useFRClients) e os KPIs de material do
+// GET /op-materials/summary. PG_STATUS (acima) fica: o PGOrdens (kanban morto, ver PG_GAPS 6)
+// ainda o referencia.
 
 // ==========================================================================
 // LIGAÇÃO AO BACKEND /op-materials — o armazém de material por OP (peça 1 do módulo).
@@ -137,12 +130,32 @@ function PGOpPicker({ t, ops, value, onChange, loading, error }) {
 }
 
 // ---------- Painel ----------
-function PGPainel({ t, ordens, setActive }) {
-  const emProd = ordens.filter((o) => o.status === 'producao').length;
-  const concl = ordens.filter((o) => o.status === 'concluida').length;
-  const ativas = ordens.filter((o) => o.status !== 'concluida').length;
-  const setores = [['Usinagem', 88, 'green'], ['Produção 3D', 72, 'accent'], ['Elétrica', 64, 'amber'], ['Montagem', 80, 'blue']];
-  const meses = [{ label: 'Jan', v: 58 }, { label: 'Fev', v: 70, accent: true }, { label: 'Mar', v: 64 }, { label: 'Abr', v: 82, accent: true }, { label: 'Mai', v: 76 }, { label: 'Jun', v: 90, accent: true }];
+// LIGADO (24/07/2026): OPs do GET /clients (window.useFRClients — o MESMO normalizador da tela
+// Clientes, frIsOpConcluida) + KPIs de material do GET /op-materials/summary.
+// FICARAM DE FORA por SEM FONTE (decisão de produto 24/07): "concluídas no mês" (não existe
+// concluded_at), lead time (sem timestamps de início/fim), atrasadas (sem coluna de prazo),
+// produtividade mensal (sem série histórica) e eficiência por setor (métrica indefinida — a OP
+// nem tem setor). "Em produção" como recorte separado de "ativas" também: 16/17 das OPs abertas
+// são legado 'pendente' que a Clientes exibe como "Em andamento" — o recorte literal mentiria.
+function PGPainel({ t, setActive }) {
+  const { items: clientes, loading: cliLoading, error: cliError } = window.useFRClients();
+  // summary é OBJETO (o pgUseGet é array-only) -> efeito próprio. null = carregando.
+  const [sum, setSum] = React.useState(null);
+  React.useEffect(() => {
+    let on = true;
+    window.FRApi.get('/op-materials/summary', { skipLoading: true })
+      .then((r) => { if (on) setSum(r.data && typeof r.data === 'object' ? r.data : { erro: 'Resposta inesperada.' }); })
+      .catch((e) => { if (on) setSum({ erro: pgErr(e) }); });
+    return () => { on = false; };
+  }, []);
+  const isConcl = window.frIsOpConcluida || function () { return false; };
+  const ops = [];
+  (clientes || []).forEach((c) => (c.ops || []).forEach((o) => ops.push(o)));
+  const ativas = ops.filter((o) => !isConcl(o.s)).length;
+  const concluidas = ops.length - ativas;
+  // valor honesto: '…' enquanto carrega, '—' se o carregamento falhou (nunca zero-como-dado).
+  const vOp = (n) => (cliError ? '—' : cliLoading ? '…' : n);
+  const vSum = (k) => (sum === null ? '…' : sum.erro ? '—' : pgNum(sum[k]));
   const go = (id) => setActive && setActive(id);
   const atalhos = [
     { id: 'prod-armazem', icon: 'box', nome: 'Armazém', desc: 'Material por OP e apontamento' },
@@ -161,8 +174,8 @@ function PGPainel({ t, ordens, setActive }) {
         <Icon name="zap" size={190} style={{ position: 'absolute', right: -34, top: -40, opacity: 0.1 }} />
         <div style={{ position: 'relative', maxWidth: 620 }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', padding: '5px 12px', borderRadius: 999, background: 'rgba(255,255,255,.18)', marginBottom: 16 }}><Icon name="zap" size={13} /> Módulo Produção</div>
-          <h1 style={{ margin: 0, fontSize: 30, fontWeight: 850, letterSpacing: '-.02em', lineHeight: 1.1 }}>Bom dia, Bruno 👋</h1>
-          <p style={{ margin: '8px 0 18px', fontSize: 14, color: 'rgba(255,255,255,.88)', lineHeight: 1.5 }}>Você tem <b>{ativas} ordens ativas</b>, sendo <b>{emProd} em produção</b>. {concl} foram concluídas recentemente.</p>
+          <h1 style={{ margin: 0, fontSize: 30, fontWeight: 850, letterSpacing: '-.02em', lineHeight: 1.1 }}>Bom dia 👋</h1>
+          <p style={{ margin: '8px 0 18px', fontSize: 14, color: 'rgba(255,255,255,.88)', lineHeight: 1.5 }}>{cliError ? 'Não foi possível carregar as OPs agora.' : cliLoading ? 'Carregando as ordens de produção…' : <>Você tem <b>{ativas} {ativas === 1 ? 'OP ativa' : 'OPs ativas'}</b> e <b>{concluidas} {concluidas === 1 ? 'concluída' : 'concluídas'}</b>.</>}</p>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button onClick={() => go('prod-armazem')} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: '#fff', color: t.accent, boxShadow: '0 6px 16px rgba(0,0,0,.2)' }}><Icon name="box" size={16} /> Abrir Armazém</button>
             <button onClick={() => go('prod-aponta')} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: 'rgba(255,255,255,.16)', color: '#fff' }}><Icon name="clipboard" size={16} /> Apontamentos</button>
@@ -184,34 +197,20 @@ function PGPainel({ t, ordens, setActive }) {
         ))}
       </div>
 
-      <PageHeader t={t} title="Indicadores" subtitle="Resumo das ordens de produção."
-        actions={<Btn t={t} kind="ghost" icon="download">Exportar</Btn>} />
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} icon="kanban" label="OPs ativas" value={ativas} sub="em andamento" kind="accent" />
-        <KPI t={t} icon="check" label="Concluídas no mês" value="34" sub="+9%" kind="green" />
-        <KPI t={t} icon="clock" label="Lead time médio" value="3,9 d" sub="-0,4 d" kind="blue" />
-        <KPI t={t} icon="alert" label="Atrasadas" value="2" sub="precisa atenção" kind="red" />
+      <PageHeader t={t} title="Indicadores" subtitle="Ordens de produção e material em chão de fábrica — tudo do razão real." />
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 26 }}>
+        <KPI t={t} icon="kanban" label="OPs ativas" value={vOp(ativas)} sub="em andamento" kind="accent" />
+        <KPI t={t} icon="check" label="OPs concluídas" value={vOp(concluidas)} sub="total" kind="green" />
+        <KPI t={t} icon="box" label="Material em WIP" value={vSum('wip_unidades')} sub={sum && !sum.erro ? `${pgNum(sum.wip_linhas)} materiais distintos` : 'unidades nas OPs'} kind="blue" />
+        <KPI t={t} icon="clipboard" label="Apontamentos" value={vSum('apontamentos_7d')} sub="últimos 7 dias" kind="amber" />
+        <KPI t={t} icon="download" label="Recebimentos pendentes" value={vSum('recebimentos_pendentes')} sub="itens na fila" kind="red" />
       </div>
-      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 26 }}>
-        <Card t={t} style={{ padding: 22, flex: 2, minWidth: 320 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Produtividade mensal</div>
-            <Badge t={t} kind="green" dot>+18% no semestre</Badge>
-          </div>
-          <BarChart t={t} data={meses} />
-        </Card>
-        <Card t={t} style={{ padding: 22, flex: 1, minWidth: 260 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 18 }}>Eficiência por setor</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {setores.map(([nome, pct, tone]) => (
-              <div key={nome}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7 }}><span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{nome}</span><span style={{ fontSize: 13, fontWeight: 800, color: uiTone(t, tone).fg }}>{pct}%</span></div>
-                <div style={{ height: 7, borderRadius: 6, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${pct}%`, borderRadius: 6, background: uiTone(t, tone).fg }} /></div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
+      {(cliError || (sum && sum.erro)) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderRadius: 12, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, fontSize: 12.5, fontWeight: 600, marginBottom: 26 }}>
+          <Icon name="alert" size={16} style={{ flexShrink: 0 }} />
+          <span>{cliError || sum.erro} — os indicadores marcados com "—" não puderam ser carregados.</span>
+        </div>
+      )}
 
       {/* orientações */}
       <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text, marginBottom: 12 }}>Como usar o módulo</div>
@@ -532,9 +531,9 @@ function PGArmazem({ t }) {
 
 function PGModule(props) {
   const t = frTokens(props.theme, PG_ACCENT, PG_ACCENT_T);
-  // ordens (PG_ORDENS_SEED) segue SÓ p/ o PGPainel — as 3 telas da peça 2 não recebem seed nenhum:
-  // Armazém/Apontamentos/Recebimento buscam do backend por conta própria. Ver PG_GAPS no fim.
-  const p = { ...props, t, ordens: PG_ORDENS_SEED };
+  // Nenhuma tela recebe seed: Painel/Armazém/Apontamentos/Recebimento buscam do backend por
+  // conta própria. Ver PG_GAPS no fim.
+  const p = { ...props, t };
   if (props.active === 'prod-armazem') return <PGArmazem {...p} />;
   if (props.active === 'prod-montagem') { const Mt = window.PGMontagem; return <Mt {...p} />; }
   if (props.active === 'prod-receb') return <PGRecebimento {...p} />;
@@ -561,7 +560,10 @@ window.renderPageProd = renderPageProd;
 //     da Montagem morre no F5), então nada real quebrou — mas a Montagem perdeu sua única fonte de
 //     material. op_material_events não tem machine_id: ligar Montagem exige decidir se a máquina é
 //     um eixo do consumo (coluna) ou um agregado à parte.
-//  5. PAINEL (prod-painel): fora do escopo desta peça — segue no PG_ORDENS_SEED, com 8 KPIs
-//     chumbados (34 concluídas, 3,9d lead time, 2 atrasadas, 4 setores, 6 meses).
+//  5. PAINEL (prod-painel): LIGADO em 24/07/2026 — OPs do GET /clients + KPIs do GET
+//     /op-materials/summary. Os 5 indicadores chumbados sem fonte (concluídas-no-mês, lead time,
+//     atrasadas, produtividade mensal, eficiência por setor) SAÍRAM por decisão de produto; cada
+//     um volta quando ganhar coluna/série que o sustente (concluded_at, prazo, setor na OP...).
 //  6. PGOrdens (kanban de OP, acima): código morto desde ANTES desta peça — sem rota e sem item de
-//     menu. Não removi por estar fora do escopo; quando ligar, a fonte é o GET /clients.
+//     menu, e agora sem seed (PG_ORDENS_SEED saiu com o Painel; nenhum caller passa `ordens`).
+//     Não removi por estar fora do escopo; quando ligar, a fonte é o GET /clients.
