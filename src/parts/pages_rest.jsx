@@ -1059,32 +1059,71 @@ function PageReposicoes({ t }) {
 }
 
 // ---------- Confronto (Viagens) ----------
+// LIGADA a /travel-orders. TRIPS_SEED, EXTRA_CAT, SAIDA_CAT, SAIDA_TEAM e SAIDA_ORIGENS REMOVIDOS.
+//
+// LIFECYCLE — o da tela é o do backend, não um paralelo:
+//   pending ("Em viagem": POST cria e RESERVA o material — StockService.reserve)
+//     --POST /:id/reconcile--> reconciled ("Finalizada": libera a reserva, baixa física do
+//     consumido, entrada física de extras)
+// O mock desenhava 4 estágios (casa/viajando/retorno/finalizado) sem transição entre eles; o
+// backend tem 2 estados vivos. Colapsado por decisão de produto (24/07/2026). 'awaiting_stock'
+// (legado, sem escritor hoje) cai em "Em viagem" — mesma doutrina do DELETE do backend
+// (reconciled vs resto). Origem: SEM FONTE (travel_orders não tem coluna) -> oculta; só destino
+// (city). Confronto de ajuste (2º confronto): o backend rejeita (VIAGEM_JA_RECONCILIADA) ->
+// adiado como peça própria, botão removido.
 const TRIP_STAGES = [
-  { key: 'casa', label: 'Em casa', icon: 'home', sub: 'Material separado, aguardando saída.' },
-  { key: 'viajando', label: 'Viajando', icon: 'truck', sub: 'Equipe em campo com o material.' },
-  { key: 'retorno', label: 'Retorno', icon: 'returnHome', sub: 'Chegou — aguardando confronto.' },
-  { key: 'finalizado', label: 'Finalizado', icon: 'check', sub: 'Confronto concluído.' },
+  { key: 'pending', label: 'Em viagem', icon: 'truck', sub: 'Equipe em campo com o material reservado.' },
+  { key: 'reconciled', label: 'Finalizada', icon: 'check', sub: 'Confronto concluído.' },
 ];
 const STAGE_IDX = (s) => TRIP_STAGES.findIndex((x) => x.key === s);
 const fmtBRL = (n) => 'R$ ' + Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const EXTRA_CAT = [
-  { nome: 'Fita isolante', sku: '5.30.0011', price: 8 },
-  { nome: 'Conector RJ45', sku: '5.31.0022', price: 2.5 },
-  { nome: 'Abraçadeira nylon', sku: '3.11.0030', price: 0.4 },
-  { nome: 'Terminal ilhós', sku: '5.32.0040', price: 1.2 },
-];
-const TRIPS_SEED = [
-  { id: 1, origem: 'Matriz Curitiba', destino: 'Obra Centro', tecnicos: ['João Silva', 'Maria Souza'], saida: '14/06 · 07:30', stage: 'finalizado',
-    itens: [{ nome: 'Cabo Flexível 2,5mm', sku: '5.20.0099', price: 3.2, levou: 50, voltou: 12 }, { nome: 'Rolamento 6204ZZ', sku: '4.10.0233', price: 12.4, levou: 6, voltou: 2 }, { nome: 'Parafuso M8', sku: '9.99.0238', price: 0.85, levou: 80, voltou: 20 }], extras: [] },
-  { id: 2, origem: 'Matriz Curitiba', destino: 'Cliente Sul', tecnicos: ['Ana Paula', 'Rafael Souza'], saida: '14/06 · 06:50', stage: 'retorno',
-    itens: [{ nome: 'Chapa Aço 1020 2mm', sku: '1.02.0044', price: 145, levou: 8, voltou: null }, { nome: 'Tinta Epóxi Cinza', sku: '6.30.0012', price: 210, levou: 3, voltou: null }, { nome: 'Arruela Lisa 8mm', sku: '7.40.0150', price: 0.2, levou: 120, voltou: null }], extras: [] },
-  { id: 3, origem: 'Filial Maringá', destino: 'Obra Leste', tecnicos: ['Bruno Teixeira'], saida: 'Hoje · 13:00', stage: 'viajando',
-    itens: [{ nome: 'Filamento PLA Azul', sku: '3.00.0101', price: 89.9, levou: 4, voltou: null }, { nome: 'Suporte de sensor', sku: '5.03.0050', price: 6, levou: 10, voltou: null }], extras: [] },
-  { id: 4, origem: 'Matriz Curitiba', destino: 'Filial Norte', tecnicos: ['Carlos Moura'], saida: 'Hoje · 15:20', stage: 'casa',
-    itens: [{ nome: 'Cabo Flexível 2,5mm', sku: '5.20.0099', price: 3.2, levou: 30, voltou: null }, { nome: 'Conector RJ45', sku: '5.31.0022', price: 2.5, levou: 50, voltou: null }], extras: [] },
-];
+const cfData = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' · ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+};
+
+// Backend -> shape da tela. Itens com quantity_out>0 = levados; quantity_out=0 = "extra puro" do
+// confronto (voltou sem ter saído). `voltou` (quantity_returned) só tem significado após reconcile.
+// price = products.unit_price aninhado no GET — fonte real dos R$ (nada de preço chumbado).
+function cfAdapt(r) {
+  r = r || {};
+  const all = (Array.isArray(r.items) ? r.items : []).map((i) => {
+    const p = i.products || {};
+    return {
+      id: i.id, product_id: i.product_id, nome: p.name || '—', sku: p.sku || '—', un: p.unit || '',
+      price: repNum(p.unit_price), levou: repNum(i.quantity_out), voltou: repNum(i.quantity_returned),
+    };
+  });
+  const done = (r.status || 'pending') === 'reconciled';
+  return {
+    id: r.id, done, stage: done ? 'reconciled' : 'pending',
+    destino: r.city || '—',
+    // technicians é VARCHAR único no schema; a tela grava "A, B" e lê de volta em chips.
+    tecnicos: String(r.technicians || '').split(',').map((s) => s.trim()).filter(Boolean),
+    saida: cfData(r.created_at),
+    itens: all.filter((i) => i.levou > 0),
+    extras: all.filter((i) => !(i.levou > 0) && i.voltou > 0),
+  };
+}
+function useFRTravels() {
+  const R = window.React;
+  const [items, setItems] = R.useState([]);
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const mounted = R.useRef(true);
+  const load = R.useCallback(function () {
+    setError(null);
+    window.FRApi.get('/travel-orders', { skipLoading: true })
+      .then((res) => { if (!mounted.current) return; const rows = Array.isArray(res && res.data) ? res.data : []; setItems(rows.map(cfAdapt)); setLoading(false); })
+      .catch((e) => { if (!mounted.current) return; setError(repErr(e)); setLoading(false); });
+  }, []);
+  R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  return { items, loading, error, reload: load };
+}
 const tripLevado = (tr) => tr.itens.reduce((a, it) => a + it.price * it.levou, 0);
-const tripRetornado = (tr) => tr.itens.reduce((a, it) => a + it.price * (it.voltou || 0), 0) + (tr.extras || []).reduce((a, e) => a + e.price * e.qtd, 0);
+const tripRetornado = (tr) => tr.itens.reduce((a, it) => a + it.price * (it.voltou || 0), 0) + (tr.extras || []).reduce((a, e) => a + e.price * e.voltou, 0);
 
 function TripStepper({ t, stage, compact }) {
   const idx = STAGE_IDX(stage);
@@ -1112,58 +1151,51 @@ function TripStepper({ t, stage, compact }) {
   );
 }
 
-// Confronto editor — user defines what came back; system computes consumption.
-// mode: 'novo' (confronto inicial) | 'ajuste' (segundo confronto p/ material que voltou depois)
-function ConfrontoEditor({ t, trip, onClose, onSave, mode = 'novo' }) {
-  const isAjuste = mode === 'ajuste';
-  const orig0 = React.useRef(trip.itens.map((it) => (it.voltou == null ? 0 : it.voltou)));
-  const origExtras0 = React.useRef((trip.extras || []).reduce((a, e) => a + e.qtd, 0));
-  const [itens, setItens] = useStateR(trip.itens.map((it) => ({ ...it, voltou: it.voltou == null ? '' : it.voltou })));
-  const [extras, setExtras] = useStateR(trip.extras ? [...trip.extras] : []);
-  const [addOpen, setAddOpen] = useStateR(false);
+// Confronto editor — o usuário informa o que voltou; quem baixa o consumo é o BACKEND
+// (POST /:id/reconcile: libera reserva + reverseReceive do consumido + receive de extras).
+// Extras = materiais que voltaram sem estar na viagem (catálogo real via GET /products).
+// Produto que JÁ está na viagem fica fora do picker: o backend deduplica returnedItems por
+// product_id — o excedente de um item existente entra pelo próprio "voltou" (> levou).
+function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave }) {
+  const [itens, setItens] = useStateR(trip.itens.map((it) => ({ ...it, voltou: '' })));
+  const [extras, setExtras] = useStateR([]);
+  const [q, setQ] = useStateR('');
+  const ql = q.trim().toLowerCase();
+  const naViagem = (pid) => trip.itens.some((i) => i.product_id === pid) || extras.some((e) => e.product_id === pid);
+  const cat = ql ? (produtos || []).filter((p) => !naViagem(p.product_id) && (p.nome.toLowerCase().includes(ql) || String(p.sku).toLowerCase().includes(ql))).slice(0, 8) : [];
   const setVoltou = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, voltou: v.replace(/[^0-9]/g, '') } : it)));
-  const addExtra = (c) => { setExtras((xs) => (xs.some((e) => e.sku === c.sku) ? xs : [...xs, { ...c, qtd: 1 }])); setAddOpen(false); };
-  const setExtraQtd = (i, v) => setExtras((xs) => xs.map((e, j) => (j === i ? { ...e, qtd: Math.max(1, parseInt(v.replace(/[^0-9]/g, '')) || 1) } : e)));
+  const addExtra = (p) => { setExtras((xs) => xs.concat([{ product_id: p.product_id, nome: p.nome, sku: p.sku, price: p.preco, qtd: 1 }])); setQ(''); };
+  const setExtraQtd = (i, v) => setExtras((xs) => xs.map((e, j) => (j === i ? { ...e, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : e)));
   const delExtra = (i) => setExtras((xs) => xs.filter((_, j) => j !== i));
-  const levado = trip.itens.reduce((a, it) => a + it.price * it.levou, 0);
+  const levado = tripLevado(trip);
   const retornado = itens.reduce((a, it) => a + it.price * (parseInt(it.voltou) || 0), 0) + extras.reduce((a, e) => a + e.price * e.qtd, 0);
   const consumo = levado - retornado;
-  // total devolvido a mais neste ajuste (un)
-  const devolvidoAgora = isAjuste
-    ? itens.reduce((a, it, i) => a + Math.max(0, (parseInt(it.voltou) || 0) - orig0.current[i]), 0) + Math.max(0, extras.reduce((a, e) => a + e.qtd, 0) - origExtras0.current)
-    : 0;
-  const accentC = isAjuste ? '#7c3aed' : t.accent;
-  const accentSoftC = isAjuste ? frHexToRgba('#7c3aed', 0.14) : t.accentSoft;
-  const accentTextC = isAjuste ? '#a78bfa' : t.accentText;
   const inp = { boxSizing: 'border-box', width: 64, height: 36, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 14, fontWeight: 800, fontFamily: 'inherit', outline: 'none' };
+  const payload = () => ({
+    returnedItems: itens.map((it) => ({ product_id: it.product_id, returnedQuantity: parseInt(it.voltou) || 0 }))
+      .concat(extras.map((e) => ({ product_id: e.product_id, returnedQuantity: e.qtd }))),
+  });
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(820px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-          <span style={{ width: 40, height: 40, borderRadius: 11, background: accentSoftC, color: accentTextC, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={isAjuste ? 'shuffle' : 'returnHome'} size={20} /></span>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="returnHome" size={20} /></span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{isAjuste ? 'Confronto de ajuste' : 'Fazer confronto'}</div>
-            <div style={{ fontSize: 12.5, color: t.muted }}>{trip.destino} · {isAjuste ? 'registre o material que voltou depois do confronto.' : 'informe o que voltou de cada item.'}</div>
+            <div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Fazer confronto</div>
+            <div style={{ fontSize: 12.5, color: t.muted }}>{trip.destino} · informe o que voltou de cada item.</div>
           </div>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+          <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
-        {isAjuste && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 24px', background: frHexToRgba('#7c3aed', 0.08), borderBottom: `1px solid ${t.border}`, color: t.muted, fontSize: 12.5, lineHeight: 1.5 }}>
-            <Icon name="alert" size={16} style={{ color: accentTextC, flexShrink: 0, marginTop: 1 }} />
-            <span>Use este ajuste quando um técnico devolver material <b style={{ color: t.text }}>após</b> o confronto já feito. Aumente o "voltou" do item ou inclua extras — o consumo é recalculado automaticamente.</span>
-          </div>
-        )}
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: '18px 24px', flex: 1 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>{isAjuste ? 'Itens — corrija o que voltou' : 'Itens levados — quanto voltou?'}</div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Itens levados — quanto voltou?</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {itens.map((it, i) => {
               const usado = it.levou - (parseInt(it.voltou) || 0);
-              const delta = isAjuste ? (parseInt(it.voltou) || 0) - orig0.current[i] : 0;
               return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${delta > 0 ? frHexToRgba('#7c3aed', 0.35) : t.border}` }}>
+                <div key={it.product_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{it.nome}</div>
-                    <div style={{ fontSize: 11, color: t.muted }}>SKU {it.sku} · levou {it.levou}{isAjuste ? ` · voltou antes ${orig0.current[i]}` : ''}{delta > 0 ? <b style={{ color: accentTextC }}> · +{delta} agora</b> : ''}</div>
+                    <div style={{ fontSize: 11, color: t.muted }}>SKU {it.sku} · levou {it.levou}</div>
                   </div>
                   <div style={{ textAlign: 'center' }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint, marginBottom: 3 }}>VOLTOU</div><input value={it.voltou} onChange={(e) => setVoltou(i, e.target.value)} inputMode="numeric" placeholder="0" style={inp} /></div>
                   <div style={{ textAlign: 'right', minWidth: 56 }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>USOU</div><div style={{ fontSize: 15, fontWeight: 800, color: usado < 0 ? uiTone(t, 'red').fg : t.text }}>{usado}</div></div>
@@ -1174,17 +1206,27 @@ function ConfrontoEditor({ t, trip, onClose, onSave, mode = 'novo' }) {
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '20px 0 10px' }}>
             <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>Materiais extras que voltaram</span>
-            <button onClick={() => setAddOpen((o) => !o)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: accentTextC, padding: '5px 10px', borderRadius: 8, background: accentSoftC }}><Icon name="plus" size={14} /> Adicionar</button>
           </div>
-          {addOpen && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, padding: 12, borderRadius: 12, background: t.elevated, border: `1px dashed ${t.borderStrong}` }}>
-              {EXTRA_CAT.map((c) => <button key={c.sku} onClick={() => addExtra(c)} style={{ all: 'unset', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 9, background: t.panel, border: `1px solid ${t.border}`, color: t.text }}>+ {c.nome}</button>)}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, height: 42, padding: '0 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text', marginBottom: 10 }}>
+            <Icon name="search" size={16} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material extra por nome ou SKU…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
+            {q && <button onClick={() => setQ('')} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 24, height: 24, borderRadius: 6, color: t.muted }}><Icon name="x" size={15} /></button>}
+          </label>
+          {cat.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12, padding: 10, borderRadius: 12, background: t.elevated, border: `1px dashed ${t.borderStrong}` }}>
+              {cat.map((p) => (
+                <button key={p.product_id} onClick={() => addExtra(p)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 9, background: t.panel, border: `1px solid ${t.border}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.nome}</div><div style={{ fontSize: 10.5, color: t.muted }}>SKU {p.sku} · {fmtBRL(p.preco)}</div></div>
+                  <Icon name="plus" size={15} style={{ color: t.accentText, flexShrink: 0 }} />
+                </button>
+              ))}
             </div>
           )}
+          {ql && cat.length === 0 && <div style={{ fontSize: 12.5, color: t.faint, padding: '2px 2px 10px' }}>Nenhum material fora da viagem com esse termo.</div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {extras.length === 0 && !addOpen && <div style={{ fontSize: 12.5, color: t.faint, padding: '4px 2px' }}>Nenhum material extra.</div>}
+            {extras.length === 0 && !ql && <div style={{ fontSize: 12.5, color: t.faint, padding: '4px 2px' }}>Nenhum material extra.</div>}
             {extras.map((e, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.25)}` }}>
+              <div key={e.product_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.25)}` }}>
                 <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{e.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {e.sku} · extra</div></div>
                 <input value={e.qtd} onChange={(ev) => setExtraQtd(i, ev.target.value)} inputMode="numeric" style={inp} />
                 <button onClick={() => delExtra(i)} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="trash" size={15} /></button>
@@ -1192,15 +1234,15 @@ function ConfrontoEditor({ t, trip, onClose, onSave, mode = 'novo' }) {
             ))}
           </div>
         </div>
+        {erro && <div style={{ padding: '10px 24px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
         <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}` }}>
           <div style={{ display: 'flex', gap: 18, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 12.5, color: t.muted }}>Levado <b style={{ color: t.text }}>{fmtBRL(levado)}</b></span>
             <span style={{ fontSize: 12.5, color: t.muted }}>Retornado <b style={{ color: uiTone(t, 'amber').fg }}>{fmtBRL(retornado)}</b></span>
             <span style={{ fontSize: 12.5, color: t.muted }}>Consumido <b style={{ color: uiTone(t, 'red').fg }}>{fmtBRL(consumo)}</b></span>
-            {isAjuste && devolvidoAgora > 0 && <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 800, color: accentTextC, background: accentSoftC, padding: '5px 11px', borderRadius: 999 }}>+{devolvidoAgora} un devolvidas agora</span>}
           </div>
-          <button onClick={() => onSave(itens.map((it) => ({ ...it, voltou: parseInt(it.voltou) || 0 })), extras, devolvidoAgora)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: accentC, color: '#fff', boxShadow: `0 6px 16px ${frHexToRgba(accentC, 0.3)}` }}>
-            <Icon name={isAjuste ? 'shuffle' : 'check'} size={18} /> {isAjuste ? 'Salvar ajuste' : 'Concluir confronto'}
+          <button onClick={() => !salvando && onSave(payload())} disabled={salvando} style={{ all: 'unset', boxSizing: 'border-box', cursor: salvando ? 'not-allowed' : 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: salvando ? t.elevated : t.accent, color: salvando ? t.faint : '#fff', boxShadow: salvando ? 'none' : `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` }}>
+            <Icon name="check" size={18} /> {salvando ? 'Registrando…' : 'Concluir confronto'}
           </button>
         </div>
       </div>
@@ -1208,11 +1250,11 @@ function ConfrontoEditor({ t, trip, onClose, onSave, mode = 'novo' }) {
   );
 }
 
-function TripDetail({ t, trip, onClose, onConfronto, onAjuste }) {
+function TripDetail({ t, trip, busy, onClose, onConfronto }) {
   const [tab, setTab] = useStateR('levados');
   const tripMobile = typeof window !== 'undefined' && window.innerWidth <= 640;
   const stageInfo = TRIP_STAGES.find((s) => s.key === trip.stage);
-  const chegou = trip.stage === 'finalizado';
+  const chegou = trip.done;
   const av = (n) => n.split(' ').map((x) => x[0]).slice(0, 2).join('');
   const levado = tripLevado(trip), retornado = tripRetornado(trip), consumo = levado - retornado;
   const tabBtn = (k, label, icon) => {
@@ -1230,8 +1272,6 @@ function TripDetail({ t, trip, onClose, onConfronto, onAjuste }) {
           <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 16, right: 18, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.18)', color: '#fff' }}><Icon name="x" size={16} /></button>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)', marginBottom: 12 }}><Icon name={stageInfo.icon} size={13} /> {stageInfo.label}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 19, fontWeight: 850, letterSpacing: '-.01em', flexWrap: 'wrap' }}>
-            <Icon name="home" size={17} style={{ opacity: .8 }} /> {trip.origem}
-            <Icon name="chevronRight" size={17} style={{ opacity: .7 }} />
             <Icon name="mapPin" size={17} style={{ opacity: .8 }} /> {trip.destino}
           </div>
           <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,.85)', marginTop: 6 }}>Saída: {trip.saida}</div>
@@ -1256,31 +1296,10 @@ function TripDetail({ t, trip, onClose, onConfronto, onAjuste }) {
             {chegou && <div style={{ gridColumn: tripMobile ? '1 / -1' : 'auto', padding: 16, borderRadius: 14, background: uiTone(t, 'red').bg, border: `1px solid ${frHexToRgba('#ef4444', 0.25)}` }}><div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, fontWeight: 700, color: uiTone(t, 'red').fg, letterSpacing: '.04em' }}><Icon name="out" size={13} /> CONSUMIDO</div><div style={{ fontSize: 20, fontWeight: 850, color: uiTone(t, 'red').fg, marginTop: 6 }}>{fmtBRL(consumo)}</div></div>}
           </div>
 
-          {trip.stage === 'retorno' && (
-            <button onClick={() => onConfronto(trip.id)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}`, marginBottom: 18 }}>
+          {!trip.done && (
+            <button onClick={() => !busy && onConfronto(trip.id)} disabled={busy} style={{ all: 'unset', boxSizing: 'border-box', cursor: busy ? 'not-allowed' : 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}`, marginBottom: 18 }}>
               <Icon name="returnHome" size={18} /> Fazer confronto
             </button>
-          )}
-
-          {chegou && (
-            <button onClick={() => onAjuste(trip.id)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 46, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, background: frHexToRgba('#7c3aed', 0.12), color: '#a78bfa', border: `1px solid ${frHexToRgba('#7c3aed', 0.3)}`, marginBottom: 18 }}>
-              <Icon name="shuffle" size={17} /> Confronto de ajuste — material voltou depois
-            </button>
-          )}
-
-          {chegou && (trip.ajustes || []).length > 0 && (
-            <div style={{ marginBottom: 18, padding: '14px 16px', borderRadius: 14, background: frHexToRgba('#7c3aed', 0.07), border: `1px solid ${frHexToRgba('#7c3aed', 0.22)}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 800, letterSpacing: '.05em', color: '#a78bfa', textTransform: 'uppercase', marginBottom: 10 }}><Icon name="shuffle" size={14} /> Ajustes posteriores</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {trip.ajustes.map((a, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12.5, color: t.muted }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#a78bfa', flexShrink: 0 }} />
-                    <span style={{ color: t.text, fontWeight: 700 }}>{a.data}</span>
-                    <span>+{a.devolvido} un devolvidas · consumo recalculado p/ <b style={{ color: t.text }}>{fmtBRL(a.consumo)}</b></span>
-                  </div>
-                ))}
-              </div>
-            </div>
           )}
 
           <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
@@ -1299,7 +1318,7 @@ function TripDetail({ t, trip, onClose, onConfronto, onAjuste }) {
             </div>
           ) : !chegou ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '16px', borderRadius: 12, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, fontSize: 13, fontWeight: 600 }}>
-              <Icon name={stageInfo.icon} size={18} /> {trip.stage === 'retorno' ? 'A viagem chegou. Faça o confronto para registrar o que voltou.' : trip.stage === 'viajando' ? 'A equipe ainda está em campo.' : 'Material aguardando a saída.'}
+              <Icon name={stageInfo.icon} size={18} /> A equipe está em campo — faça o confronto para registrar o que voltou.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1317,11 +1336,11 @@ function TripDetail({ t, trip, onClose, onConfronto, onAjuste }) {
                   </div>
                 );
               })}
-              {(trip.extras || []).map((e, i) => (
-                <div key={'x' + i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12, background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.25)}` }}>
+              {(trip.extras || []).map((e) => (
+                <div key={e.product_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12, background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.25)}` }}>
                   <span style={{ width: 34, height: 34, borderRadius: 9, background: 'rgba(245,158,11,.2)', color: uiTone(t, 'amber').fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="plus" size={16} /></span>
                   <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{e.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {e.sku} · extra que voltou</div></div>
-                  <div style={{ textAlign: 'right' }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>VOLTOU</div><div style={{ fontSize: 16, fontWeight: 800, color: uiTone(t, 'amber').fg }}>{e.qtd}</div></div>
+                  <div style={{ textAlign: 'right' }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>VOLTOU</div><div style={{ fontSize: 16, fontWeight: 800, color: uiTone(t, 'amber').fg }}>{e.voltou}</div></div>
                 </div>
               ))}
             </div>
@@ -1332,61 +1351,42 @@ function TripDetail({ t, trip, onClose, onConfronto, onAjuste }) {
   );
 }
 
-const SAIDA_CAT = [
-  { nome: 'Cabo Flexível 2,5mm', sku: '5.20.0099', price: 3.2 },
-  { nome: 'Rolamento 6204ZZ', sku: '4.10.0233', price: 12.4 },
-  { nome: 'Parafuso Sextavado M8', sku: '9.99.0238', price: 0.85 },
-  { nome: 'Chapa Aço 1020 2mm', sku: '1.02.0044', price: 145 },
-  { nome: 'Tinta Epóxi Cinza 3,6L', sku: '6.30.0012', price: 210 },
-  { nome: 'Filamento PLA Azul', sku: '3.00.0101', price: 89.9 },
-  { nome: 'Arruela Lisa 8mm', sku: '7.40.0150', price: 0.2 },
-  { nome: 'Conector RJ45', sku: '5.31.0022', price: 2.5 },
-];
-const SAIDA_TEAM = ['João Silva', 'Maria Souza', 'Ana Paula', 'Rafael Souza', 'Bruno Teixeira', 'Carlos Moura', 'Júlia Ramos'];
-const SAIDA_ORIGENS = ['Matriz Curitiba', 'Filial Maringá', 'Depósito Joinville'];
-
-function SaidaModal({ t, onClose, onSave }) {
-  const [origem, setOrigem] = useStateR(SAIDA_ORIGENS[0]);
+// Registrar saída = POST /travel-orders (cria a viagem e RESERVA cada item — StockService.reserve).
+// Catálogo REAL via GET /products (nada de SAIDA_CAT chumbado). Equipe: texto livre em chips —
+// não existe cadastro de técnicos no backend (technicians é VARCHAR na viagem); o roster sugerido
+// vem dos nomes das viagens já existentes, nunca de nomes inventados.
+function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }) {
   const [destino, setDestino] = useStateR('');
   const [team, setTeam] = useStateR([]);
-  const [roster, setRoster] = useStateR(SAIDA_TEAM);
+  const [roster, setRoster] = useStateR(rosterSeed || []);
   const [novoTec, setNovoTec] = useStateR('');
   const [itens, setItens] = useStateR([]);
   const [q, setQ] = useStateR('');
   const ql = q.trim().toLowerCase();
-  const catList = ql ? SAIDA_CAT.filter((c) => c.nome.toLowerCase().includes(ql) || c.sku.includes(ql)) : SAIDA_CAT;
+  const catList = (ql ? (produtos || []).filter((c) => c.nome.toLowerCase().includes(ql) || String(c.sku).toLowerCase().includes(ql)) : (produtos || [])).slice(0, 40);
   const toggleTeam = (n) => setTeam((xs) => (xs.includes(n) ? xs.filter((x) => x !== n) : [...xs, n]));
   const addTec = () => { const n = novoTec.trim(); if (!n) return; setRoster((xs) => (xs.includes(n) ? xs : [...xs, n])); setTeam((xs) => (xs.includes(n) ? xs : [...xs, n])); setNovoTec(''); };
-  const addItem = (c) => { setItens((xs) => (xs.some((i) => i.sku === c.sku) ? xs : [...xs, { ...c, levou: 1 }])); setQ(''); };
+  const addItem = (c) => { setItens((xs) => (xs.some((i) => i.product_id === c.product_id) ? xs : [...xs, { ...c, levou: 1 }])); setQ(''); };
   const setQtd = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, levou: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : it)));
   const delItem = (i) => setItens((xs) => xs.filter((_, j) => j !== i));
-  const levado = itens.reduce((a, it) => a + it.price * it.levou, 0);
-  const valid = destino.trim() && team.length && itens.length;
+  const levado = itens.reduce((a, it) => a + it.preco * it.levou, 0);
+  const valid = destino.trim() && team.length && itens.length && !salvando;
   const field = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none', width: '100%' };
   const lab = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 };
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(820px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
           <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="out" size={20} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Registrar saída</div><div style={{ fontSize: 12.5, color: t.muted }}>Defina a viagem e o material que vai a campo.</div></div>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Registrar saída</div><div style={{ fontSize: 12.5, color: t.muted }}>Defina a viagem e o material que vai a campo — o estoque fica reservado até o confronto.</div></div>
+          <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
 
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
-            <div>
-              <label style={lab}>Origem</label>
-              <div style={{ position: 'relative' }}>
-                <select value={origem} onChange={(e) => setOrigem(e.target.value)} style={{ ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 34, cursor: 'pointer' }}>{SAIDA_ORIGENS.map((o) => <option key={o}>{o}</option>)}</select>
-                <Icon name="chevronDown" size={16} style={{ position: 'absolute', right: 12, top: 14, color: t.muted, pointerEvents: 'none' }} />
-              </div>
-            </div>
-            <div>
-              <label style={lab}>Destino</label>
-              <input value={destino} onChange={(e) => setDestino(e.target.value)} placeholder="Ex: Obra Centro" style={field} />
-            </div>
+          <div style={{ marginBottom: 20 }}>
+            <label style={lab}>Destino</label>
+            <input value={destino} onChange={(e) => setDestino(e.target.value)} placeholder="Ex: Obra Centro" style={field} />
           </div>
 
           <label style={lab}>Equipe que vai viajar</label>
@@ -1421,12 +1421,12 @@ function SaidaModal({ t, onClose, onSave }) {
               <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Catálogo</div>
               <div className="fr-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
                 {catList.map((c) => {
-                  const added = itens.some((i) => i.sku === c.sku);
+                  const added = itens.some((i) => i.product_id === c.product_id);
                   return (
-                    <button key={c.sku} disabled={added} onClick={() => addItem(c)} style={{ all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${added ? t.accent : t.border}`, opacity: added ? 0.55 : 1 }}
+                    <button key={c.product_id} disabled={added} onClick={() => addItem(c)} style={{ all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${added ? t.accent : t.border}`, opacity: added ? 0.55 : 1 }}
                       onMouseEnter={(e) => { if (!added) { e.currentTarget.style.background = t.hover; e.currentTarget.style.borderColor = t.borderStrong; } }} onMouseLeave={(e) => { e.currentTarget.style.background = t.elevated; e.currentTarget.style.borderColor = added ? t.accent : t.border; }}>
                       <span style={{ width: 32, height: 32, borderRadius: 8, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={15} /></span>
-                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.nome}</div><div style={{ fontSize: 10.5, color: t.muted }}>SKU {c.sku} · {fmtBRL(c.price)}</div></div>
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.nome}</div><div style={{ fontSize: 10.5, color: t.muted }}>SKU {c.sku} · livre {c.disponivel} · {fmtBRL(c.preco)}</div></div>
                       <Icon name={added ? 'check' : 'plus'} size={16} style={{ color: added ? uiTone(t, 'green').fg : t.accentText, flexShrink: 0 }} />
                     </button>
                   );
@@ -1455,11 +1455,12 @@ function SaidaModal({ t, onClose, onSave }) {
           </div>
         </div>
 
+        {erro && <div style={{ padding: '10px 24px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
         <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: t.muted }}>{itens.length} {itens.length === 1 ? 'item' : 'itens'} · levado <b style={{ color: t.text }}>{fmtBRL(levado)}</b></div>
-          <button onClick={() => valid && onSave({ origem, destino: destino.trim(), tecnicos: team, itens: itens.map((it) => ({ ...it, voltou: null })) })} disabled={!valid}
+          <button onClick={() => valid && onSave({ technicians: team.join(', '), city: destino.trim(), items: itens.map((it) => ({ product_id: it.product_id, quantity: it.levou })) })} disabled={!valid}
             style={{ all: 'unset', boxSizing: 'border-box', cursor: valid ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 13, fontSize: 14, fontWeight: 800, background: valid ? t.accent : t.elevated, color: valid ? t.onAccent : t.faint, boxShadow: valid ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none' }}>
-            <Icon name="out" size={18} /> Registrar saída
+            <Icon name="out" size={18} /> {salvando ? 'Registrando…' : 'Registrar saída'}
           </button>
         </div>
       </div>
@@ -1468,73 +1469,90 @@ function SaidaModal({ t, onClose, onSave }) {
 }
 
 function PageConfronto({ t }) {
-  const [trips, setTrips] = useStateR(TRIPS_SEED);
+  const { items: trips, loading, error, reload } = useFRTravels();
   const [openId, setOpenId] = useStateR(null);
   const [confrontoId, setConfrontoId] = useStateR(null);
-  const [ajusteId, setAjusteId] = useStateR(null);
-  const [saidaOpen, setSaidaOpen] = useStateR(false);
-  const cur = trips.find((x) => x.id === openId);
-  const confrontoTrip = trips.find((x) => x.id === confrontoId);
-  const ajusteTrip = trips.find((x) => x.id === ajusteId);
-  const stageMeta = { casa: ['Em casa', 'gray'], viajando: ['Viajando', 'blue'], retorno: ['Retorno', 'amber'], finalizado: ['Finalizado', 'green'] };
-  const saveConfronto = (itens, extras) => {
-    setTrips((xs) => xs.map((x) => (x.id === confrontoId ? { ...x, itens, extras, stage: 'finalizado' } : x)));
-    setConfrontoId(null);
+  // saida = { key } — X-Idempotency-Key gerada ao ABRIR o modal: re-tentar o MESMO envio reusa a
+  // chave (o backend devolve a viagem já criada em vez de duplicar a reserva); modal novo = chave nova.
+  const [saida, setSaida] = useStateR(null);
+  const [busy, setBusy] = useStateR(false);
+  const [erroModal, setErroModal] = useStateR(null);
+  const [toast, setToast] = useStateR(null);
+  const [produtos, setProdutos] = useStateR([]);
+  React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+  // Catálogo real (GET /products): preço = unit_price; livre = on_hand - reserved (agregado pooled).
+  React.useEffect(() => {
+    window.FRApi.get('/products', { skipLoading: true })
+      .then((r) => setProdutos((Array.isArray(r.data) ? r.data : []).map((p) => ({
+        product_id: p.id, sku: p.sku || '—', nome: p.name || '—', preco: repNum(p.unit_price),
+        disponivel: Math.max(0, repNum(p.stock && p.stock.quantity_on_hand) - repNum(p.stock && p.stock.quantity_reserved)),
+      })))).catch(() => setProdutos([]));
+  }, []);
+
+  const cur = trips.find((x) => x.id === openId) || null;
+  const confrontoTrip = trips.find((x) => x.id === confrontoId) || null;
+  const stageMeta = { pending: ['Em viagem', 'blue'], reconciled: ['Finalizada', 'green'] };
+  // Roster sugerido = nomes já usados nas viagens existentes (nunca nomes inventados).
+  const rosterSeed = React.useMemo(() => {
+    const s = new Set();
+    trips.forEach((tr) => tr.tecnicos.forEach((n) => s.add(n)));
+    return Array.from(s);
+  }, [trips]);
+
+  const registrarSaida = async (payload) => {
+    setErroModal(null); setBusy(true);
+    try {
+      await window.FRApi.post('/travel-orders', payload, { headers: { 'X-Idempotency-Key': saida.key } });
+      setSaida(null); reload(); setToast({ kind: 'ok', msg: 'Saída registrada — material reservado no estoque.' });
+    } catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
   };
-  const saveAjuste = (itens, extras, devolvido) => {
-    setTrips((xs) => xs.map((x) => {
-      if (x.id !== ajusteId) return x;
-      const levado = itens.reduce((a, it) => a + it.price * it.levou, 0);
-      const retornado = itens.reduce((a, it) => a + it.price * (it.voltou || 0), 0) + (extras || []).reduce((a, e) => a + e.price * e.qtd, 0);
-      const consumo = levado - retornado;
-      const data = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' · ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      return { ...x, itens, extras, ajustes: [...(x.ajustes || []), { data, devolvido, consumo }] };
-    }));
-    setAjusteId(null);
+  const confrontar = async (payload) => {
+    setErroModal(null); setBusy(true);
+    try {
+      await window.FRApi.post(`/travel-orders/${confrontoId}/reconcile`, payload);
+      setConfrontoId(null); reload(); setToast({ kind: 'ok', msg: 'Confronto concluído — estoque acertado.' });
+    } catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
   };
-  const registrarSaida = (data) => {
-    const novo = { id: Date.now(), saida: 'Agora', stage: 'viajando', extras: [], ...data };
-    setTrips((xs) => [novo, ...xs]);
-    setSaidaOpen(false);
-  };
+
+  if (loading && trips.length === 0) return <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando viagens…</Card>;
+  if (error) return (
+    <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+      <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+      <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+    </Card>
+  );
+
   return (
     <div>
-      <PageHeader t={t} title="Confronto de Viagens" subtitle="Acompanhe cada viagem: saída, campo, retorno e confronto do material."
-        actions={<Btn t={t} icon="out" onClick={() => setSaidaOpen(true)}>Registrar saída</Btn>} />
+      <PageHeader t={t} title="Confronto de Viagens" subtitle="Registre a saída do material, acompanhe a viagem e faça o confronto do retorno."
+        actions={<><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}>Registrar saída</Btn></>} />
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="home" label="Em casa" value={trips.filter((x) => x.stage === 'casa').length} kind="gray" />
-        <KPI t={t} mini icon="truck" label="Viajando" value={trips.filter((x) => x.stage === 'viajando').length} kind="blue" />
-        <KPI t={t} mini icon="returnHome" label="Em retorno" value={trips.filter((x) => x.stage === 'retorno').length} kind="amber" />
-        <KPI t={t} mini icon="check" label="Finalizadas" value={trips.filter((x) => x.stage === 'finalizado').length} kind="green" />
+        <KPI t={t} mini icon="truck" label="Em viagem" value={trips.filter((x) => !x.done).length} kind="blue" />
+        <KPI t={t} mini icon="check" label="Finalizadas" value={trips.filter((x) => x.done).length} kind="green" />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
+        {trips.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma viagem" sub="Registre uma saída para reservar material e acompanhar o confronto." /></Card></div>}
         {trips.map((tr) => {
           const sm = stageMeta[tr.stage];
-          const isRetorno = tr.stage === 'retorno';
+          const emViagem = !tr.done;
           return (
-            <Card t={t} key={tr.id} hover style={{ padding: 18, cursor: 'pointer', border: isRetorno ? `1.5px solid ${t.accent}` : undefined, boxShadow: isRetorno ? `0 0 0 4px ${frHexToRgba(t.accent, 0.1)}` : undefined }}>
+            <Card t={t} key={tr.id} hover style={{ padding: 18, cursor: 'pointer', border: emViagem ? `1.5px solid ${t.accent}` : undefined, boxShadow: emViagem ? `0 0 0 4px ${frHexToRgba(t.accent, 0.1)}` : undefined }}>
               <div onClick={() => setOpenId(tr.id)}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <Badge t={t} kind={sm[1]} dot>{sm[0]}</Badge>
-                    {(tr.ajustes || []).length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, letterSpacing: '.03em', padding: '3px 8px', borderRadius: 999, background: frHexToRgba('#7c3aed', 0.14), color: '#a78bfa' }}><Icon name="shuffle" size={11} /> AJUSTADO</span>}
-                  </div>
+                  <Badge t={t} kind={sm[1]} dot>{sm[0]}</Badge>
                   <span style={{ fontSize: 11.5, color: t.faint }}>{tr.saida}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '14px 0 4px', fontSize: 15.5, fontWeight: 800, color: t.text }}>
-                  <Icon name="home" size={16} style={{ color: t.muted, flexShrink: 0 }} />
-                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tr.origem}</span>
-                  <Icon name="chevronRight" size={15} style={{ color: t.faint, flexShrink: 0 }} />
                   <Icon name="mapPin" size={16} style={{ color: t.accentText, flexShrink: 0 }} />
                   <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tr.destino}</span>
                 </div>
-                <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 18 }}>{tr.tecnicos.join(', ')}</div>
+                <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 18 }}>{tr.tecnicos.join(', ') || '—'}</div>
                 <TripStepper t={t} stage={tr.stage} compact />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, paddingTop: 13, borderTop: `1px solid ${t.border}`, gap: 10 }}>
                 <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>LEVADO</div><div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{fmtBRL(tripLevado(tr))}</div></div>
-                {isRetorno
-                  ? <button onClick={() => setConfrontoId(tr.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}` }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
+                {emViagem
+                  ? <button onClick={() => { setErroModal(null); setConfrontoId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}` }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
                   : <button onClick={() => setOpenId(tr.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9 }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>Ver detalhes <Icon name="chevronRight" size={15} /></button>}
               </div>
@@ -1542,10 +1560,16 @@ function PageConfronto({ t }) {
           );
         })}
       </div>
-      {cur && <TripDetail t={t} trip={cur} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setConfrontoId(id); }} onAjuste={(id) => { setOpenId(null); setAjusteId(id); }} />}
-      {confrontoTrip && <ConfrontoEditor t={t} trip={confrontoTrip} onClose={() => setConfrontoId(null)} onSave={saveConfronto} />}
-      {ajusteTrip && <ConfrontoEditor t={t} trip={ajusteTrip} mode="ajuste" onClose={() => setAjusteId(null)} onSave={saveAjuste} />}
-      {saidaOpen && <SaidaModal t={t} onClose={() => setSaidaOpen(false)} onSave={registrarSaida} />}
+      {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} />}
+      {confrontoTrip && <ConfrontoEditor t={t} trip={confrontoTrip} produtos={produtos} salvando={busy} erro={erroModal} onClose={() => !busy && setConfrontoId(null)} onSave={confrontar} />}
+      {saida && <SaidaModal t={t} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setSaida(null)} onSave={registrarSaida} />}
+      {toast && (
+        <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
+          <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{toast.msg}</span>
+          <button onClick={() => setToast(null)} style={{ all: 'unset', cursor: 'pointer', opacity: .7, flexShrink: 0 }}><Icon name="x" size={16} /></button>
+        </div>
+      )}
     </div>
   );
 }

@@ -49,7 +49,7 @@ const NAV = [
       },
       { id: 'quadrogestao', name: 'Quadro Gestão', icon: 'barChart2' },
       { id: 'reposicoes',   name: 'Reposições',    icon: 'refresh' },
-      { id: 'confronto',    name: 'Confronto',     icon: 'clipboard', locked: true },
+      { id: 'confronto',    name: 'Confronto',     icon: 'clipboard' },
     ],
   },
   {
@@ -225,7 +225,10 @@ const FR_LOCKED_PAGES = new Set([
   //   giro, cobertura-em-dias e rupturas-no-trimestre ficaram de fora por falta de série histórica.
   // 'reposicoes' SAIU: ligada a /replenishments (criar/editar/separar/enviar-parcial/reverter/
   //   cancelar) + rastreio via GET /tracking/:code. Lifecycle da tela = o do backend.
-  'confronto', 'controlesaida', 'painelti',
+  // 'confronto' SAIU: ligada a /travel-orders (registrar saída = POST c/ X-Idempotency-Key +
+  //   reserva; confronto = POST /:id/reconcile). 4 estágios do mock colapsados nos 2 do backend
+  //   (pending/reconciled); origem e confronto-de-ajuste ficaram de fora (sem fonte/sem endpoint).
+  'controlesaida', 'painelti',
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)
