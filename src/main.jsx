@@ -26,6 +26,7 @@ import './lib/socket.js';            // window.FRSocket (tempo real opcional; ap
 // Puros/sem UI. Precisam vir DEPOIS de api.js e ANTES das telas que os consomem.
 import './lib/adapters.js';          // window.FRAdapters (productToCard, formatBRL, ...)
 import './lib/products.js';          // window.useFRProducts() → GET /products adaptado
+import './lib/audit_format.js';      // window.FRAuditFormat (22 actions + fallback obrigatório)
 
 // --- núcleo compartilhado ---
 import './parts/icons.jsx';          // window.Icon

@@ -1916,113 +1916,229 @@ function PagePermissoes({ t }) {
 
 
 // ---------- Auditoria ----------
-const AUD_ACOES = {
-  criou:    { label: 'Criou',     kind: 'green', icon: 'plus' },
-  editou:   { label: 'Editou',    kind: 'blue',  icon: 'pencil' },
-  excluiu:  { label: 'Excluiu',   kind: 'red',   icon: 'trash' },
-  acessou:  { label: 'Acessou',   kind: 'gray',  icon: 'eye' },
-  aprovou:  { label: 'Aprovou',   kind: 'green', icon: 'check' },
-  recusou:  { label: 'Recusou',   kind: 'amber', icon: 'x' },
-  exportou: { label: 'Exportou',  kind: 'blue',  icon: 'download' },
-  login:    { label: 'Login',     kind: 'gray',  icon: 'lock' },
-};
-const AUD_LOGS = [
-  { id: 1, user: 'Bruno Teixeira', setor: 'Diretoria', acao: 'editou', alvo: 'Produto · Parafuso Sextavado M8', sku: '9.99.0238', detalhe: 'Valor unitário alterado de R$ 0,80 para R$ 0,85', pagina: 'Movimentação', data: '17/06/2026', hora: '09:42:18', ip: '192.168.0.12' },
-  { id: 2, user: 'Ana Paula Reis', setor: 'Estoque', acao: 'criou', alvo: 'Entrada · NF-e 004471', detalhe: 'Entrada de 8 itens · R$ 12.400,00 (Aço Brasil Ltda)', pagina: 'Entradas', data: '17/06/2026', hora: '09:10:55', ip: '192.168.0.31' },
-  { id: 3, user: 'Carlos Moura', setor: 'Usinagem', acao: 'acessou', alvo: 'Página · Relatórios', detalhe: 'Visualizou relatório de estoque geral', pagina: 'Relatórios', data: '17/06/2026', hora: '08:55:02', ip: '192.168.0.44' },
-  { id: 4, user: 'Júlia Ramos', setor: 'Qualidade', acao: 'excluiu', alvo: 'OP · 00301', detalhe: 'Removida ordem de produção do cliente PRT Class', pagina: 'Clientes e OPs', data: '16/06/2026', hora: '17:20:41', ip: '192.168.0.50' },
-  { id: 5, user: 'Rafael Souza', setor: 'Produção 3D', acao: 'editou', alvo: 'Usuário · Everton Luz', detalhe: 'Cargo alterado de Operador para Analista', pagina: 'Usuários', data: '16/06/2026', hora: '15:02:09', ip: '192.168.0.27' },
-  { id: 6, user: 'Bruno Teixeira', setor: 'Diretoria', acao: 'aprovou', alvo: 'Solicitação · REQ-C12F0A92', detalhe: 'Aprovou pedido de 3 itens do setor Flow', pagina: 'Solicitações', data: '16/06/2026', hora: '14:31:50', ip: '192.168.0.12' },
-  { id: 7, user: 'Ana Paula Reis', setor: 'Estoque', acao: 'exportou', alvo: 'Relatório · Estoque geral', detalhe: 'Exportou CSV com 25 itens', pagina: 'Produtos', data: '16/06/2026', hora: '11:08:33', ip: '192.168.0.31' },
-  { id: 8, user: 'Júlia Ramos', setor: 'Qualidade', acao: 'recusou', alvo: 'Solicitação · REQ-90B2E551', detalhe: 'Recusou pedido — material indisponível', pagina: 'Solicitações', data: '15/06/2026', hora: '16:45:12', ip: '192.168.0.50' },
-  { id: 9, user: 'Carlos Moura', setor: 'Usinagem', acao: 'login', alvo: 'Sessão iniciada', detalhe: 'Acesso via desktop · Chrome', pagina: 'Login', data: '15/06/2026', hora: '07:58:00', ip: '192.168.0.44' },
-  { id: 10, user: 'Rafael Souza', setor: 'Produção 3D', acao: 'criou', alvo: 'Demanda · Suporte de sensor 3D', detalhe: 'Gerou demanda de produção (12 un)', pagina: 'Encomendar 3D', data: '15/06/2026', hora: '10:22:47', ip: '192.168.0.27' },
-  { id: 11, user: 'Bruno Teixeira', setor: 'Diretoria', acao: 'editou', alvo: 'Permissões · Classe Chefe', detalhe: 'Habilitou "Remover" em Auditoria', pagina: 'Permissões', data: '14/06/2026', hora: '18:03:21', ip: '192.168.0.12' },
-  { id: 12, user: 'Ana Paula Reis', setor: 'Estoque', acao: 'acessou', alvo: 'Página · Críticos', detalhe: 'Consultou itens abaixo do mínimo', pagina: 'Críticos', data: '14/06/2026', hora: '09:15:40', ip: '192.168.0.31' },
-];
+// ---------- Auditoria ----------
+// LIGAÇÃO AO BACKEND: GET /admin/logs (contrato v1 — envelope { logs, total, limit, offset }).
+// TUDO server-driven: action/user/q/startDate/endDate/limit/offset viajam como query params e a
+// tela NUNCA refiltra o array recebido — filtrar no cliente em cima de UMA PÁGINA é a armadilha
+// do LIMIT mapeada no recon (inventa resultado). Formatação das 22 actions conhecidas em
+// lib/audit_format.js (window.FRAuditFormat), com fallback obrigatório: ação nova não quebra.
+// CORTES DA V1 (escopo travado): sem KPIs, sem Exportar, modal sem pagina/sku; sem listener de
+// socket (dívida registrada: a sala do new_audit_log é por ROLE, a tela é por PERMISSÃO 'logs'
+// — ligar o listener hoje vazaria evento pra quem perdeu a permissão; redesenho futuro).
+function audErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
 
+// created_at (timestamp UTC do banco) -> data/hora locais pt-BR pra exibição.
+function audQuando(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return { data: '—', hora: '—' };
+  return { data: d.toLocaleDateString('pt-BR'), hora: d.toLocaleTimeString('pt-BR') };
+}
+
+const AUD_PAGE_SIZE = 50; // = limit default do backend (teto 100; acima disso o backend dá 400)
+
+function useFRAuditLogs(filtros, offset) {
+  const R = window.React;
+  const [data, setData] = R.useState({ logs: [], total: 0, limit: AUD_PAGE_SIZE, offset: 0 });
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const [tick, setTick] = R.useState(0); // reload manual (botão Atualizar / Tentar novamente)
+  R.useEffect(function () {
+    let vivo = true;
+    setLoading(true); setError(null);
+    const params = { limit: AUD_PAGE_SIZE, offset: offset };
+    if (filtros.action) params.action = filtros.action;
+    if (filtros.user) params.user = filtros.user;
+    if (filtros.q) params.q = filtros.q;
+    if (filtros.startDate) params.startDate = filtros.startDate;
+    if (filtros.endDate) params.endDate = filtros.endDate;
+    window.FRApi.get('/admin/logs', { params: params, skipLoading: true })
+      .then(function (res) {
+        if (!vivo) return;
+        const d = res && res.data ? res.data : {};
+        setData({ logs: Array.isArray(d.logs) ? d.logs : [], total: d.total || 0, limit: d.limit || AUD_PAGE_SIZE, offset: d.offset || 0 });
+        setLoading(false);
+      })
+      .catch(function (e) { if (!vivo) return; setError(audErr(e)); setLoading(false); });
+    return function () { vivo = false; };
+  }, [filtros.action, filtros.user, filtros.q, filtros.startDate, filtros.endDate, offset, tick]);
+  return { data: data, loading: loading, error: error, reload: function () { setTick(function (n) { return n + 1; }); } };
+}
+
+// Gate por permissão: sem page_key 'logs' a tela interna NEM MONTA (nenhuma chamada de rede),
+// e o usuário vê a mesma retórica do 403 do backend — o padrão das outras telas ligadas, onde
+// essa mensagem chega pelo Card de erro da API.
 function PageAuditoria({ t }) {
-  const [user, setUser] = useStateR('todos');
-  const [acao, setAcao] = useStateR('todas');
-  const [q, setQ] = useStateR('');
-  const [sel, setSel] = useStateR(null);
-  const usuarios = [...new Set(AUD_LOGS.map((l) => l.user))];
-  const ql = q.trim().toLowerCase();
-  const view = AUD_LOGS.filter((l) => (user === 'todos' || l.user === user) && (acao === 'todas' || l.acao === acao) && (!ql || l.alvo.toLowerCase().includes(ql) || l.detalhe.toLowerCase().includes(ql) || (l.sku || '').includes(ql)));
-  const av = (n) => n.split(' ').map((x) => x[0]).slice(0, 2).join('');
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('logs')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Auditoria" subtitle="Histórico completo de ações — quem fez, o quê e quando." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (logs) para ver a auditoria.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return <PageAuditoriaLogs t={t} />;
+}
+
+function PageAuditoriaLogs({ t }) {
+  const R = window.React;
+  const [action, setAction] = R.useState('ALL');
+  const [user, setUser] = R.useState('todos');
+  const [qInput, setQInput] = R.useState('');
+  const [q, setQ] = R.useState('');
+  const [startDate, setStartDate] = R.useState('');
+  const [endDate, setEndDate] = R.useState('');
+  const [offset, setOffset] = R.useState(0);
+  const [sel, setSel] = R.useState(null);
+
+  // Busca livre com debounce: tecla NÃO vira request; 400ms de silêncio viram UMA request.
+  R.useEffect(function () {
+    const id = setTimeout(function () { setQ(qInput.trim()); }, 400);
+    return function () { clearTimeout(id); };
+  }, [qInput]);
+
+  // Mudou qualquer filtro -> volta pra primeira página (offset velho podia passar do novo total).
+  R.useEffect(function () { setOffset(0); }, [action, user, q, startDate, endDate]);
+
+  const filtros = {
+    action: action !== 'ALL' ? action : '',
+    user: user !== 'todos' ? user : '',
+    q: q, startDate: startDate, endDate: endDate,
+  };
+  const { data, loading, error, reload } = useFRAuditLogs(filtros, offset);
+
+  // Dropdown de usuários REAIS, semeado UMA vez dos últimos 100 eventos (não há endpoint
+  // dedicado; v1 aceita a janela). O filtro em si é server-side (?user= ILIKE nome/email) —
+  // a lista só alimenta o select. Falhou? A tela segue de pé só com "Todos".
+  const [usuarios, setUsuarios] = R.useState([]);
+  R.useEffect(function () {
+    let vivo = true;
+    window.FRApi.get('/admin/logs', { params: { limit: 100 }, skipLoading: true })
+      .then(function (res) {
+        if (!vivo) return;
+        const rows = (res && res.data && res.data.logs) || [];
+        // 'Usuário Removido' FORA do dropdown: é o COALESCE de autor apagado, não identidade
+        // filtrável (?user= ILIKE name/email NULL → sempre zero = falso-vazio). Órfãos seguem
+        // aparecendo nas listagens sem filtro.
+        setUsuarios(Array.from(new Set(rows.map(function (l) { return l.user_name; }).filter(function (n) { return n && n !== 'Usuário Removido'; }))).sort());
+      })
+      .catch(function () { /* select fica só com "Todos" — sem quebrar a tela */ });
+    return function () { vivo = false; };
+  }, []);
+
+  const fmt = window.FRAuditFormat;
+  const av = (n) => String(n || '—').split(' ').map((x) => x[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
   const selStyle = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 32px 0 13px', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', appearance: 'none', WebkitAppearance: 'none', outline: 'none', cursor: 'pointer' };
+  // colorScheme segue o TEMA DO APP (não o do SO): frTokens não expõe flag de modo, mas o
+  // panel do tema claro é sempre '#ffffff' (sidebar.jsx) — é o discriminador disponível.
+  const dateStyle = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 13px', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', outline: 'none', colorScheme: t.panel === '#ffffff' ? 'light' : 'dark' };
+
+  // Paginação 100% do envelope: total/limit/offset ditam página atual e navegação.
+  const totalPaginas = Math.max(1, Math.ceil(data.total / data.limit));
+  const pagina = Math.floor(data.offset / data.limit) + 1;
+  const temAnterior = offset > 0;
+  const temProxima = offset + data.limit < data.total;
+  const pageBtn = (enabled) => ({ all: 'unset', boxSizing: 'border-box', cursor: enabled ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, color: enabled ? t.text : t.faint, border: `1px solid ${t.border}`, background: t.panel, opacity: enabled ? 1 : 0.55 });
 
   return (
     <div>
       <PageHeader t={t} title="Auditoria" subtitle="Histórico completo de ações — quem fez, o quê e quando."
-        actions={<Btn t={t} kind="ghost" icon="download">Exportar log</Btn>} />
-
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="clipboard" label="Eventos (7 dias)" value={AUD_LOGS.length} kind="accent" />
-        <KPI t={t} mini icon="users" label="Usuários ativos" value={usuarios.length} kind="blue" />
-        <KPI t={t} mini icon="pencil" label="Edições" value={AUD_LOGS.filter((l) => l.acao === 'editou').length} kind="amber" />
-        <KPI t={t} mini icon="trash" label="Exclusões" value={AUD_LOGS.filter((l) => l.acao === 'excluiu').length} kind="red" />
-      </div>
+        actions={<Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>} />
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 240px', minWidth: 200, height: 44, padding: '0 14px', borderRadius: 11, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text' }}>
-          <Icon name="search" size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar por registro, detalhe ou SKU…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
+          <Icon name="search" size={17} /><input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Buscar no conteúdo dos eventos…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
         </label>
         <div style={{ position: 'relative' }}>
           <select value={user} onChange={(e) => setUser(e.target.value)} style={selStyle}><option value="todos">Todos os usuários</option>{usuarios.map((u) => <option key={u} value={u}>{u}</option>)}</select>
           <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
         </div>
         <div style={{ position: 'relative' }}>
-          <select value={acao} onChange={(e) => setAcao(e.target.value)} style={selStyle}><option value="todas">Todas as ações</option>{Object.entries(AUD_ACOES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
+          <select value={action} onChange={(e) => setAction(e.target.value)} style={selStyle}><option value="ALL">Todas as ações</option>{Object.keys(fmt.AUDIT_ACTIONS).map((k) => <option key={k} value={k}>{k}</option>)}</select>
           <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
         </div>
+        <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} title="De (data inicial)" style={dateStyle} />
+        <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} title="Até (data final, inclusiva)" style={dateStyle} />
       </div>
 
-      <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 14 }}>{view.length} {view.length === 1 ? 'evento' : 'eventos'}</div>
+      <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 14 }}>
+        {loading ? 'Carregando…' : `${data.total} ${data.total === 1 ? 'evento' : 'eventos'} · página ${pagina} de ${totalPaginas}`}
+      </div>
 
+      {error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
+        </Card>
+      ) : (
       <Card t={t} style={{ padding: 8 }}>
-        {view.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13 }}>Nenhum evento para este filtro.</div>}
-        {view.map((l, i) => {
-          const a = AUD_ACOES[l.acao]; const c = uiTone(t, a.kind);
+        {loading && data.logs.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13 }}>Carregando auditoria…</div>}
+        {!loading && data.logs.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13 }}>Nenhum evento para este filtro.</div>}
+        {data.logs.map((l, i) => {
+          const f = fmt.formatAudit(l.action, l.details); const c = uiTone(t, f.kind);
+          const quando = audQuando(l.created_at);
           return (
-            <div key={l.id} onClick={() => setSel(l)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 14px', borderRadius: 12, cursor: 'pointer', borderBottom: i === view.length - 1 ? 'none' : `1px solid ${t.border}`, transition: 'background .12s' }}
+            <div key={l.id} onClick={() => setSel(l)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 14px', borderRadius: 12, cursor: 'pointer', borderBottom: i === data.logs.length - 1 ? 'none' : `1px solid ${t.border}`, transition: 'background .12s', opacity: loading ? 0.6 : 1 }}
               onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
               <span style={{ position: 'relative', width: 40, height: 40, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 12.5, flexShrink: 0 }}>
-                {av(l.user)}
-                <span style={{ position: 'absolute', bottom: -2, right: -2, width: 18, height: 18, borderRadius: '50%', background: c.fg, color: '#fff', display: 'grid', placeItems: 'center', border: `2px solid ${t.panel}` }}><Icon name={a.icon} size={9} /></span>
+                {av(l.user_name)}
+                <span style={{ position: 'absolute', bottom: -2, right: -2, width: 18, height: 18, borderRadius: '50%', background: c.fg, color: '#fff', display: 'grid', placeItems: 'center', border: `2px solid ${t.panel}` }}><Icon name={f.icon} size={9} /></span>
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>{l.user}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.04em', padding: '2px 8px', borderRadius: 6, background: c.bg, color: c.fg, textTransform: 'uppercase' }}>{a.label}</span>
-                  <span style={{ fontSize: 13, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.alvo}</span>
+                  <span style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>{l.user_name}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.04em', padding: '2px 8px', borderRadius: 6, background: c.bg, color: c.fg, textTransform: 'uppercase' }}>{f.verbo}</span>
+                  <span style={{ fontSize: 13, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.alvo}</span>
                 </div>
-                <div style={{ fontSize: 12, color: t.muted, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.detalhe}</div>
+                <div style={{ fontSize: 12, color: t.muted, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.frase}</div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{l.hora}</div>
-                <div style={{ fontSize: 11, color: t.faint }}>{l.data}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{quando.hora}</div>
+                <div style={{ fontSize: 11, color: t.faint }}>{quando.data}</div>
               </div>
               <Icon name="chevronRight" size={16} style={{ color: t.faint, flexShrink: 0 }} />
             </div>
           );
         })}
       </Card>
+      )}
 
-      {sel && (() => { const a = AUD_ACOES[sel.acao]; const c = uiTone(t, a.kind); return (
+      {!error && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <button disabled={!temAnterior} onClick={() => temAnterior && setOffset(Math.max(0, offset - data.limit))} style={pageBtn(temAnterior)}><Icon name="chevronLeft" size={15} /> Anterior</button>
+          <button disabled={!temProxima} onClick={() => temProxima && setOffset(offset + data.limit)} style={pageBtn(temProxima)}>Próxima <Icon name="chevronRight" size={15} /></button>
+        </div>
+      )}
+
+      {sel && (() => {
+        const f = fmt.formatAudit(sel.action, sel.details); const c = uiTone(t, f.kind);
+        const quando = audQuando(sel.created_at);
+        // Modal v1: SEM 'Página' e SEM sku (cortes de escopo); setor real no cabeçalho.
+        const linhas = [
+          ['Ação realizada', f.alvo, 'clipboard'],
+          ['Detalhe', f.frase, 'pencil'],
+          ['Data e hora', `${quando.data} às ${quando.hora}`, 'clock'],
+          ['Endereço IP', sel.ip_address || '—', 'lock'],
+        ];
+        return (
         <div onClick={() => setSel(null)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
             <div style={{ padding: '22px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-              <span style={{ width: 44, height: 44, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 14, flexShrink: 0 }}>{av(sel.user)}</span>
-              <div style={{ flex: 1 }}><div style={{ fontSize: 16.5, fontWeight: 850, color: t.text }}>{sel.user}</div><div style={{ fontSize: 12, color: t.muted }}>{sel.setor} · {sel.ip}</div></div>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 800, padding: '6px 11px', borderRadius: 8, background: c.bg, color: c.fg, textTransform: 'uppercase' }}><Icon name={a.icon} size={13} /> {a.label}</span>
+              <span style={{ width: 44, height: 44, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 14, flexShrink: 0 }}>{av(sel.user_name)}</span>
+              <div style={{ flex: 1 }}><div style={{ fontSize: 16.5, fontWeight: 850, color: t.text }}>{sel.user_name}</div><div style={{ fontSize: 12, color: t.muted }}>{sel.sector || 'Setor não informado'} · {sel.ip_address || '—'}</div></div>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 800, padding: '6px 11px', borderRadius: 8, background: c.bg, color: c.fg, textTransform: 'uppercase' }}><Icon name={f.icon} size={13} /> {f.verbo}</span>
               <button onClick={() => setSel(null)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
             </div>
             <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {[['Ação realizada', sel.alvo, 'clipboard'], ['Detalhe', sel.detalhe, 'pencil'], ['Página', sel.pagina, 'box'], ['Data e hora', `${sel.data} às ${sel.hora}`, 'clock'], ['Endereço IP', sel.ip, 'lock']].map(([k, v, ic]) => (
+              {linhas.map(([k, v, ic]) => (
                 <div key={k} style={{ display: 'flex', alignItems: 'flex-start', gap: 13, padding: '12px 0', borderBottom: k === 'Endereço IP' ? 'none' : `1px solid ${t.border}` }}>
                   <span style={{ width: 32, height: 32, borderRadius: 9, background: t.elevated, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={ic} size={15} /></span>
-                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase' }}>{k}</div><div style={{ fontSize: 13.5, fontWeight: 600, color: t.text, marginTop: 3 }}>{v}</div></div>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase' }}>{k}</div><div style={{ fontSize: 13.5, fontWeight: 600, color: t.text, marginTop: 3, overflowWrap: 'anywhere' }}>{v}</div></div>
                 </div>
               ))}
             </div>

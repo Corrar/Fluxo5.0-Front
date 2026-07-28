@@ -59,6 +59,11 @@ const NAV = [
       { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
       { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
+      // Auditoria ENTROU aqui no destrave — PROVISÓRIO: a casa definitiva é o NAV_DEV, mas o
+      // módulo Dev ainda não tem navegação (mock); sem este item a tela real ficaria órfã de
+      // menu. Move quando o Dev ganhar navegação (decisão pendente: quem enxerga o Dev).
+      // Acesso fino é da própria tela (canAccess('logs') + 403 do backend), como nas vizinhas.
+      { id: 'auditoria',     name: 'Auditoria',         icon: 'clipboard' },
       { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
   },
@@ -236,7 +241,10 @@ const FR_LOCKED_PAGES = new Set([
   //   indicadores sem fonte (lead time, atrasadas, gráfico...) foram removidos da tela.
   'prod-montagem',
   // Config do módulo Dev (mock) — Dev é não-navegável, mas trava defensiva se a rota for atingida
-  'usuarios', 'permissoes', 'auditoria',
+  // 'auditoria' SAIU: ligada ao GET /admin/logs real (contrato v1 — envelope {logs,total,limit,
+  //   offset}, filtros e paginação 100% server-side, formatador com fallback em audit_format.js,
+  //   gate por page_key 'logs' na própria tela). KPIs/Exportar/pagina/sku cortados da v1.
+  'usuarios', 'permissoes',
   // Rotas mortas (fora de qualquer menu) — link direto vê o cadeado, não a tela mock
   'tarefas', 'eletrica', 'avisos', 'calculadora',
 ]);
