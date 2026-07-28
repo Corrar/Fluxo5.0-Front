@@ -59,11 +59,13 @@ const NAV = [
       { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
       { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
-      // Auditoria ENTROU aqui no destrave — PROVISÓRIO: a casa definitiva é o NAV_DEV, mas o
-      // módulo Dev ainda não tem navegação (mock); sem este item a tela real ficaria órfã de
-      // menu. Move quando o Dev ganhar navegação (decisão pendente: quem enxerga o Dev).
-      // Acesso fino é da própria tela (canAccess('logs') + 403 do backend), como nas vizinhas.
+      // Auditoria e Permissões ENTRARAM aqui no destrave — PROVISÓRIO: a casa definitiva é o
+      // NAV_DEV, mas o módulo Dev ainda não tem navegação (mock); sem estes itens as telas
+      // reais ficariam órfãs de menu. Movem quando o Dev ganhar navegação (decisão pendente:
+      // quem enxerga o Dev). Acesso fino é das próprias telas (canAccess('logs')/
+      // canAccess('permissoes') + 403 do backend), como nas vizinhas.
       { id: 'auditoria',     name: 'Auditoria',         icon: 'clipboard' },
+      { id: 'permissoes',    name: 'Permissões',        icon: 'key' },
       { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
   },
@@ -244,7 +246,11 @@ const FR_LOCKED_PAGES = new Set([
   // 'auditoria' SAIU: ligada ao GET /admin/logs real (contrato v1 — envelope {logs,total,limit,
   //   offset}, filtros e paginação 100% server-side, formatador com fallback em audit_format.js,
   //   gate por page_key 'logs' na própria tela). KPIs/Exportar/pagina/sku cortados da v1.
-  'usuarios', 'permissoes',
+  // 'permissoes' SAIU: ligada a GET/POST /admin/permissions/{roles,users} reais (matriz papel ×
+  //   chaves + exceções por usuário, replace-all com confirm de logout forçado, gate por
+  //   page_key 'permissoes' na própria tela). Mock setor/classes morreu inteiro; criar/remover
+  //   papel e normalização da convenção mista ficaram FORA da v1 (decisão travada).
+  'usuarios',
   // Rotas mortas (fora de qualquer menu) — link direto vê o cadeado, não a tela mock
   'tarefas', 'eletrica', 'avisos', 'calculadora',
 ]);

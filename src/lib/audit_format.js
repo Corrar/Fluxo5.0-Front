@@ -30,6 +30,20 @@ function legivel(details) {
   }
 }
 
+// Frase dos UPDATE_*_PERMISSIONS: o details NOVO traz o diff (added/removed, do endurecimento
+// dos POSTs da matriz); logs HISTÓRICOS só têm count — o fallbackAntigo cobre esses.
+function fraseDiffPermissoes(d, fallbackAntigo) {
+  const tem = (a) => Array.isArray(a) && a.length > 0;
+  if (tem(d.added) || tem(d.removed)) {
+    const partes = [];
+    if (tem(d.added)) partes.push(`concedeu ${d.added.join(', ')}`);
+    if (tem(d.removed)) partes.push(`revogou ${d.removed.join(', ')}`);
+    return partes.join(' e ');
+  }
+  if (Array.isArray(d.added) && Array.isArray(d.removed)) return 'salvo sem mudanças';
+  return fallbackAntigo;
+}
+
 // Os 3 CONFRONTO_* compartilham o payload {id_viagem, id_produto, quantidade, tipo_confronto}.
 const alvoViagem = (d) => `Viagem · ${shortId(d.id_viagem)}`;
 const fraseConfronto = (rotulo) => (d) =>
@@ -94,7 +108,10 @@ export const AUDIT_ACTIONS = {
     frase: (d) => `Novo cargo: ${ou(d.new_role)}${d.new_sector ? ` · Setor: ${d.new_sector}` : ''}` },
   UPDATE_USER_PERMISSIONS: { verbo: 'Permissões', kind: 'blue', icon: 'key',
     alvo: (d) => `Usuário · ${shortId(d.user_target)}`,
-    frase: (d) => `${ou(d.count, '0')} exceção(ões) de permissão` },
+    frase: (d) => fraseDiffPermissoes(d, `${ou(d.count, '0')} exceção(ões) de permissão`) },
+  UPDATE_ROLE_PERMISSIONS: { verbo: 'Permissões', kind: 'blue', icon: 'key',
+    alvo: (d) => `Cargo · ${ou(d.role_target)}`,
+    frase: (d) => fraseDiffPermissoes(d, `${ou(d.count, '0')} permissão(ões) no conjunto`) },
 
   // ── Sistema ──
   UPDATE_SETTING: { verbo: 'Configurou', kind: 'amber', icon: 'gear',

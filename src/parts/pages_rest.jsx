@@ -1713,203 +1713,291 @@ function PageCriticos({ t }) {
 }
 
 // ---------- Permissões ----------
-const PERM_KEYS = [
-  { k: 'ver', label: 'Visualizar', icon: 'eye' },
-  { k: 'add', label: 'Adicionar', icon: 'plus' },
-  { k: 'edit', label: 'Editar', icon: 'pencil' },
-  { k: 'rem', label: 'Remover', icon: 'trash' },
+// LIGAÇÃO AO BACKEND: matriz papel × page_keys REAIS + exceções por usuário.
+//   GET  /admin/permissions/roles  → { [role]: page_key[] }      (15 papéis / 57 chaves hoje)
+//   POST /admin/permissions/roles  → replace-all { role, permissions } (guard anti-vazio no back)
+//   GET  /admin/permissions/users  → { [user_id]: page_key[] }
+//   POST /admin/permissions/users  → replace-all { userId, permissions } (vazio = sem exceções)
+//   GET  /users                    → dropdown de usuários reais
+// ESCOPO v1 (travado): SEM criar papel (typo viraria papel-fantasma atribuível na allowlist do
+// UPDATE_ROLE), SEM remover papel (o guard anti-vazio do backend também barra), SEM normalizar
+// a convenção mista flat×namespaced (dívida). O agrupamento por módulo é SÓ VISUAL — o dado é
+// flat; chave sem grupo óbvio cai em "Outras", exibida crua.
+// SALVAR SEMPRE CONFIRMA avisando o efeito real: role_permissions_updated / user_permissions_
+// updated DESLOGAM na hora quem for afetado (comportamento dos dois fronts) — a UI não esconde.
+// Limitação conhecida: o universo de chaves é a UNIÃO dos conjuntos dos papéis (GET /roles);
+// chave que perder o último papel que a tinha some do checklist no próximo load (v1).
+function permErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+
+// Agrupamento VISUAL por módulo (apresentação, nunca semântica). Prefixo → grupo, na ordem.
+const PERM_GRUPOS = [
+  { grupo: 'Estoque', prefixos: ['produtos', 'estoque_critico', 'estoque', 'entradas', 'saidas', 'stock_', 'valores', 'calculo_minimo'] },
+  { grupo: 'Operação', prefixos: ['solicitacoes', 'minhas_solicitacoes', 'separacoes', 'reposicoes', 'confronto_viagem', 'consultar'] },
+  { grupo: 'Produção 3D', prefixos: ['producao_3d', 'solicitar_3d', 'producao'] },
+  { grupo: 'Painéis e Relatórios', prefixos: ['dashboard', 'office_dashboard', 'relatorios'] },
+  { grupo: 'Tarefas e Utilidades', prefixos: ['tarefas_eletrica', 'avisos', 'calculadora'] },
+  { grupo: 'Gestão Admin', prefixos: ['usuarios', 'permissoes', 'logs', 'clientes'] },
 ];
-const PERM_SETORES = ['Usinagem', 'Produção 3D', 'Elétrica', 'Montagem', 'Almoxarifado'];
-const PERM_PAGES = [
-  { grupo: 'Principal', pages: ['Quadro de Tarefas', 'Quadro Elétrica', 'Avisos', 'Calculadora'] },
-  { grupo: 'Estoque', pages: ['Catálogo', 'Entradas', 'Saídas'] },
-  { grupo: 'Operacional', pages: ['Solicitações', 'Meus Pedidos', 'Encomendar 3D', 'Quadro Gestão', 'Reposições', 'Confronto'] },
-  { grupo: 'Gestão Admin', pages: ['Controle de Saída', 'Críticos', 'Relatórios', 'Usuários', 'Clientes e OPs', 'Auditoria', 'Permissões', 'Painel TI'] },
-];
-const ALL_PAGES = PERM_PAGES.flatMap((g) => g.pages);
-function defaultPerms(nome) {
-  const n = nome.toLowerCase();
-  const lvl = n.includes('chefe') || n.includes('admin') || n.includes('supervisor') ? 'full'
-    : n.includes('analista') ? 'edit' : 'view';
-  const out = {};
-  ALL_PAGES.forEach((p) => {
-    out[p] = lvl === 'full' ? { ver: true, add: true, edit: true, rem: true }
-      : lvl === 'edit' ? { ver: true, add: true, edit: true, rem: false }
-      : { ver: true, add: false, edit: false, rem: false };
-  });
-  return out;
+function permGrupoDe(key) {
+  for (const g of PERM_GRUPOS) { if (g.prefixos.some((p) => key === p || key.indexOf(p) === 0)) return g.grupo; }
+  return 'Outras';
 }
-const PERM_SEED = {
-  'Usinagem': { classes: ['Chefe', 'Analista', 'Operador'], users: [{ nome: 'Carlos Moura', classe: 'Chefe' }, { nome: 'Marcos Dias', classe: 'Operador' }, { nome: 'Tiago Reis', classe: 'Analista' }] },
-  'Produção 3D': { classes: ['Chefe', 'Operador'], users: [{ nome: 'Rafael Souza', classe: 'Chefe' }, { nome: 'Davi Miranda', classe: 'Operador' }] },
-  'Elétrica': { classes: ['Chefe', 'Analista', 'Operador'], users: [{ nome: 'Bruno Teixeira', classe: 'Chefe' }, { nome: 'Everton Luz', classe: 'Operador' }] },
-  'Montagem': { classes: ['Chefe', 'Operador'], users: [{ nome: 'Ana Paula', classe: 'Chefe' }, { nome: 'William Costa', classe: 'Operador' }] },
-  'Almoxarifado': { classes: ['Chefe', 'Analista', 'Operador'], users: [{ nome: 'Júlia Ramos', classe: 'Chefe' }, { nome: 'Leo Monteiro', classe: 'Analista' }] },
+
+// Rótulo amigável onde óbvio; a CHAVE CRUA aparece SEMPRE ao lado — a convenção mista faz
+// 'clientes' e 'clientes:view' coexistirem, e sem a chave crua os rótulos colidiriam.
+const PERM_BASES = {
+  produtos: 'Produtos', estoque: 'Estoque', entradas: 'Entradas', saidas: 'Saídas',
+  estoque_critico: 'Críticos', valores: 'Valores', calculo_minimo: 'Cálculo de Mínimo',
+  stock_view_edit: 'Estoque — editar visão', stock_view_financial: 'Estoque — visão financeira',
+  clientes: 'Clientes e OPs', solicitacoes: 'Solicitações', minhas_solicitacoes: 'Meus Pedidos',
+  separacoes: 'Separações', reposicoes: 'Reposições', confronto_viagem: 'Confronto de Viagem',
+  consultar: 'Consulta', dashboard: 'Dashboard', office_dashboard: 'Painel do Escritório',
+  relatorios: 'Relatórios', producao_3d: 'Produção 3D', solicitar_3d: 'Encomendar 3D',
+  producao: 'Produção', tarefas_eletrica: 'Quadro Elétrica', avisos: 'Avisos',
+  calculadora: 'Calculadora', usuarios: 'Usuários', permissoes: 'Permissões', logs: 'Auditoria',
 };
-function buildPermData() {
-  const d = {};
-  Object.entries(PERM_SEED).forEach(([setor, v]) => {
-    d[setor] = { classes: v.classes.map((nome) => ({ nome, perms: defaultPerms(nome) })), users: v.users.map((u) => ({ ...u })) };
-  });
-  return d;
+const PERM_ACOES = { view: 'ver', add: 'adicionar', edit: 'editar', delete: 'excluir', apontar: 'apontar' };
+function permLabelDe(key) {
+  const partes = key.split(':');
+  const b = PERM_BASES[partes[0]];
+  if (!b) return key; // sem rótulo óbvio → chave crua
+  return partes[1] ? `${b} — ${PERM_ACOES[partes[1]] || partes[1]}` : b;
 }
 
+// Gate por permissão, padrão da Auditoria: sem page_key 'permissoes' a tela interna NEM MONTA
+// (nenhuma chamada de rede). Ver ≠ salvar: o POST segue admin-only no backend — um não-admin
+// com 'permissoes' vê a matriz e recebe o 403 do salvar no Card de erro (é o desenho).
 function PagePermissoes({ t }) {
-  const [data, setData] = useStateR(buildPermData);
-  const [setor, setSetor] = useStateR(PERM_SETORES[0]);
-  const [openClasse, setOpenClasse] = useStateR(null);
-  const [novaClasse, setNovaClasse] = useStateR('');
-  const cur = data[setor];
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('permissoes')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Permissões" subtitle="Matriz de acesso por cargo e exceções por usuário." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (permissoes) para ver a matriz.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return <PagePermissoesReal t={t} />;
+}
 
-  const findCi = (nome) => cur.classes.findIndex((c) => c.nome === nome);
-  const togglePerm = (nome, page, k) => setData((d) => {
-    const next = JSON.parse(JSON.stringify(d));
-    const ci = next[setor].classes.findIndex((c) => c.nome === nome);
-    const pp = next[setor].classes[ci].perms[page]; pp[k] = !pp[k];
-    return next;
-  });
-  const toggleCol = (nome, k) => setData((d) => {
-    const next = JSON.parse(JSON.stringify(d));
-    const cls = next[setor].classes.find((c) => c.nome === nome);
-    const allOn = ALL_PAGES.every((p) => cls.perms[p][k]);
-    ALL_PAGES.forEach((p) => { cls.perms[p][k] = !allOn; });
-    return next;
-  });
-  const addClasse = () => {
-    const n = novaClasse.trim(); if (!n) return;
-    setData((d) => {
-      if (d[setor].classes.some((c) => c.nome.toLowerCase() === n.toLowerCase())) return d;
-      const next = JSON.parse(JSON.stringify(d));
-      next[setor].classes.push({ nome: n, perms: defaultPerms(n) });
-      return next;
-    });
-    setOpenClasse(n); setNovaClasse('');
+function PagePermissoesReal({ t }) {
+  const R = window.React;
+  const [aba, setAba] = R.useState('papeis'); // 'papeis' | 'excecoes'
+  const [matriz, setMatriz] = R.useState(null);     // GET /roles → { role: keys[] }
+  const [excecoes, setExcecoes] = R.useState(null); // GET /users (permissions) → { user_id: keys[] }
+  const [usuarios, setUsuarios] = R.useState([]);   // GET /users (contas)
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const [papel, setPapel] = R.useState('');
+  const [usuarioId, setUsuarioId] = R.useState('');
+  const [marcadas, setMarcadas] = R.useState([]);
+  const [confirmando, setConfirmando] = R.useState(false);
+  const [salvando, setSalvando] = R.useState(false);
+  const [feedback, setFeedback] = R.useState(null); // { kind: 'ok'|'erro', msg }
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setError(null);
+    return Promise.all([
+      window.FRApi.get('/admin/permissions/roles', { skipLoading: true }),
+      window.FRApi.get('/admin/permissions/users', { skipLoading: true }),
+      window.FRApi.get('/users', { skipLoading: true }),
+    ]).then(function (rs) {
+      setMatriz(rs[0].data || {});
+      setExcecoes(rs[1].data || {});
+      setUsuarios(Array.isArray(rs[2].data) ? rs[2].data.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }) : []);
+      if (inicial) setLoading(false);
+    }).catch(function (e) { setError(permErr(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  // Defaults após o primeiro load: primeiro papel em ordem alfabética / primeiro usuário por nome.
+  R.useEffect(function () {
+    if (matriz && !papel) { const rs = Object.keys(matriz).sort(); if (rs.length) setPapel(rs[0]); }
+  }, [matriz, papel]);
+  R.useEffect(function () {
+    if (usuarios.length > 0 && !usuarioId) setUsuarioId(usuarios[0].id);
+  }, [usuarios, usuarioId]);
+
+  // Baseline = verdade carregada do servidor; troca de alvo/aba (ou reload pós-save) ressincroniza.
+  const baseline = aba === 'papeis' ? ((matriz && matriz[papel]) || []) : ((excecoes && excecoes[usuarioId]) || []);
+  R.useEffect(function () {
+    setMarcadas(baseline.slice());
+    setFeedback(null);
+    // baseline entra via matriz/excecoes/papel/usuarioId — strings/objetos estáveis do estado
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aba, papel, usuarioId, matriz, excecoes]);
+
+  // Universo do checklist = união dos conjuntos de TODOS os papéis (dado real, flat).
+  const universo = R.useMemo(function () {
+    if (!matriz) return [];
+    const s = new Set();
+    Object.keys(matriz).forEach(function (r) { (matriz[r] || []).forEach(function (k) { s.add(k); }); });
+    return Array.from(s).sort();
+  }, [matriz]);
+  const grupos = R.useMemo(function () {
+    const m = new Map();
+    universo.forEach(function (k) { const g = permGrupoDe(k); if (!m.has(g)) m.set(g, []); m.get(g).push(k); });
+    const ordem = PERM_GRUPOS.map(function (g) { return g.grupo; }).concat(['Outras']);
+    return ordem.filter(function (g) { return m.has(g); }).map(function (g) { return { grupo: g, keys: m.get(g) }; });
+  }, [universo]);
+
+  const addedNow = marcadas.filter(function (k) { return baseline.indexOf(k) < 0; }).sort();
+  const removedNow = baseline.filter(function (k) { return marcadas.indexOf(k) < 0; }).sort();
+  const dirty = addedNow.length > 0 || removedNow.length > 0;
+  // Espelha o guard do backend: conjunto vazio de PAPEL removeria o papel da allowlist — a UI
+  // nem deixa tentar (no espelho por usuário, vazio é legítimo = sem exceções).
+  const vazioBloqueado = aba === 'papeis' && marcadas.length === 0;
+
+  const alternar = function (k) {
+    setMarcadas(function (m) { return m.indexOf(k) >= 0 ? m.filter(function (x) { return x !== k; }) : m.concat([k]); });
   };
-  const delClasse = (nome) => setData((d) => {
-    const next = JSON.parse(JSON.stringify(d));
-    next[setor].classes = next[setor].classes.filter((c) => c.nome !== nome);
-    next[setor].users = next[setor].users.map((u) => (u.classe === nome ? { ...u, classe: '' } : u));
-    return next;
-  });
-  const setUserClasse = (ui, classe) => setData((d) => {
-    const next = JSON.parse(JSON.stringify(d));
-    next[setor].users[ui].classe = classe;
-    return next;
-  });
-  const pickSetor = (s) => { setSetor(s); setOpenClasse(null); };
 
-  const av = (n) => n.split(' ').map((x) => x[0]).slice(0, 2).join('');
-  const field = { boxSizing: 'border-box', height: 42, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
-  const usersInClass = (nome) => cur.users.filter((u) => u.classe === nome).length;
-  const permSummary = (cls) => { const c = { ver: 0, add: 0, edit: 0, rem: 0 }; ALL_PAGES.forEach((p) => PERM_KEYS.forEach((k) => { if (cls.perms[p][k.k]) c[k.k]++; })); return c; };
+  const usuarioAlvo = usuarios.filter(function (u) { return u.id === usuarioId; })[0] || null;
+  const roleLabel = (window.FRAccess && window.FRAccess.roleLabel) || function (r) { return r; };
 
-  const Toggle = ({ on, onClick }) => (
-    <button onClick={onClick} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 26, height: 26, borderRadius: 8, margin: '0 auto', background: on ? uiTone(t, 'green').fg : t.hover, color: on ? '#fff' : t.faint, border: `1px solid ${on ? 'transparent' : t.border}` }}>
-      <Icon name={on ? 'check' : 'x'} size={14} />
-    </button>
-  );
+  const salvar = function () {
+    setSalvando(true); setFeedback(null);
+    const req = aba === 'papeis'
+      ? window.FRApi.post('/admin/permissions/roles', { role: papel, permissions: marcadas })
+      : window.FRApi.post('/admin/permissions/users', { userId: usuarioId, permissions: marcadas });
+    req.then(function () {
+      // Recarrega do servidor (verdade autoritativa) — o baseline novo zera o dirty.
+      return carregar(false).then(function () {
+        setFeedback({ kind: 'ok', msg: 'Salvo. Quem foi afetado foi deslogado e entra com o conjunto novo.' });
+      });
+    }).catch(function (e) {
+      setFeedback({ kind: 'erro', msg: permErr(e) });
+    }).then(function () { setSalvando(false); setConfirmando(false); });
+  };
+
+  const selStyle = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 32px 0 13px', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', appearance: 'none', WebkitAppearance: 'none', outline: 'none', cursor: 'pointer', maxWidth: 320 };
+  const tabBtn = function (on) { return { all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 16px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: on ? t.accent : t.panel, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }; };
 
   return (
     <div>
-      <PageHeader t={t} title="Permissões" subtitle="Por setor, defina classes e o que cada uma pode fazer em cada página do sistema." />
+      <PageHeader t={t} title="Permissões" subtitle="Matriz de acesso por cargo e exceções por usuário — direto do banco, salvar aplica na hora."
+        actions={<Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Atualizar</Btn>} />
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 22 }}>
-        {PERM_SETORES.map((s) => {
-          const on = setor === s;
-          return (
-            <button key={s} onClick={() => pickSetor(s)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 16px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: on ? t.accent : t.panel, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}`, boxShadow: on ? `0 4px 12px ${frHexToRgba(t.accent, 0.25)}` : 'none' }}>
-              <Icon name="briefcase" size={15} /> {s}
-              <span style={{ fontSize: 11, fontWeight: 800, padding: '1px 7px', borderRadius: 7, background: on ? 'rgba(255,255,255,.25)' : t.hover, color: on ? t.onAccent : t.muted }}>{data[s].users.length}</span>
-            </button>
-          );
-        })}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+        <button onClick={() => setAba('papeis')} style={tabBtn(aba === 'papeis')}><Icon name="shield" size={15} /> Papéis</button>
+        <button onClick={() => setAba('excecoes')} style={tabBtn(aba === 'excecoes')}><Icon name="key" size={15} /> Exceções por usuário</button>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Classes de acesso · {setor}</span>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input value={novaClasse} onChange={(e) => setNovaClasse(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addClasse()} placeholder="Nova classe…" style={{ ...field, height: 40, width: 160 }} />
-          <button onClick={addClasse} disabled={!novaClasse.trim()} style={{ all: 'unset', cursor: novaClasse.trim() ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6, height: 40, padding: '0 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: novaClasse.trim() ? t.accent : t.elevated, color: novaClasse.trim() ? t.onAccent : t.faint }}><Icon name="plus" size={15} /> Criar</button>
-        </div>
-      </div>
-
-      {/* accordion de classes */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 8 }}>
-        {cur.classes.map((c) => {
-          const open = openClasse === c.nome;
-          const sum = permSummary(c);
-          return (
-            <Card t={t} key={c.nome} style={{ overflow: 'hidden', border: `1px solid ${open ? frHexToRgba(t.accent, 0.4) : t.border}` }}>
-              <div onClick={() => setOpenClasse(open ? null : c.nome)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '16px 18px', cursor: 'pointer', background: open ? t.accentSoft : 'transparent' }}>
-                <span style={{ width: 38, height: 38, borderRadius: 11, background: open ? t.accent : t.accentSoft, color: open ? t.onAccent : t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="shield" size={19} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>{c.nome}</div>
-                  <div style={{ fontSize: 11.5, color: t.muted }}>{usersInClass(c.nome)} {usersInClass(c.nome) === 1 ? 'usuário' : 'usuários'} · {sum.ver}/{ALL_PAGES.length} páginas visíveis</div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, marginRight: 6 }}>
-                  {PERM_KEYS.map((k) => <span key={k.k} title={k.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '4px 8px', borderRadius: 7, background: t.hover, color: t.muted }}><Icon name={k.icon} size={12} /> {sum[k.k]}</span>)}
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); delClasse(c.nome); }} title="Excluir classe" style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={15} /></button>
-                <Icon name="chevronDown" size={18} style={{ color: t.muted, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .2s', flexShrink: 0 }} />
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando matriz de permissões…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(true)}>Tentar novamente</Btn>
+        </Card>
+      ) : (
+        <div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+            {aba === 'papeis' ? (
+              <div style={{ position: 'relative' }}>
+                <select value={papel} onChange={(e) => setPapel(e.target.value)} style={selStyle}>
+                  {Object.keys(matriz || {}).sort().map((r) => {
+                    const lbl = roleLabel(r);
+                    return <option key={r} value={r}>{lbl === r ? r : `${lbl} (${r})`}</option>;
+                  })}
+                </select>
+                <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
               </div>
-              {open && (
-                <div style={{ borderTop: `1px solid ${t.border}`, overflowX: 'auto' }} className="fr-scroll">
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '12px 18px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}` }}>Página</th>
-                        {PERM_KEYS.map((p) => (
-                          <th key={p.k} style={{ padding: '10px 8px', borderBottom: `1px solid ${t.border}`, textAlign: 'center', minWidth: 80 }}>
-                            <button onClick={() => toggleCol(c.nome, p.k)} title={`Marcar/desmarcar ${p.label} em tudo`} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: t.text }}>
-                              <Icon name={p.icon} size={15} style={{ color: t.accentText }} />
-                              <span style={{ fontSize: 10.5, fontWeight: 800 }}>{p.label}</span>
-                            </button>
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {PERM_PAGES.map((g) => (
-                        <React.Fragment key={g.grupo}>
-                          <tr><td colSpan={5} style={{ padding: '10px 18px 6px', fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint, background: t.elevated }}>{g.grupo}</td></tr>
-                          {g.pages.map((page) => (
-                            <tr key={page}>
-                              <td style={{ padding: '10px 18px', fontSize: 13.5, fontWeight: 600, color: t.text, borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>{page}</td>
-                              {PERM_KEYS.map((p) => (
-                                <td key={p.k} style={{ padding: '8px', textAlign: 'center', borderBottom: `1px solid ${t.border}` }}>
-                                  <Toggle on={c.perms[page][p.k]} onClick={() => togglePerm(c.nome, page, p.k)} />
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Card>
-          );
-        })}
-      </div>
+            ) : (
+              <div style={{ position: 'relative' }}>
+                <select value={usuarioId} onChange={(e) => setUsuarioId(e.target.value)} style={selStyle}>
+                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.name} · {roleLabel(u.role)}</option>)}
+                </select>
+                <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
+              </div>
+            )}
+            <span style={{ fontSize: 12.5, color: t.muted }}>
+              {aba === 'papeis'
+                ? `${marcadas.length} de ${universo.length} chaves marcadas`
+                : `${marcadas.length} exceção(ões) — além do que o cargo ${usuarioAlvo ? roleLabel(usuarioAlvo.role) : ''} já concede`}
+            </span>
+          </div>
 
-      <div style={{ fontSize: 15, fontWeight: 800, color: t.text, margin: '24px 0 12px' }}>Usuários · {setor}</div>
-      <Card t={t} style={{ padding: 8 }}>
-        {cur.users.map((u, ui) => (
-          <div key={u.nome} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '12px 14px', borderBottom: ui === cur.users.length - 1 ? 'none' : `1px solid ${t.border}` }}>
-            <span style={{ width: 38, height: 38, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 12.5, flexShrink: 0 }}>{av(u.nome)}</span>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>{u.nome}</div><div style={{ fontSize: 11.5, color: t.muted }}>{setor}</div></div>
-            <div style={{ position: 'relative' }}>
-              <select value={u.classe} onChange={(e) => setUserClasse(ui, e.target.value)} style={{ ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 34, cursor: 'pointer', fontWeight: 700 }}>
-                <option value="">Sem classe</option>
-                {cur.classes.map((c) => <option key={c.nome} value={c.nome}>{c.nome}</option>)}
-              </select>
-              <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 12, top: 13, color: t.muted, pointerEvents: 'none' }} />
+          <Card t={t} style={{ padding: 8, marginBottom: 14 }}>
+            {grupos.map((g) => (
+              <React.Fragment key={g.grupo}>
+                <div style={{ padding: '12px 14px 6px', fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint, background: t.elevated, borderRadius: 8 }}>{g.grupo}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2, padding: '6px 4px 10px' }}>
+                  {g.keys.map((k) => {
+                    const on = marcadas.indexOf(k) >= 0;
+                    const mudou = (baseline.indexOf(k) >= 0) !== on;
+                    return (
+                      <div key={k} onClick={() => alternar(k)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 10, cursor: 'pointer', background: mudou ? uiTone(t, 'amber').bg : 'transparent', transition: 'background .12s' }}
+                        onMouseEnter={(e) => { if (!mudou) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { if (!mudou) e.currentTarget.style.background = 'transparent'; }}>
+                        <span style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, display: 'grid', placeItems: 'center', background: on ? uiTone(t, 'green').fg : t.hover, color: on ? '#fff' : t.faint, border: `1px solid ${on ? 'transparent' : t.border}` }}>
+                          <Icon name={on ? 'check' : 'x'} size={13} />
+                        </span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{permLabelDe(k)}</div>
+                          {permLabelDe(k) !== k && <div style={{ fontSize: 10.5, color: t.faint, fontFamily: 'ui-monospace, monospace' }}>{k}</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </React.Fragment>
+            ))}
+          </Card>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <Btn t={t} icon="check" kind={dirty && !vazioBloqueado ? 'primary' : 'ghost'} onClick={() => { if (dirty && !vazioBloqueado && !salvando) setConfirmando(true); }}>
+              {salvando ? 'Salvando…' : 'Salvar'}
+            </Btn>
+            {dirty && <Btn t={t} icon="undo" kind="ghost" onClick={() => setMarcadas(baseline.slice())}>Desfazer</Btn>}
+            {dirty && !vazioBloqueado && (
+              <span style={{ fontSize: 12.5, color: t.muted }}>
+                {addedNow.length > 0 ? `+${addedNow.length} concedida(s)` : ''}{addedNow.length > 0 && removedNow.length > 0 ? ' · ' : ''}{removedNow.length > 0 ? `−${removedNow.length} revogada(s)` : ''}
+              </span>
+            )}
+            {vazioBloqueado && (
+              <span style={{ fontSize: 12.5, color: uiTone(t, 'red').fg, fontWeight: 700 }}>
+                Conjunto vazio não é permitido: removeria o papel da allowlist (remoção de papel não existe na v1).
+              </span>
+            )}
+            {!dirty && feedback && (
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.kind === 'ok' ? uiTone(t, 'green').fg : uiTone(t, 'red').fg }}>{feedback.msg}</span>
+            )}
+            {dirty && feedback && feedback.kind === 'erro' && (
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{feedback.msg}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {confirmando && (
+        <div onClick={() => !salvando && setConfirmando(false)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 11, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={20} /></span>
+              <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>Confirmar alteração de acesso</div>
+            </div>
+            <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5, marginBottom: 8 }}>
+              {aba === 'papeis'
+                ? `Salvar desloga imediatamente todos os usuários do cargo ${papel} (precisarão entrar de novo).`
+                : `Salvar desloga imediatamente ${usuarioAlvo ? usuarioAlvo.name : 'o usuário'} (precisará entrar de novo).`}
+            </div>
+            <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 18 }}>
+              {addedNow.length > 0 && <div>Concede: {addedNow.join(', ')}</div>}
+              {removedNow.length > 0 && <div>Revoga: {removedNow.join(', ')}</div>}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <Btn t={t} kind="ghost" onClick={() => !salvando && setConfirmando(false)}>Cancelar</Btn>
+              <Btn t={t} icon="check" onClick={() => !salvando && salvar()}>{salvando ? 'Salvando…' : 'Confirmar e salvar'}</Btn>
             </div>
           </div>
-        ))}
-      </Card>
+        </div>
+      )}
     </div>
   );
 }
