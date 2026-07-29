@@ -627,58 +627,204 @@ function PageSaidas({ t }) {
   );
 }
 
-const USUARIOS_SEED = [
-  { id: '027', nome: 'Valdecir Bonatto', cargo: 'Operador / Funcionário', setor: 'Usinagem', online: false, tempo: '0h', acao: 'há 1 dia' },
-  { id: '026', nome: 'Torneiros', cargo: 'Operador / Funcionário', setor: 'Usinagem', online: false, tempo: '0h', acao: 'há cerca de 21 horas' },
-  { id: '025', nome: 'Rafael Russo', cargo: 'Operador / Funcionário', setor: 'Usinagem', online: false, tempo: '0h', acao: 'há cerca de 21 horas' },
-  { id: '024', nome: 'Leo Monteiro', cargo: 'Operador / Funcionário', setor: 'Usinagem', online: false, tempo: '1h', acao: 'há cerca de 2 horas' },
-  { id: '023', nome: 'Mirela Fantim', cargo: 'Operador / Funcionário', setor: 'Montagem', online: true, tempo: '4h', acao: 'há 6 min' },
-  { id: '022', nome: 'Ana Esteves', cargo: 'Escritório', setor: 'Qualidade', online: false, tempo: '2h', acao: 'há 3 horas' },
-  { id: '021', nome: 'Lincoln Gomes', cargo: 'Chefe', setor: 'Produção 3D', online: true, tempo: '6h', acao: 'agora' },
-  { id: '020', nome: 'Vitor Ladeia', cargo: 'Operador / Funcionário', setor: 'Elétrica', online: true, tempo: '3h', acao: 'há 12 min' },
-  { id: '019', nome: 'Bruno Teixeira', cargo: 'Administrador Global', setor: 'Diretoria', online: true, tempo: '8h', acao: 'agora' },
-  { id: '018', nome: 'Carlos Moura', cargo: 'Líder de Usinagem', setor: 'Usinagem', online: false, tempo: '5h', acao: 'ontem' },
-  { id: '017', nome: 'Júlia Ramos', cargo: 'Gerente', setor: 'Qualidade', online: true, tempo: '7h', acao: 'há 1 h' },
-  { id: '016', nome: 'Davi Miranda', cargo: 'Operador / Funcionário', setor: 'Produção 3D', online: false, tempo: '2h', acao: 'há 4 horas' },
-];
-const CARGO_GROUPS = [
-  { grupo: 'Setor: Usinagem', cargos: ['Líder de Usinagem', 'Operador / Funcionário'] },
-  { grupo: 'Administração e Gerência', cargos: ['Administrador Global', 'Gerente', 'Escritório', 'Financeiro', 'Chefe'] },
-  { grupo: 'Logística e Almoxarifado', cargos: ['Almoxarife', 'Conferente', 'Motorista'] },
-  { grupo: 'Produção', cargos: ['Operador 3D', 'Eletricista', 'Montador'] },
-];
-const genPw = (u) => 'FR-' + u.id + (u.nome.split(' ')[0] || '').toLowerCase();
+// ---------- Usuários (Gestão de Equipe) ----------
+// LIGAÇÃO REAL ao backend — o mock inteiro morreu (USUARIOS_SEED, CARGO_GROUPS e o "Ver senha",
+// que era impossível de ligar: o backend só guarda hash bcrypt, senha em claro não existe).
+//   GET    /users                    → lista CHEIA (id/nome/email/is_active/cargo/setor/métricas).
+//                                      A tela é gateada por 'usuarios' — exatamente o critério que
+//                                      libera o payload cheio no backend; os dois andam juntos.
+//   PUT    /users/:id/status         → suspender/reativar. AÇÃO PRIMÁRIA do card (com confirm):
+//                                      é o caminho honesto pra bloquear acesso preservando histórico.
+//   DELETE /users/:id                → excluir, ação SECUNDÁRIA no menu. 409 = tem histórico →
+//                                      modal honesto oferece suspender no lugar (dispara o PUT).
+//   PUT    /users/:id/role           → troca de cargo (confirm: desloga o alvo na hora — o token
+//                                      dele carrega o cargo velho).
+//   POST   /auth/register            → Novo Colaborador (senha inicial DIGITADA ≥6 + confirmação;
+//                                      sem troca forçada no 1º login — dívida registrada no back).
+//   POST   /users/:id/reset-password → Redefinir senha (modal; 404 do id fantasma → erro no Card).
+//   GET    /admin/permissions/roles  → papéis REAIS atribuíveis (mesma fonte da tela Permissões).
+//                                      A rota é gateada por 'permissoes' — hoje quem vê esta tela
+//                                      também a tem; se divergir, o dropdown avisa em vez de quebrar.
+// Busca LOCAL de propósito: GET /users não pagina (15 contas hoje) — filtrar em memória basta e
+// evita inventar contrato de paginação/busca no backend só pra isto.
+// Online DERIVADO: last_active há menos de 10min (heartbeat real bate a cada 5min — 2 batidas de
+// folga). Tempo útil = total_minutes formatado. Nada disso existe como flag no backend.
 
+const USR_ONLINE_MS = 10 * 60 * 1000;
+function usrErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function usrTempo(min) {
+  const m = Math.max(0, Math.round(Number(min) || 0));
+  if (m < 60) return m + 'min';
+  const h = Math.floor(m / 60);
+  return m % 60 ? h + 'h ' + (m % 60) + 'min' : h + 'h';
+}
+function usrRelativo(iso) {
+  if (!iso) return 'nunca entrou';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!isFinite(ms)) return '—';
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return 'agora';
+  if (min < 60) return 'há ' + min + ' min';
+  const h = Math.floor(min / 60);
+  if (h < 24) return 'há ' + h + ' h';
+  const d = Math.floor(h / 24);
+  return d === 1 ? 'ontem' : 'há ' + d + ' dias';
+}
+function usrOnline(u) { return u.is_active !== false && !!u.last_active && (Date.now() - new Date(u.last_active).getTime()) < USR_ONLINE_MS; }
+function usrIniciais(nome) { return String(nome || '?').split(' ').map((x) => x[0]).filter(Boolean).slice(0, 2).join('').toUpperCase(); }
+
+// Gate por permissão, padrão da Auditoria/Permissões: sem a page_key 'usuarios' a tela interna
+// NEM MONTA (nenhuma chamada de rede). O backend espelha: sem 'usuarios' o GET vem magro e as
+// ações devolvem 403 — a UI só não deixa chegar lá.
 function PageUsuarios({ t }) {
-  const [users, setUsers] = useStateA(USUARIOS_SEED);
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('usuarios')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Gestão de Equipe" subtitle="Contas, acessos e atividade dos colaboradores." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (usuarios) para gerir a equipe.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return <PageUsuariosReal t={t} />;
+}
+
+function PageUsuariosReal({ t }) {
+  const meuId = (window.FRAuth.user && window.FRAuth.user.id) || null;
+  const roleLabel = (window.FRAccess && window.FRAccess.roleLabel) || function (r) { return r; };
+
+  const [usuarios, setUsuarios] = useStateA([]);
+  const [papeis, setPapeis] = useStateA([]);           // chaves reais (GET /admin/permissions/roles)
+  const [papeisErro, setPapeisErro] = useStateA(null);
+  const [loading, setLoading] = useStateA(true);
+  const [error, setError] = useStateA(null);
   const [q, setQ] = useStateA('');
   const [menuId, setMenuId] = useStateA(null);
   const [cargoId, setCargoId] = useStateA(null);
-  const [pwUser, setPwUser] = useStateA(null);
-  const [pwShow, setPwShow] = useStateA(false);
-  const [pwMap, setPwMap] = useStateA({});
-  const [toast, setToast] = useStateA(null);
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2200); };
-  const pwOf = (u) => pwMap[u.id] || genPw(u);
+  const [confirmando, setConfirmando] = useStateA(null); // { tipo:'suspender'|'reativar'|'excluir'|'cargo', user, cargo? }
+  const [modal409, setModal409] = useStateA(null);       // { user }
+  const [novo, setNovo] = useStateA(null);               // { email, nome, cargo, setor, senha, senha2, erro }
+  const [reset, setReset] = useStateA(null);             // { user, senha, senha2, erro }
+  const [agindo, setAgindo] = useStateA(false);
+  const [toast, setToast] = useStateA(null);             // { msg, kind:'ok'|'erro' }
+  const flash = (msg, kind) => { setToast({ msg, kind: kind || 'ok' }); setTimeout(() => setToast(null), 2600); };
 
-  const setCargo = (id, cargo) => { setUsers((xs) => xs.map((u) => (u.id === id ? { ...u, cargo } : u))); setCargoId(null); };
-  const suspender = (u) => { setUsers((xs) => xs.map((x) => (x.id === u.id ? { ...x, online: false, suspenso: !x.suspenso } : x))); setMenuId(null); flash(u.suspenso ? 'Acesso reativado' : 'Acesso suspenso'); };
-  const excluir = (u) => { setUsers((xs) => xs.filter((x) => x.id !== u.id)); setMenuId(null); flash('Conta excluída'); };
-  const copiarId = (u) => { try { navigator.clipboard && navigator.clipboard.writeText(u.id); } catch (e) {} setMenuId(null); flash('ID ' + u.id + ' copiado'); };
-  const redefinir = (u) => { const np = 'FR-' + Math.random().toString(36).slice(2, 8); setPwMap((m) => ({ ...m, [u.id]: np })); setMenuId(null); setPwUser(u); setPwShow(true); flash('Senha redefinida'); };
-  const verSenha = (u) => { setMenuId(null); setPwUser(u); setPwShow(false); };
+  const carregar = React.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setError(null);
+    return Promise.all([
+      window.FRApi.get('/users', { skipLoading: true }),
+      // Papéis em chamada tolerante: alimentam recursos secundários (trocar cargo / criar conta);
+      // se falhar (403 de quem não tem 'permissoes'), a LISTA continua de pé e o dropdown avisa.
+      window.FRApi.get('/admin/permissions/roles', { skipLoading: true }).catch(function (e) { return { __erro: usrErr(e) }; }),
+    ]).then(function (rs) {
+      setUsuarios(Array.isArray(rs[0].data) ? rs[0].data : []);
+      if (rs[1].__erro) { setPapeis([]); setPapeisErro(rs[1].__erro); }
+      else { setPapeis(Object.keys(rs[1].data || {}).sort()); setPapeisErro(null); }
+      if (inicial) setLoading(false);
+    }).catch(function (e) { setError(usrErr(e)); if (inicial) setLoading(false); });
+  }, []);
+  React.useEffect(function () { carregar(true); }, [carregar]);
 
+  // ── Ações reais (todas recarregam do servidor — a lista é a verdade autoritativa) ──
+  const mudarStatus = function (u, ativo) {
+    setAgindo(true);
+    window.FRApi.put('/users/' + u.id + '/status', { is_active: ativo })
+      .then(function () { return carregar(false); })
+      .then(function () { flash(ativo ? 'Acesso reativado.' : 'Acesso suspenso — o usuário foi deslogado.'); })
+      .catch(function (e) { flash(usrErr(e), 'erro'); })
+      .then(function () { setAgindo(false); setConfirmando(null); setModal409(null); });
+  };
+  const excluir = function (u) {
+    setAgindo(true);
+    window.FRApi.delete('/users/' + u.id)
+      .then(function () { return carregar(false); })
+      .then(function () { flash('Conta excluída.'); })
+      .catch(function (e) {
+        // O interceptor do api.js normaliza o erro pra { status, message, raw } — sem .response.
+        if (e && e.status === 409) { setModal409({ user: u }); }
+        else { flash(usrErr(e), 'erro'); }
+      })
+      .then(function () { setAgindo(false); setConfirmando(null); });
+  };
+  const trocarCargo = function (u, cargo) {
+    setAgindo(true);
+    window.FRApi.put('/users/' + u.id + '/role', { role: cargo })
+      .then(function () { return carregar(false); })
+      .then(function () { flash('Cargo atualizado — o usuário foi deslogado.'); })
+      .catch(function (e) { flash(usrErr(e), 'erro'); })
+      .then(function () { setAgindo(false); setConfirmando(null); });
+  };
+  const criar = function () {
+    const n = novo || {};
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(n.email || '').trim());
+    if (!emailOk) return setNovo({ ...n, erro: 'E-mail inválido.' });
+    if (!String(n.nome || '').trim()) return setNovo({ ...n, erro: 'Nome é obrigatório.' });
+    if (!n.cargo) return setNovo({ ...n, erro: 'Escolha o cargo.' });
+    if (String(n.senha || '').length < 6) return setNovo({ ...n, erro: 'A senha inicial deve ter pelo menos 6 caracteres.' });
+    if (n.senha !== n.senha2) return setNovo({ ...n, erro: 'As senhas não conferem.' });
+    setAgindo(true);
+    window.FRApi.post('/auth/register', { email: String(n.email).trim(), password: n.senha, name: String(n.nome).trim(), role: n.cargo, sector: String(n.setor || '').trim() || undefined })
+      .then(function () { return carregar(false); })
+      .then(function () { setNovo(null); flash('Colaborador criado.'); })
+      .catch(function (e) { setNovo(function (m) { return { ...m, erro: usrErr(e) }; }); })
+      .then(function () { setAgindo(false); });
+  };
+  const redefinir = function () {
+    const r = reset || {};
+    if (String(r.senha || '').length < 6) return setReset({ ...r, erro: 'A nova senha deve ter pelo menos 6 caracteres.' });
+    if (r.senha !== r.senha2) return setReset({ ...r, erro: 'As senhas não conferem.' });
+    setAgindo(true);
+    window.FRApi.post('/users/' + r.user.id + '/reset-password', { newPassword: r.senha })
+      .then(function () { setReset(null); flash('Senha redefinida.'); })
+      .catch(function (e) { setReset(function (m) { return { ...m, erro: usrErr(e) }; }); })
+      .then(function () { setAgindo(false); });
+  };
+  const copiarId = function (u) { try { navigator.clipboard && navigator.clipboard.writeText(u.id); } catch (e) {} setMenuId(null); flash('ID copiado.'); };
+
+  // ── Derivações (busca local + KPIs — ver nota de topo sobre paginação) ──
   const ql = q.trim().toLowerCase();
-  const view = users.filter((u) => !ql || u.nome.toLowerCase().includes(ql) || u.id.includes(ql) || u.cargo.toLowerCase().includes(ql) || u.setor.toLowerCase().includes(ql));
-  const online = users.filter((u) => u.online).length;
-  const av = (n) => n.split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase();
-  const field = { boxSizing: 'border-box', height: 38, borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', outline: 'none', width: '100%' };
+  const view = usuarios.filter(function (u) {
+    if (!ql) return true;
+    return [u.name, u.email, u.role, roleLabel(u.role), u.sector].some(function (v) { return String(v || '').toLowerCase().includes(ql); });
+  });
+  const onlineAgora = usuarios.filter(usrOnline).length;
+  const minutosTotais = usuarios.reduce(function (s, u) { return s + (Number(u.total_minutes) || 0); }, 0);
 
-  const menuItem = (icon, label, onClick, danger) => (
-    <button onClick={onClick} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '9px 12px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: danger ? uiTone(t, 'red').fg : t.text }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = danger ? uiTone(t, 'red').bg : t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+  const field = { boxSizing: 'border-box', height: 38, borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', outline: 'none', width: '100%' };
+  const inputM = { boxSizing: 'border-box', height: 42, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', outline: 'none', width: '100%' };
+  const lblM = { display: 'block', fontSize: 10.5, fontWeight: 800, letterSpacing: '.07em', color: t.faint, textTransform: 'uppercase', margin: '14px 0 6px' };
+  const menuItem = (icon, label, onClick, danger, disabled, title) => (
+    <button onClick={disabled ? undefined : onClick} title={title} style={{ all: 'unset', boxSizing: 'border-box', cursor: disabled ? 'not-allowed' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '9px 12px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: disabled ? t.faint : danger ? uiTone(t, 'red').fg : t.text, opacity: disabled ? 0.7 : 1 }}
+      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = danger ? uiTone(t, 'red').bg : t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
       <Icon name={icon} size={16} /> {label}
     </button>
+  );
+  const modalShell = (onClose, children, width) => (
+    <div onClick={() => !agindo && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: `min(${width || 460}px,96vw)`, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+        {children}
+      </div>
+    </div>
+  );
+  const modalTitulo = (icon, tone, titulo) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+      <span style={{ width: 40, height: 40, borderRadius: 11, background: uiTone(t, tone).bg, color: uiTone(t, tone).fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={icon} size={20} /></span>
+      <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>{titulo}</div>
+    </div>
+  );
+  const modalBotoes = (rotuloOk, onOk, perigoso) => (
+    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+      <Btn t={t} kind="ghost" onClick={() => !agindo && (setConfirmando(null), setModal409(null), setNovo(null), setReset(null))}>Cancelar</Btn>
+      <button onClick={() => !agindo && onOk()} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: perigoso ? uiTone(t, 'red').fg : t.accent, color: '#fff', opacity: agindo ? 0.6 : 1 }}>
+        {agindo ? 'Aplicando…' : rotuloOk}
+      </button>
+    </div>
   );
 
   return (
@@ -688,115 +834,209 @@ function PageUsuarios({ t }) {
           <span style={{ width: 48, height: 48, borderRadius: 14, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="users" size={24} /></span>
           <div>
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: 850, letterSpacing: '-.02em', color: t.text }}>Gestão de Equipe</h1>
-            <p style={{ margin: '6px 0 0', fontSize: 13.5, color: t.muted, maxWidth: 460 }}>Controle acessos, defina permissões e acompanhe a atividade dos colaboradores em tempo real.</p>
+            <p style={{ margin: '6px 0 0', fontSize: 13.5, color: t.muted, maxWidth: 460 }}>Contas reais do sistema — suspensão, cargo, senha e atividade, direto do banco.</p>
           </div>
         </div>
-        <Btn t={t} icon="userPlus">Novo Colaborador</Btn>
+        <Btn t={t} icon="userPlus" onClick={() => setNovo({ email: '', nome: '', cargo: '', setor: '', senha: '', senha2: '' })}>Novo Colaborador</Btn>
       </div>
 
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
-        <KPI t={t} mini icon="users" label="Total de membros" value={users.length} kind="accent" />
-        <KPI t={t} mini icon="barChart2" label="Online agora" value={online} kind="green" />
-        <KPI t={t} mini icon="clock" label="Horas úteis totais" value="2747h" kind="blue" />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '2 1 280px', minWidth: 240, padding: '0 16px', borderRadius: 16, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text' }}>
-          <Icon name="search" size={18} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar por nome, id ou cargo…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit', padding: '18px 0' }} />
-        </label>
-      </div>
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando colaboradores…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(true)}>Tentar novamente</Btn>
+        </Card>
+      ) : (
+        <div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
+            <KPI t={t} mini icon="users" label="Total de membros" value={usuarios.length} kind="accent" />
+            <KPI t={t} mini icon="barChart2" label="Online agora" value={onlineAgora} kind="green" />
+            <KPI t={t} mini icon="clock" label="Horas úteis totais" value={usrTempo(minutosTotais)} kind="blue" />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '2 1 280px', minWidth: 240, padding: '0 16px', borderRadius: 16, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text' }}>
+              <Icon name="search" size={18} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar por nome, e-mail, cargo ou setor…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit', padding: '18px 0' }} />
+            </label>
+          </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 18 }}>
-        {view.map((u) => (
-          <Card t={t} key={u.id} hover style={{ padding: 18, display: 'flex', flexDirection: 'column', position: 'relative', opacity: u.suspenso ? 0.6 : 1 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-              <div style={{ position: 'relative' }}>
-                <span style={{ width: 54, height: 54, borderRadius: '50%', background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 17 }}>{av(u.nome)}</span>
-                {u.online && <span style={{ position: 'absolute', bottom: 2, right: 2, width: 13, height: 13, borderRadius: '50%', background: uiTone(t, 'green').fg, border: `2.5px solid ${t.panel}` }} />}
-              </div>
-              <div style={{ position: 'relative' }}>
-                <button onClick={(e) => { e.stopPropagation(); setCargoId(null); setMenuId(menuId === u.id ? null : u.id); }} title="Opções" style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="dots" size={18} /></button>
-                {menuId === u.id && (
-                  <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', zIndex: 40, top: 'calc(100% + 6px)', right: 0, width: 220, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 14, boxShadow: t.shadow, padding: 6 }}>
-                    <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.1em', color: t.faint, padding: '8px 10px 6px' }}>AÇÕES DO MEMBRO</div>
-                    {menuItem('copy', 'Copiar ID', () => copiarId(u))}
-                    {menuItem('eye', 'Ver senha', () => verSenha(u))}
-                    {menuItem('key', 'Redefinir Senha', () => redefinir(u))}
-                    {menuItem('ban', u.suspenso ? 'Reativar Acesso' : 'Suspender Acesso', () => suspender(u))}
-                    <div style={{ height: 1, background: t.border, margin: '6px 4px' }} />
-                    {menuItem('trash', 'Excluir Conta', () => excluir(u), true)}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginTop: 14, letterSpacing: '-.01em' }}>{u.nome}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: t.muted, marginTop: 4 }}><Icon name="lock" size={12} /> {u.id}{u.suspenso && <Badge t={t} kind="red">Suspenso</Badge>}</div>
-
-            {/* cargo dropdown agrupado */}
-            <div style={{ position: 'relative', marginTop: 14 }}>
-              <button onClick={(e) => { e.stopPropagation(); setMenuId(null); setCargoId(cargoId === u.id ? null : u.id); }} style={{ ...field, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textTransform: 'uppercase', letterSpacing: '.02em', textAlign: 'left' }}>
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.cargo}</span>
-                <Icon name="chevronDown" size={15} style={{ color: t.muted, flexShrink: 0, transform: cargoId === u.id ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
-              </button>
-              {cargoId === u.id && (
-                <div onClick={(e) => e.stopPropagation()} className="fr-scroll" style={{ position: 'absolute', zIndex: 40, top: 'calc(100% + 6px)', left: 0, right: 0, maxHeight: 280, overflowY: 'auto', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 14, boxShadow: t.shadow, padding: 6 }}>
-                  {CARGO_GROUPS.map((g) => (
-                    <div key={g.grupo}>
-                      <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.08em', color: t.faint, padding: '9px 10px 5px', textTransform: 'uppercase' }}>{g.grupo}</div>
-                      {g.cargos.map((c) => {
-                        const on = u.cargo === c;
-                        return (
-                          <button key={c} onClick={() => setCargo(u.id, c)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px', borderRadius: 9, fontSize: 13, fontWeight: on ? 800 : 600, color: on ? t.accentText : t.text, background: on ? t.accentSoft : 'transparent' }}
-                            onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
-                            <Icon name="check" size={14} style={{ opacity: on ? 1 : 0, color: t.accentText }} /> {c}
-                          </button>
-                        );
-                      })}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 18 }}>
+            {view.map((u) => {
+              const online = usrOnline(u);
+              const suspenso = u.is_active === false;
+              const souEu = u.id === meuId;
+              return (
+                <Card t={t} key={u.id} hover style={{ padding: 18, display: 'flex', flexDirection: 'column', position: 'relative', opacity: suspenso ? 0.62 : 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{ width: 54, height: 54, borderRadius: '50%', background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 17 }}>{usrIniciais(u.name)}</span>
+                      {online && <span style={{ position: 'absolute', bottom: 2, right: 2, width: 13, height: 13, borderRadius: '50%', background: uiTone(t, 'green').fg, border: `2.5px solid ${t.panel}` }} />}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    <div style={{ position: 'relative' }}>
+                      <button onClick={(e) => { e.stopPropagation(); setCargoId(null); setMenuId(menuId === u.id ? null : u.id); }} title="Opções" style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="dots" size={18} /></button>
+                      {menuId === u.id && (
+                        <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', zIndex: 40, top: 'calc(100% + 6px)', right: 0, width: 230, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 14, boxShadow: t.shadow, padding: 6 }}>
+                          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.1em', color: t.faint, padding: '8px 10px 6px' }}>AÇÕES DO MEMBRO</div>
+                          {menuItem('copy', 'Copiar ID', () => copiarId(u))}
+                          {menuItem('key', 'Redefinir Senha', () => { setMenuId(null); setReset({ user: u, senha: '', senha2: '' }); })}
+                          <div style={{ height: 1, background: t.border, margin: '6px 4px' }} />
+                          {menuItem('trash', 'Excluir Conta', () => { setMenuId(null); setConfirmando({ tipo: 'excluir', user: u }); }, true, souEu, souEu ? 'Não pode excluir a própria conta.' : undefined)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginTop: 14, letterSpacing: '-.01em', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {u.name}{suspenso && <Badge t={t} kind="red" dot>Suspenso</Badge>}
+                  </div>
+                  <div style={{ fontSize: 12, color: t.muted, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={u.email}>{u.email}</div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: t.muted, marginTop: 12 }}><Icon name="building" size={13} /> SETOR: <span style={{ color: t.text, textTransform: 'uppercase' }}>{u.setor}</span></div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 16, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
-              <div>
-                <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>TEMPO ÚTIL</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 14, fontWeight: 800, color: t.text, marginTop: 3 }}><Icon name="clock" size={13} style={{ color: t.muted }} /> {u.tempo}</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>ÚLTIMA AÇÃO</div>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: u.online ? uiTone(t, 'green').fg : t.text, marginTop: 4 }}>{u.acao}</div>
-              </div>
-            </div>
-          </Card>
-        ))}
-        {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhum colaborador" sub="Ajuste a busca." /></Card></div>}
-      </div>
+                  {/* cargo: papéis REAIS (allowlist do backend) — trocar confirma e desloga o alvo */}
+                  <div style={{ position: 'relative', marginTop: 14 }}>
+                    <button onClick={(e) => { e.stopPropagation(); setMenuId(null); setCargoId(cargoId === u.id ? null : u.id); }} style={{ ...field, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textTransform: 'uppercase', letterSpacing: '.02em', textAlign: 'left' }}>
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{roleLabel(u.role)}</span>
+                      <Icon name="chevronDown" size={15} style={{ color: t.muted, flexShrink: 0, transform: cargoId === u.id ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+                    </button>
+                    {cargoId === u.id && (
+                      <div onClick={(e) => e.stopPropagation()} className="fr-scroll" style={{ position: 'absolute', zIndex: 40, top: 'calc(100% + 6px)', left: 0, right: 0, maxHeight: 280, overflowY: 'auto', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 14, boxShadow: t.shadow, padding: 6 }}>
+                        {papeis.length === 0 && (
+                          <div style={{ padding: '10px 12px', fontSize: 12, color: uiTone(t, 'red').fg, fontWeight: 700 }}>
+                            {papeisErro ? `Papéis indisponíveis: ${papeisErro}` : 'Nenhum papel carregado.'}
+                          </div>
+                        )}
+                        {papeis.map((c) => {
+                          const on = u.role === c;
+                          const lbl = roleLabel(c);
+                          return (
+                            <button key={c} onClick={() => { setCargoId(null); if (!on) setConfirmando({ tipo: 'cargo', user: u, cargo: c }); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px', borderRadius: 9, fontSize: 13, fontWeight: on ? 800 : 600, color: on ? t.accentText : t.text, background: on ? t.accentSoft : 'transparent' }}
+                              onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = 'transparent'; }}>
+                              <Icon name="check" size={14} style={{ opacity: on ? 1 : 0, color: t.accentText }} /> {lbl === c ? c : `${lbl} (${c})`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
 
-      {/* modal ver senha */}
-      {pwUser && (
-        <div onClick={() => setPwUser(null)} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(420px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, overflow: 'hidden' }}>
-            <div style={{ padding: '20px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="key" size={19} /></span>
-              <div style={{ flex: 1 }}><div style={{ fontSize: 16, fontWeight: 850, color: t.text }}>Senha de acesso</div><div style={{ fontSize: 12.5, color: t.muted }}>{pwUser.nome} · {pwUser.id}</div></div>
-              <button onClick={() => setPwUser(null)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-            </div>
-            <div style={{ padding: 22 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
-                <span style={{ flex: 1, fontSize: 18, fontWeight: 800, letterSpacing: pwShow ? '.02em' : '.18em', color: t.text, fontFamily: pwShow ? 'monospace' : 'inherit' }}>{pwShow ? pwOf(pwUser) : '•'.repeat(pwOf(pwUser).length)}</span>
-                <button onClick={() => setPwShow((s) => !s)} title={pwShow ? 'Ocultar' : 'Mostrar'} style={{ all: 'unset', cursor: 'pointer', width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted, border: `1px solid ${t.border}` }}><Icon name={pwShow ? 'eyeOff' : 'eye'} size={17} /></button>
-                <button onClick={() => { try { navigator.clipboard && navigator.clipboard.writeText(pwOf(pwUser)); } catch (e) {} flash('Senha copiada'); }} title="Copiar" style={{ all: 'unset', cursor: 'pointer', width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted, border: `1px solid ${t.border}` }}><Icon name="copy" size={16} /></button>
-              </div>
-              <button onClick={() => redefinir(pwUser)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 44, marginTop: 14, borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent }}><Icon name="key" size={16} /> Redefinir senha</button>
-            </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: t.muted, marginTop: 12 }}><Icon name="building" size={13} /> SETOR: <span style={{ color: t.text, textTransform: 'uppercase' }}>{u.sector}</span></div>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 14, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
+                    <div>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>TEMPO ÚTIL</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 14, fontWeight: 800, color: t.text, marginTop: 3 }}><Icon name="clock" size={13} style={{ color: t.muted }} /> {usrTempo(u.total_minutes)}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>ÚLTIMA AÇÃO</div>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: online ? uiTone(t, 'green').fg : t.text, marginTop: 4 }}>{usrRelativo(u.last_active)}</div>
+                    </div>
+                  </div>
+
+                  {/* AÇÃO PRIMÁRIA do card — hierarquia invertida de propósito: suspender preserva
+                      histórico e é reversível; excluir (raramente possível) vive no menu. */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (!souEu) setConfirmando({ tipo: suspenso ? 'reativar' : 'suspender', user: u }); }}
+                    title={souEu ? 'Não pode suspender a própria conta.' : undefined}
+                    style={{ all: 'unset', boxSizing: 'border-box', cursor: souEu ? 'not-allowed' : 'pointer', width: '100%', height: 40, marginTop: 14, borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 800, opacity: souEu ? 0.5 : 1,
+                      background: suspenso ? uiTone(t, 'green').bg : uiTone(t, 'red').bg, color: suspenso ? uiTone(t, 'green').fg : uiTone(t, 'red').fg, border: `1px solid ${suspenso ? uiTone(t, 'green').fg : uiTone(t, 'red').fg}22` }}>
+                    <Icon name={suspenso ? 'check' : 'ban'} size={16} /> {suspenso ? 'Reativar Acesso' : 'Suspender Acesso'}
+                  </button>
+                </Card>
+              );
+            })}
+            {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhum colaborador" sub="Ajuste a busca." /></Card></div>}
           </div>
         </div>
       )}
 
+      {/* confirm genérico (suspender/reativar/excluir/cargo) — nenhuma escrita sem confirmação */}
+      {confirmando && modalShell(() => setConfirmando(null), (
+        <div>
+          {modalTitulo('alert', confirmando.tipo === 'reativar' ? 'green' : confirmando.tipo === 'cargo' ? 'amber' : 'red',
+            confirmando.tipo === 'suspender' ? 'Suspender acesso' : confirmando.tipo === 'reativar' ? 'Reativar acesso' : confirmando.tipo === 'cargo' ? 'Trocar cargo' : 'Excluir conta')}
+          <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.55 }}>
+            {confirmando.tipo === 'suspender' && <span>Suspender <b>bloqueia o acesso imediatamente</b>: {confirmando.user.name} é deslogado na hora e não consegue entrar até ser reativado.</span>}
+            {confirmando.tipo === 'reativar' && <span>{confirmando.user.name} volta a conseguir entrar <b>imediatamente</b>, com a senha atual.</span>}
+            {confirmando.tipo === 'cargo' && <span>Trocar o cargo de {confirmando.user.name} para <b>{roleLabel(confirmando.cargo)}</b> desloga o usuário imediatamente (entra de novo já com os acessos do cargo novo).</span>}
+            {confirmando.tipo === 'excluir' && <span>Excluir é <b>permanente</b> e só funciona para conta sem histórico. Se {confirmando.user.name} tiver auditoria ou solicitações vinculadas, a exclusão é bloqueada — o caminho é suspender.</span>}
+          </div>
+          {modalBotoes(
+            confirmando.tipo === 'suspender' ? 'Suspender' : confirmando.tipo === 'reativar' ? 'Reativar' : confirmando.tipo === 'cargo' ? 'Trocar cargo' : 'Excluir',
+            () => {
+              if (confirmando.tipo === 'suspender') mudarStatus(confirmando.user, false);
+              else if (confirmando.tipo === 'reativar') mudarStatus(confirmando.user, true);
+              else if (confirmando.tipo === 'cargo') trocarCargo(confirmando.user, confirmando.cargo);
+              else excluir(confirmando.user);
+            },
+            confirmando.tipo === 'suspender' || confirmando.tipo === 'excluir')}
+        </div>
+      ))}
+
+      {/* 409 do DELETE: modal honesto — histórico impede exclusão; oferece a suspensão direto */}
+      {modal409 && modalShell(() => setModal409(null), (
+        <div>
+          {modalTitulo('alert', 'amber', 'Este usuário tem histórico')}
+          <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.55 }}>
+            {modal409.user.name} tem histórico vinculado (auditoria/solicitações) e <b>não pode ser excluído</b> — o registro das ações dele precisa continuar de pé. Suspender em vez disso? O acesso é bloqueado na hora e o histórico fica preservado.
+          </div>
+          {modalBotoes('Suspender acesso', () => mudarStatus(modal409.user, false), true)}
+        </div>
+      ))}
+
+      {/* Novo Colaborador — POST /auth/register (senha inicial digitada + confirmação) */}
+      {novo && modalShell(() => setNovo(null), (
+        <div>
+          {modalTitulo('userPlus', 'accent', 'Novo Colaborador')}
+          <label style={lblM}>E-mail de acesso</label>
+          <input value={novo.email} onChange={(e) => setNovo({ ...novo, email: e.target.value, erro: null })} placeholder="nome@empresa.com" style={inputM} />
+          <label style={lblM}>Nome completo</label>
+          <input value={novo.nome} onChange={(e) => setNovo({ ...novo, nome: e.target.value, erro: null })} placeholder="Nome e sobrenome" style={inputM} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={lblM}>Cargo</label>
+              <select value={novo.cargo} onChange={(e) => setNovo({ ...novo, cargo: e.target.value, erro: null })} style={{ ...inputM, cursor: 'pointer' }}>
+                <option value="">{papeisErro ? 'Papéis indisponíveis' : 'Escolha…'}</option>
+                {papeis.map((c) => { const lbl = roleLabel(c); return <option key={c} value={c}>{lbl === c ? c : `${lbl} (${c})`}</option>; })}
+              </select>
+            </div>
+            <div>
+              <label style={lblM}>Setor</label>
+              <input value={novo.setor} onChange={(e) => setNovo({ ...novo, setor: e.target.value, erro: null })} placeholder="Ex.: Usinagem" style={inputM} />
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={lblM}>Senha inicial (≥ 6)</label>
+              <input type="password" value={novo.senha} onChange={(e) => setNovo({ ...novo, senha: e.target.value, erro: null })} style={inputM} />
+            </div>
+            <div>
+              <label style={lblM}>Confirmar senha</label>
+              <input type="password" value={novo.senha2} onChange={(e) => setNovo({ ...novo, senha2: e.target.value, erro: null })} style={inputM} />
+            </div>
+          </div>
+          {novo.erro && <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{novo.erro}</div>}
+          {modalBotoes('Criar colaborador', criar)}
+        </div>
+      ))}
+
+      {/* Redefinir senha — POST /users/:id/reset-password (404 do id fantasma cai no erro abaixo) */}
+      {reset && modalShell(() => setReset(null), (
+        <div>
+          {modalTitulo('key', 'amber', `Redefinir senha — ${reset.user.name}`)}
+          <div style={{ fontSize: 12.5, color: t.muted, lineHeight: 1.5 }}>A senha atual deixa de valer no próximo login. Sessões abertas continuam até o token expirar.</div>
+          <label style={lblM}>Nova senha (≥ 6)</label>
+          <input type="password" value={reset.senha} onChange={(e) => setReset({ ...reset, senha: e.target.value, erro: null })} style={inputM} />
+          <label style={lblM}>Confirmar nova senha</label>
+          <input type="password" value={reset.senha2} onChange={(e) => setReset({ ...reset, senha2: e.target.value, erro: null })} style={inputM} />
+          {reset.erro && (
+            <Card t={t} style={{ marginTop: 14, padding: 14, textAlign: 'center' }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{reset.erro}</div>
+            </Card>
+          )}
+          {modalBotoes('Redefinir', redefinir)}
+        </div>
+      ))}
+
       {toast && (
-        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 70, display: 'flex', alignItems: 'center', gap: 10, padding: '13px 20px', borderRadius: 13, background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 13.5, boxShadow: '0 10px 30px rgba(0,0,0,.3)' }}>
-          <Icon name="check" size={18} /> {toast}
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 70, display: 'flex', alignItems: 'center', gap: 10, padding: '13px 20px', borderRadius: 13, background: toast.kind === 'erro' ? '#dc2626' : '#10b981', color: '#fff', fontWeight: 700, fontSize: 13.5, boxShadow: '0 10px 30px rgba(0,0,0,.3)' }}>
+          <Icon name={toast.kind === 'erro' ? 'alert' : 'check'} size={18} /> {toast.msg}
         </div>
       )}
     </div>

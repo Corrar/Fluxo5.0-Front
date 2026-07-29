@@ -59,13 +59,15 @@ const NAV = [
       { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
       { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
-      // Auditoria e Permissões ENTRARAM aqui no destrave — PROVISÓRIO: a casa definitiva é o
-      // NAV_DEV, mas o módulo Dev ainda não tem navegação (mock); sem estes itens as telas
-      // reais ficariam órfãs de menu. Movem quando o Dev ganhar navegação (decisão pendente:
-      // quem enxerga o Dev). Acesso fino é das próprias telas (canAccess('logs')/
-      // canAccess('permissoes') + 403 do backend), como nas vizinhas.
+      // Auditoria, Permissões e Usuários ENTRARAM aqui no destrave — PROVISÓRIO: a casa
+      // definitiva é o NAV_DEV, mas o módulo Dev ainda não tem navegação (mock); sem estes
+      // itens as telas reais ficariam órfãs de menu. Movem quando o Dev ganhar navegação
+      // (decisão pendente: quem enxerga o Dev). Acesso fino é das próprias telas
+      // (canAccess('logs')/canAccess('permissoes')/canAccess('usuarios') + 403 do backend),
+      // como nas vizinhas.
       { id: 'auditoria',     name: 'Auditoria',         icon: 'clipboard' },
       { id: 'permissoes',    name: 'Permissões',        icon: 'key' },
+      { id: 'usuarios',      name: 'Usuários',          icon: 'user' },
       { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
   },
@@ -250,7 +252,11 @@ const FR_LOCKED_PAGES = new Set([
   //   chaves + exceções por usuário, replace-all com confirm de logout forçado, gate por
   //   page_key 'permissoes' na própria tela). Mock setor/classes morreu inteiro; criar/remover
   //   papel e normalização da convenção mista ficaram FORA da v1 (decisão travada).
-  'usuarios',
+  // 'usuarios' SAIU: ligada a GET /users cheio + PUT /status (ação primária: suspender preserva
+  //   histórico) + DELETE (409 → modal oferece suspender) + PUT /role (papéis reais de
+  //   GET /admin/permissions/roles) + POST /auth/register + POST /reset-password, gate por
+  //   page_key 'usuarios' na própria tela. Mock USUARIOS_SEED/CARGO_GROUPS/"Ver senha" morreu
+  //   inteiro (senha em claro nunca existiu no backend — só hash bcrypt).
   // Rotas mortas (fora de qualquer menu) — link direto vê o cadeado, não a tela mock
   'tarefas', 'eletrica', 'avisos', 'calculadora',
 ]);

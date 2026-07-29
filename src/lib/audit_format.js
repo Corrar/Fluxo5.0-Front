@@ -1,10 +1,12 @@
 // lib/audit_format.js — formatador PURO do livro de auditoria (tela Auditoria v1).
 //
-// Mapa das 22 actions CONHECIDAS (as observadas no recon do banco de validação, 27/07) →
+// Mapa das 26 actions CONHECIDAS (22 do recon do banco de validação de 27/07 +
+// UPDATE_ROLE_PERMISSIONS da tela de Permissões + SUSPEND_USER/REACTIVATE_USER/
+// REDEFINIR_SENHA da tela de Usuários) →
 // { verbo, kind (cor do uiTone), icon (icons.jsx), alvo(details), frase(details) }.
 //
 // CONTRATO DE RESILIÊNCIA (inegociável): o backend emite actions que este mapa não conhece
-// (e vai emitir mais no futuro — STOCK_ENTRY, CRIAR_PRODUTO, REDEFINIR_SENHA...). Action fora
+// (e vai emitir mais no futuro — STOCK_ENTRY, CRIAR_PRODUTO...). Action fora
 // do mapa ou payload fora do esperado NUNCA quebra a tela: o fallback devolve a action CRUA
 // como verbo + details em JSON legível como frase. Campo ausente vira '—'.
 //
@@ -106,6 +108,15 @@ export const AUDIT_ACTIONS = {
   UPDATE_ROLE: { verbo: 'Alterou', kind: 'blue', icon: 'users',
     alvo: (d) => `Usuário · ${shortId(d.target_user_id)}`,
     frase: (d) => `Novo cargo: ${ou(d.new_role)}${d.new_sector ? ` · Setor: ${d.new_sector}` : ''}` },
+  SUSPEND_USER: { verbo: 'Suspendeu', kind: 'red', icon: 'ban',
+    alvo: (d) => `Usuário · ${shortId(d.target_user_id)}`,
+    frase: () => 'Acesso bloqueado na hora (conta suspensa; sessões e socket derrubados)' },
+  REACTIVATE_USER: { verbo: 'Reativou', kind: 'green', icon: 'check',
+    alvo: (d) => `Usuário · ${shortId(d.target_user_id)}`,
+    frase: () => 'Acesso restabelecido (a conta volta a logar com a senha atual)' },
+  REDEFINIR_SENHA: { verbo: 'Redefiniu', kind: 'amber', icon: 'key',
+    alvo: (d) => `Usuário · ${shortId(d.target_user_id)}`,
+    frase: () => 'Senha trocada pelo administrador (a anterior deixou de valer)' },
   UPDATE_USER_PERMISSIONS: { verbo: 'Permissões', kind: 'blue', icon: 'key',
     alvo: (d) => `Usuário · ${shortId(d.user_target)}`,
     frase: (d) => fraseDiffPermissoes(d, `${ou(d.count, '0')} exceção(ões) de permissão`) },
