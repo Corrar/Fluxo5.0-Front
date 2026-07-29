@@ -6,7 +6,11 @@ const MODULES = [
   { id: 'producao', name: 'Produção 3D',  subtitle: 'Fila de impressão',       icon: 'printer', accent: '#6366f1', accentText: '#818cf8' },
   { id: 'rh',       name: 'RH',           subtitle: 'Pessoas & ponto',         icon: 'users',   accent: '#f59e0b', accentText: '#fbbf24', locked: true },
   { id: 'compras',  name: 'Compras',      subtitle: 'Cotações & pedidos',      icon: 'cart',    accent: '#ec4899', accentText: '#f472b6', locked: true },
-  { id: 'dev',      name: 'Desenvolvedor', subtitle: 'Suporte & chamados',       icon: 'terminal', accent: '#0891b2', accentText: '#22d3ee', locked: true },
+  // DESTRAVADO (decisão do Bruno, 29/07/2026): administração de permissões é controle
+  // exclusivo do Dev — o módulo precisa abrir pra tela viver aqui. Quem o ENXERGA segue
+  // sendo o access.js (hoje só admin, via bypass 'all'); as abas mock (dev-*) continuam
+  // cadeadas via FR_LOCKED_MODULE_PREFIXES — abrir o módulo NÃO abre os mocks.
+  { id: 'dev',      name: 'Desenvolvedor', subtitle: 'Suporte & chamados',       icon: 'terminal', accent: '#0891b2', accentText: '#22d3ee' },
   { id: 'producaoger', name: 'Produção', subtitle: 'Ordens de produção',       icon: 'zap',     accent: '#7c3aed', accentText: '#a78bfa' },
   { id: 'assistencia', name: 'Assistência Técnica', subtitle: 'OS & equipamentos',   icon: 'wrench',  accent: '#0d9488', accentText: '#2dd4bf', locked: true },
   { id: 'financeiro', name: 'Financeiro', subtitle: 'Contas & fluxo de caixa', icon: 'dollar', accent: '#16a34a', accentText: '#4ade80', locked: true },
@@ -59,14 +63,13 @@ const NAV = [
       { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
       { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
-      // Auditoria, Permissões e Usuários ENTRARAM aqui no destrave — PROVISÓRIO: a casa
-      // definitiva é o NAV_DEV, mas o módulo Dev ainda não tem navegação (mock); sem estes
-      // itens as telas reais ficariam órfãs de menu. Movem quando o Dev ganhar navegação
-      // (decisão pendente: quem enxerga o Dev). Acesso fino é das próprias telas
-      // (canAccess('logs')/canAccess('permissoes')/canAccess('usuarios') + 403 do backend),
-      // como nas vizinhas.
+      // Auditoria e Usuários seguem aqui PROVISÓRIOS (casa definitiva: NAV_DEV; movem
+      // quando o Bruno decidir). 'permissoes' JÁ SAIU: administração de permissões é
+      // controle exclusivo do módulo Dev, por decisão do Bruno (29/07/2026) — a tela vive
+      // em DEFINITIVO no NAV_DEV (Configurações), não aqui. Acesso fino continua nas
+      // próprias telas (canAccess('logs')/canAccess('usuarios')/canAccess('permissoes')
+      // + 403 do backend), como nas vizinhas.
       { id: 'auditoria',     name: 'Auditoria',         icon: 'clipboard' },
-      { id: 'permissoes',    name: 'Permissões',        icon: 'key' },
       { id: 'usuarios',      name: 'Usuários',          icon: 'user' },
       { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
@@ -114,6 +117,10 @@ const NAV_DEV = [
       { id: 'pedidos',       name: 'Meus Pedidos', icon: 'cart' },
       {
         id: 'configuracoes', name: 'Configurações', icon: 'gear',
+        // 'permissoes' mora AQUI em DEFINITIVO (decisão do Bruno, 29/07/2026: administração
+        // de permissões é controle exclusivo do Dev — saiu da Gestão Admin do Estoque).
+        // As demais são rotas compartilhadas sem prefixo: resolvem no MESMO componente real
+        // independente do módulo (renderPage), e auditoria/usuarios seguem TAMBÉM no Estoque.
         children: [
           { id: 'permissoes', name: 'Permissões' },
           { id: 'auditoria',  name: 'Auditoria' },
@@ -266,6 +273,9 @@ const FR_LOCKED_PAGES = new Set([
 // se qualquer id do módulo for atingido (localStorage velho etc.), cai no <EmDesenvolvimento>,
 // nunca na tela mock. As rotas compartilhadas funcionais (clientes, pedidos) NÃO têm prefixo
 // e por isso continuam livres (resolvem nos componentes reais do Estoque).
+// EXCEÇÃO 'dev-': o MÓDULO Dev foi destravado (Permissões mora lá em definitivo), mas o
+// prefixo FICA nesta lista — as abas mock do Dev (painel/chamados/chat/projetos/agenda)
+// seguem no cadeado até cada uma ser ligada de verdade. Destravar o módulo ≠ destravar mock.
 const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
 function frIsLocked(id) {
   if (!id) return false;
