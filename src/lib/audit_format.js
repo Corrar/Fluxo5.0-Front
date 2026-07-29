@@ -1,8 +1,9 @@
 // lib/audit_format.js — formatador PURO do livro de auditoria (tela Auditoria v1).
 //
-// Mapa das 33 actions CONHECIDAS (22 do recon do banco de validação de 27/07 +
+// Mapa das 38 actions CONHECIDAS (22 do recon do banco de validação de 27/07 +
 // UPDATE_ROLE_PERMISSIONS da tela de Permissões + SUSPEND_USER/REACTIVATE_USER/
-// REDEFINIR_SENHA da tela de Usuários + as 7 *_CHAMADO do helpdesk v1) →
+// REDEFINIR_SENHA da tela de Usuários + as 7 *_CHAMADO do helpdesk v1 + as 5
+// *_PROJETO do dev-projetos v1) →
 // { verbo, kind (cor do uiTone), icon (icons.jsx), alvo(details), frase(details) }.
 //
 // CONTRATO DE RESILIÊNCIA (inegociável): o backend emite actions que este mapa não conhece
@@ -147,6 +148,24 @@ export const AUDIT_ACTIONS = {
   RECLASSIFICAR_CHAMADO: { verbo: 'Reclassificou', kind: 'amber', icon: 'refresh',
     alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
     frase: (d) => `Prioridade ${ou(d.de)} → ${ou(d.para)}` },
+
+  // ── Dev-projetos ──
+  // details: {id, name} (+ `alterados` = NOMES dos campos no EDITAR — nunca valores).
+  CRIAR_PROJETO: { verbo: 'Criou', kind: 'green', icon: 'kanban',
+    alvo: (d) => `Projeto · ${ou(d.name)}`,
+    frase: () => 'Projeto criado no quadro do dev' },
+  EDITAR_PROJETO: { verbo: 'Editou', kind: 'blue', icon: 'pencil',
+    alvo: (d) => `Projeto · ${ou(d.name)}`,
+    frase: (d) => `Campos alterados: ${Array.isArray(d.alterados) ? d.alterados.join(', ') : '—'}` },
+  ARQUIVAR_PROJETO: { verbo: 'Arquivou', kind: 'gray', icon: 'box',
+    alvo: (d) => `Projeto · ${ou(d.name)}`,
+    frase: () => 'Projeto pausado (reversível — sai da grade ativa)' },
+  REATIVAR_PROJETO: { verbo: 'Reativou', kind: 'green', icon: 'refresh',
+    alvo: (d) => `Projeto · ${ou(d.name)}`,
+    frase: () => 'Projeto de volta à grade ativa' },
+  EXCLUIR_PROJETO: { verbo: 'Excluiu', kind: 'red', icon: 'trash',
+    alvo: (d) => `Projeto · ${ou(d.name)}`,
+    frase: () => 'Projeto e checklists apagados definitivamente' },
 
   // ── Sistema ──
   UPDATE_SETTING: { verbo: 'Configurou', kind: 'amber', icon: 'gear',

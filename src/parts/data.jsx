@@ -288,7 +288,8 @@ const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
 // EXCEÇÕES PONTUAIS ao cadeado de prefixo: rotas dev-* que ganharam tela REAL e saem do
 // bloqueio uma a uma (o prefixo continua valendo pras irmãs mock). Hoje só a fila do
 // helpdesk: 'dev-chamados' virou tela real (gate por canAccess('chamados') na própria tela).
-const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados']);
+// dev-projetos: tela real desde a migration 013 (gate por canAccess('projetos') na própria tela).
+const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos']);
 function frIsLocked(id) {
   if (!id) return false;
   if (FR_LOCKED_PREFIX_EXCECOES.has(id)) return false;

@@ -294,173 +294,392 @@ function DevChat({ t, chamados, setChamados }) {
   );
 }
 
-// ---------- Projetos (checklists) ----------
-const DV_PROJ_SEED = [
-  { id: 'pj1', nome: 'App Mobile do Estoque', cor: 'blue', prio: ['Alta', 'red'], desc: 'Versão Android para conferência em campo.', capa: '', anexos: [], checklists: [
-    { titulo: 'Telas', itens: [{ t: 'Login', done: true }, { t: 'Lista de produtos', done: true }, { t: 'Leitor de código', done: false }, { t: 'Sincronização offline', done: false }] },
-    { titulo: 'API', itens: [{ t: 'Endpoint de auth', done: true }, { t: 'Endpoint de estoque', done: false }] },
-  ] },
-  { id: 'pj2', nome: 'Integração NF-e v2', cor: 'green', prio: ['Média', 'amber'], desc: 'Sincronização automática de notas com o estoque.', capa: '', anexos: [], checklists: [
-    { titulo: 'Backend', itens: [{ t: 'Parser de XML', done: true }, { t: 'Match por SKU', done: true }, { t: 'Job agendado', done: false }] },
-  ] },
-  { id: 'pj3', nome: 'Dashboard 3D Analytics', cor: 'amber', prio: ['Baixa', 'blue'], desc: 'Relatórios avançados da fábrica 3D.', capa: '', anexos: [], checklists: [
-    { titulo: 'Métricas', itens: [{ t: 'Consumo de filamento', done: true }, { t: 'OEE por impressora', done: false }, { t: 'Exportar PDF', done: false }] },
-  ] },
-];
-const DV_PRIOS = [['Alta', 'red'], ['Média', 'amber'], ['Baixa', 'blue']];
+// ---------- Projetos (REAL — dev-projetos v1) ----------
+// LIGAÇÃO REAL: GET /dev-projects (?status=ativo|arquivado, envelope {projects,total}),
+// GET /:id, POST, PUT parcial (op_code:null desvincula), DELETE — tudo atrás de
+// requirePermission('projetos') no backend (migration 013; a chave nasceu no universo da
+// tela Permissões pela própria migration e é concedível por lá).
+// O MOCK MORREU: DV_PROJ_SEED, o estado local do DevModule, e CAPA/ANEXOS na UI — dívida
+// de storage (nada de DataURL); o campo `color` do card assume o papel visual da capa.
+// Progresso % segue DERIVADO dos checklists (done/total) — nunca campo.
+// Limites da borda do backend RESPEITADOS NA UI (≤20 checklists, ≤100 itens, títulos ≤200,
+// itens ≤500): os inputs bloqueiam antes do 400.
 
-function DevProjetoModal({ t, proj, onClose, onUpdate, onDelete }) {
-  const [edit, setEdit] = useStateDV(false);
-  const toggle = (ci, ii) => onUpdate(proj.id, (p) => ({ ...p, checklists: p.checklists.map((c, j) => (j === ci ? { ...c, itens: c.itens.map((it, k) => (k === ii ? { ...it, done: !it.done } : it)) } : c)) }));
-  const addItem = (ci, txt) => { if (!txt.trim()) return; onUpdate(proj.id, (p) => ({ ...p, checklists: p.checklists.map((c, j) => (j === ci ? { ...c, itens: [...c.itens, { t: txt.trim(), done: false }] } : c)) })); };
-  const addChecklist = (titulo) => { if (!titulo.trim()) return; onUpdate(proj.id, (p) => ({ ...p, checklists: [...p.checklists, { titulo: titulo.trim(), itens: [] }] })); };
-  const delChecklist = (ci) => onUpdate(proj.id, (p) => ({ ...p, checklists: p.checklists.filter((_, j) => j !== ci) }));
-  const setField = (k, v) => onUpdate(proj.id, (p) => ({ ...p, [k]: v }));
-  const onCapa = (file) => { if (!file) return; const r = new FileReader(); r.onload = () => setField('capa', r.result); r.readAsDataURL(file); };
-  const onAnexos = (files) => { [...files].slice(0, 8).forEach((f) => { const r = new FileReader(); r.onload = () => onUpdate(proj.id, (p) => ({ ...p, anexos: [...(p.anexos || []), { nome: f.name, tipo: f.type, url: r.result }] })); r.readAsDataURL(f); }); };
-  const delAnexo = (i) => onUpdate(proj.id, (p) => ({ ...p, anexos: p.anexos.filter((_, j) => j !== i) }));
-  const total = proj.checklists.reduce((a, c) => a + c.itens.length, 0);
-  const done = proj.checklists.reduce((a, c) => a + c.itens.filter((i) => i.done).length, 0);
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  const field = { boxSizing: 'border-box', width: '100%', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '10px 12px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
+const PJ_PRIOS = [['baixa', 'Baixa', 'blue'], ['media', 'Média', 'amber'], ['alta', 'Alta', 'red']];
+const PJ_PRIO = { baixa: ['Baixa', 'blue'], media: ['Média', 'amber'], alta: ['Alta', 'red'] };
+// Paleta LOCAL das 6 cores da allowlist do backend (uiTone não tem purple — aqui é hex puro).
+const PJ_CORES = [
+  ['blue', '#3b82f6'], ['green', '#10b981'], ['amber', '#d97706'],
+  ['red', '#ef4444'], ['purple', '#8b5cf6'], ['gray', '#6b7280'],
+];
+const PJ_COR_HEX = Object.fromEntries(PJ_CORES);
+function pjErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function pjProgresso(checklists) {
+  const cls = Array.isArray(checklists) ? checklists : [];
+  const total = cls.reduce((a, c) => a + ((c.itens || []).length), 0);
+  const done = cls.reduce((a, c) => a + (c.itens || []).filter((i) => i.done).length, 0);
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
+// Inputs reutilizados do editor de checklists (limites aplicados pelos chamadores).
+function DevAddChecklist({ t, onAdd, disabled }) {
+  const [v, setV] = useStateDV('');
+  const add = () => { if (disabled) return; onAdd(v); setV(''); };
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 66, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(920px,97vw)', maxHeight: '95vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-        {/* cover */}
-        <div style={{ position: 'relative', height: 200, background: proj.capa ? '#000' : `linear-gradient(135deg, ${uiTone(t, proj.cor).fg}, ${frHexToRgba(uiTone(t, proj.cor).fg, 0.55)})` }}>
-          {proj.capa && <img src={proj.capa} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(8,10,16,.55), transparent 60%)' }} />
-          <label style={{ position: 'absolute', bottom: 12, right: 12, display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', height: 34, padding: '0 13px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: 'rgba(8,10,16,.6)', color: '#fff', backdropFilter: 'blur(4px)' }}>
-            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => onCapa(e.target.files[0])} />
-            <Icon name="upload" size={14} /> {proj.capa ? 'Trocar capa' : 'Definir capa'}
-          </label>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 12, right: 12, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.5)', color: '#fff' }}><Icon name="x" size={16} /></button>
-          <div style={{ position: 'absolute', left: 18, bottom: 12, display: 'flex', alignItems: 'center', gap: 9 }}>
-            <Badge t={t} kind={proj.prio[1]} dot>{proj.prio[0]}</Badge>
+    <div style={{ display: 'flex', gap: 8, opacity: disabled ? 0.5 : 1 }}>
+      <input value={v} maxLength={200} disabled={disabled} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} placeholder={disabled ? 'Limite de 20 checklists atingido' : '+ Novo checklist…'} style={{ flex: 1, height: 40, borderRadius: 10, border: `1px dashed ${t.borderStrong}`, background: 'transparent', color: t.text, padding: '0 12px', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', outline: 'none' }} />
+      <button onClick={add} style={{ all: 'unset', cursor: disabled ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, height: 40, padding: '0 14px', borderRadius: 10, fontSize: 13, fontWeight: 700, background: t.accent, color: '#fff' }}><Icon name="plus" size={15} /> Checklist</button>
+    </div>
+  );
+}
+function DevAddItem({ t, onAdd, disabled }) {
+  const [v, setV] = useStateDV('');
+  const add = () => { if (disabled) return; onAdd(v); setV(''); };
+  return (
+    <div style={{ display: 'flex', gap: 8, marginTop: 2, opacity: disabled ? 0.5 : 1 }}>
+      <input value={v} maxLength={500} disabled={disabled} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} placeholder={disabled ? 'Limite de 100 itens atingido' : 'Adicionar item…'} style={{ flex: 1, height: 36, borderRadius: 9, border: `1px dashed ${t.borderStrong}`, background: 'transparent', color: t.text, padding: '0 11px', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
+      <button onClick={add} style={{ all: 'unset', cursor: disabled ? 'not-allowed' : 'pointer', width: 36, height: 36, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.accentText, border: `1px solid ${t.border}` }}><Icon name="plus" size={15} /></button>
+    </div>
+  );
+}
+
+// Form compartilhado de nome/desc/prioridade/cor/OP (criação e edição usam o mesmo shape).
+function PjCampos({ t, form, setForm }) {
+  const inputM = { boxSizing: 'border-box', width: '100%', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '10px 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
+  const lblM = { display: 'block', fontSize: 10.5, fontWeight: 800, letterSpacing: '.07em', color: t.faint, textTransform: 'uppercase', margin: '13px 0 6px' };
+  return (
+    <React.Fragment>
+      <label style={lblM}>Nome (até 200 caracteres)</label>
+      <input value={form.nome} maxLength={200} onChange={(e) => setForm({ ...form, nome: e.target.value, erro: null })} placeholder="Ex.: App Mobile do Estoque" style={inputM} />
+      <label style={lblM}>Descrição</label>
+      <textarea value={form.desc} onChange={(e) => setForm({ ...form, desc: e.target.value, erro: null })} rows={2} placeholder="Do que se trata o projeto…" style={{ ...inputM, resize: 'vertical' }} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div>
+          <label style={lblM}>Prioridade</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {PJ_PRIOS.map(([k, label, tone]) => {
+              const on = form.prioridade === k;
+              return <button key={k} onClick={() => setForm({ ...form, prioridade: k, erro: null })} style={{ all: 'unset', cursor: 'pointer', flex: 1, textAlign: 'center', height: 38, lineHeight: '38px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: on ? uiTone(t, tone).fg : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? 'transparent' : t.border}` }}>{label}</button>;
+            })}
           </div>
         </div>
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: 22, display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {/* title + meta */}
-          <div>
-            {edit ? <input value={proj.nome} onChange={(e) => setField('nome', e.target.value)} style={{ ...field, fontSize: 18, fontWeight: 800 }} />
-              : <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><div style={{ flex: 1, fontSize: 20, fontWeight: 850, color: t.text }}>{proj.nome}</div><button onClick={() => setEdit(true)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 8, background: t.accentSoft }}><Icon name="pencil" size={13} /> Editar</button></div>}
-            {edit ? <textarea value={proj.desc} onChange={(e) => setField('desc', e.target.value)} rows={2} placeholder="Descrição do projeto…" style={{ ...field, marginTop: 10, resize: 'vertical' }} />
-              : <div style={{ fontSize: 13.5, color: t.muted, marginTop: 6, lineHeight: 1.5 }}>{proj.desc}</div>}
+        <div>
+          <label style={lblM}>Cor do cartão</label>
+          <div style={{ display: 'flex', gap: 7, alignItems: 'center', height: 38 }}>
+            {PJ_CORES.map(([k, hex]) => {
+              const on = form.cor === k;
+              return <button key={k} title={k} onClick={() => setForm({ ...form, cor: k, erro: null })} style={{ all: 'unset', cursor: 'pointer', width: 26, height: 26, borderRadius: 8, background: hex, outline: on ? `2px solid ${t.text}` : 'none', outlineOffset: 2 }} />;
+            })}
           </div>
-          {/* prioridade + progresso */}
-          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 7 }}>Prioridade</div>
-              <div style={{ display: 'flex', gap: 7 }}>{DV_PRIOS.map(([label, k]) => { const on = proj.prio[0] === label; return <button key={label} onClick={() => setField('prio', [label, k])} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '6px 12px', borderRadius: 8, background: on ? uiTone(t, k).fg : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? 'transparent' : t.border}` }}>{label}</button>; })}</div>
-            </div>
-            <div style={{ flex: 1, minWidth: 160 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontWeight: 700, color: t.faint, textTransform: 'uppercase', marginBottom: 7 }}><span>Progresso</span><span style={{ color: pct === 100 ? uiTone(t, 'green').fg : t.accentText }}>{pct}%</span></div>
-              <div style={{ height: 7, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${pct}%`, borderRadius: 5, background: pct === 100 ? uiTone(t, 'green').fg : t.accent }} /></div>
-            </div>
-          </div>
-          {/* anexos */}
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase' }}>Anexos ({(proj.anexos || []).length})</span>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 8, background: t.accentSoft }}><input type="file" multiple style={{ display: 'none' }} onChange={(e) => onAnexos(e.target.files)} /><Icon name="upload" size={13} /> Anexar</label>
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {(proj.anexos || []).map((a, i) => { const isImg = (a.tipo || '').indexOf('image') === 0; return (
-                <div key={i} style={{ position: 'relative', width: 88 }}>
-                  <div style={{ width: 88, height: 70, borderRadius: 10, overflow: 'hidden', border: `1px solid ${t.border}`, background: t.elevated, display: 'grid', placeItems: 'center' }}>
-                    {isImg ? <img src={a.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <Icon name="file" size={26} style={{ color: t.muted }} />}
-                  </div>
-                  <div style={{ fontSize: 10, color: t.muted, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome}</div>
-                  <button onClick={() => delAnexo(i)} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: '50%', background: 'rgba(8,10,16,.7)', color: '#fff', display: 'grid', placeItems: 'center' }}><Icon name="x" size={11} /></button>
-                </div>
-              ); })}
-              {(proj.anexos || []).length === 0 && <div style={{ fontSize: 12.5, color: t.faint }}>Nenhum anexo. Adicione imagens ou arquivos.</div>}
-            </div>
-          </div>
-          {/* checklists */}
-          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 16 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 12 }}>Checklists</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              {proj.checklists.map((cl, ci) => (
-                <div key={ci}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                    <span style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>{cl.titulo}</span>
-                    <span style={{ fontSize: 11.5, color: t.muted, fontWeight: 600 }}>· {cl.itens.filter((i) => i.done).length}/{cl.itens.length}</span>
-                    <button onClick={() => delChecklist(ci)} title="Excluir checklist" style={{ all: 'unset', cursor: 'pointer', marginLeft: 'auto', width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="trash" size={14} /></button>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {cl.itens.map((it, ii) => (
-                      <button key={ii} onClick={() => toggle(ci, ii)} style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, padding: '9px 11px', borderRadius: 10, background: it.done ? t.elevated : 'transparent', border: `1px solid ${t.border}` }}>
-                        <span style={{ width: 20, height: 20, borderRadius: 6, display: 'grid', placeItems: 'center', flexShrink: 0, background: it.done ? uiTone(t, 'green').fg : 'transparent', color: '#fff', border: `1.5px solid ${it.done ? 'transparent' : t.borderStrong}` }}>{it.done && <Icon name="check" size={13} />}</span>
-                        <span style={{ fontSize: 13.5, color: it.done ? t.muted : t.text, textDecoration: it.done ? 'line-through' : 'none' }}>{it.t}</span>
-                      </button>
-                    ))}
-                    <DevAddItem t={t} onAdd={(txt) => addItem(ci, txt)} />
-                  </div>
-                </div>
-              ))}
-              <DevAddChecklist t={t} onAdd={addChecklist} />
-            </div>
-          </div>
-          <button onClick={() => { onDelete(proj.id); onClose(); }} style={{ all: 'unset', cursor: 'pointer', alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg, padding: '8px 12px', borderRadius: 9, border: `1px solid ${t.border}` }}><Icon name="trash" size={14} /> Excluir projeto</button>
         </div>
       </div>
-    </div>
-  );
-}
-function DevAddChecklist({ t, onAdd }) {
-  const [v, setV] = useStateDV('');
-  return (
-    <div style={{ display: 'flex', gap: 8 }}>
-      <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { onAdd(v); setV(''); } }} placeholder="+ Novo checklist…" style={{ flex: 1, height: 40, borderRadius: 10, border: `1px dashed ${t.borderStrong}`, background: 'transparent', color: t.text, padding: '0 12px', fontSize: 13, fontWeight: 600, fontFamily: 'inherit', outline: 'none' }} />
-      <button onClick={() => { onAdd(v); setV(''); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, height: 40, padding: '0 14px', borderRadius: 10, fontSize: 13, fontWeight: 700, background: t.accent, color: '#fff' }}><Icon name="plus" size={15} /> Checklist</button>
-    </div>
-  );
-}
-function DevAddItem({ t, onAdd }) {
-  const [v, setV] = useStateDV('');
-  return (
-    <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-      <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { onAdd(v); setV(''); } }} placeholder="Adicionar item…" style={{ flex: 1, height: 36, borderRadius: 9, border: `1px dashed ${t.borderStrong}`, background: 'transparent', color: t.text, padding: '0 11px', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />
-      <button onClick={() => { onAdd(v); setV(''); }} style={{ all: 'unset', cursor: 'pointer', width: 36, height: 36, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.accentText, border: `1px solid ${t.border}` }}><Icon name="plus" size={15} /></button>
-    </div>
+      <label style={lblM}>OP vinculada (opcional)</label>
+      <input value={form.opCode} onChange={(e) => setForm({ ...form, opCode: e.target.value, erro: null })} placeholder="Ex.: 73001 — vazio = projeto livre" style={inputM} />
+    </React.Fragment>
   );
 }
 
-function DevProjetos({ t, projetos, setProjetos }) {
-  const [open, setOpen] = useStateDV(null);
-  const update = (id, fn) => setProjetos((xs) => xs.map((p) => (p.id === id ? fn(p) : p)));
-  const del = (id) => setProjetos((xs) => xs.filter((p) => p.id !== id));
-  const cur = projetos.find((p) => p.id === open);
-  const pct = (p) => { const tot = p.checklists.reduce((a, c) => a + c.itens.length, 0); const dn = p.checklists.reduce((a, c) => a + c.itens.filter((i) => i.done).length, 0); return tot ? Math.round((dn / tot) * 100) : 0; };
+function DevProjetosReal({ t }) {
+  const R = window.React;
+  const [projects, setProjects] = useStateDV([]);
+  const [loading, setLoading] = useStateDV(true);
+  const [error, setError] = useStateDV(null);
+  const [aba, setAba] = useStateDV('ativo'); // 'ativo' | 'arquivado'
+  const [novo, setNovo] = useStateDV(null);  // {nome, desc, prioridade, cor, opCode, erro}
+  const [aberto, setAberto] = useStateDV(null); // id do projeto no modal
+  const [agindo, setAgindo] = useStateDV(false);
+
+  const carregar = R.useCallback(function (status, inicial) {
+    if (inicial) setLoading(true);
+    setError(null);
+    return window.FRApi.get(`/dev-projects?status=${status}`, { skipLoading: true })
+      .then(function (r) { setProjects((r.data && r.data.projects) || []); if (inicial) setLoading(false); })
+      .catch(function (e) { setError(pjErr(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(aba, true); }, [aba, carregar]);
+
+  const criar = function () {
+    const n = novo || {};
+    const nome = String(n.nome || '').trim();
+    if (!nome) return setNovo({ ...n, erro: 'Nome é obrigatório.' });
+    setAgindo(true);
+    const body = { name: nome, description: String(n.desc || '').trim(), priority: n.prioridade || 'media', color: n.cor || 'blue' };
+    if (String(n.opCode || '').trim()) body.op_code = String(n.opCode).trim();
+    window.FRApi.post('/dev-projects', body)
+      .then(function () { setNovo(null); return carregar(aba, false); })
+      .catch(function (e) { setNovo(function (m) { return { ...m, erro: pjErr(e) }; }); }) // 404 de OP fantasma cai aqui
+      .then(function () { setAgindo(false); });
+  };
+
   return (
     <div>
-      <PageHeader t={t} title="Projetos" subtitle="Acompanhe seus projetos e checklists."
-        actions={<Btn t={t} icon="plus" onClick={() => { const id = 'pj' + Date.now(); setProjetos((xs) => [...xs, { id, nome: 'Novo projeto', cor: 'accent', prio: ['Média', 'amber'], desc: 'Descrição do projeto.', capa: '', anexos: [], checklists: [{ titulo: 'Tarefas', itens: [] }] }]); setOpen(id); }}>Novo projeto</Btn>} />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 18 }}>
-        {projetos.map((p) => { const v = pct(p); const tot = p.checklists.reduce((a, c) => a + c.itens.length, 0); return (
-          <Card t={t} key={p.id} hover style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
-            <div onClick={() => setOpen(p.id)}>
-              <div style={{ position: 'relative', height: 150, background: p.capa ? '#000' : `linear-gradient(135deg, ${uiTone(t, p.cor).fg}, ${frHexToRgba(uiTone(t, p.cor).fg, 0.5)})` }}>
-                {p.capa && <img src={p.capa} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-                <div style={{ position: 'absolute', top: 10, left: 10 }}><Badge t={t} kind={p.prio[1]} dot>{p.prio[0]}</Badge></div>
-              </div>
-              <div style={{ padding: 18 }}>
-                <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{p.nome}</div>
-                <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>{p.checklists.length} checklists · {tot} itens{(p.anexos || []).length ? ` · ${p.anexos.length} anexos` : ''}</div>
-                <div style={{ fontSize: 12.5, color: t.muted, marginTop: 10, lineHeight: 1.45, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.desc}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 14 }}>
-                  <div style={{ flex: 1, height: 7, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${v}%`, borderRadius: 5, background: v === 100 ? uiTone(t, 'green').fg : t.accent }} /></div>
-                  <span style={{ fontSize: 12.5, fontWeight: 800, color: v === 100 ? uiTone(t, 'green').fg : t.text }}>{v}%</span>
-                </div>
-              </div>
-            </div>
-          </Card>
-        ); })}
+      <PageHeader t={t} title="Projetos" subtitle="Projetos internos do time — checklists e progresso, direto do banco."
+        actions={<Btn t={t} icon="plus" onClick={() => setNovo({ nome: '', desc: '', prioridade: 'media', cor: 'blue', opCode: '' })}>Novo projeto</Btn>} />
+      <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 20 }}>
+        {[['ativo', 'Ativos'], ['arquivado', 'Arquivados']].map(function ([k, label]) {
+          const on = aba === k;
+          return <button key={k} onClick={() => setAba(k)} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : t.muted }}>{label}</button>;
+        })}
       </div>
-      {cur && <DevProjetoModal t={t} proj={cur} onClose={() => setOpen(null)} onUpdate={update} onDelete={del} />}
+
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando projetos…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(aba, true)}>Tentar novamente</Btn>
+        </Card>
+      ) : projects.length === 0 ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={aba === 'ativo' ? 'Nenhum projeto ativo' : 'Nada arquivado'} sub={aba === 'ativo' ? 'Crie o primeiro projeto do time.' : 'Projetos arquivados aparecem aqui.'} /></Card>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 18 }}>
+          {projects.map(function (p) {
+            const prog = pjProgresso(p.checklists);
+            const prio = PJ_PRIO[p.priority] || [p.priority, 'gray'];
+            const hex = PJ_COR_HEX[p.color] || PJ_COR_HEX.blue;
+            return (
+              <Card t={t} key={p.id} hover style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
+                <div onClick={() => setAberto(p.id)}>
+                  <div style={{ height: 8, background: hex }} />
+                  <div style={{ padding: 18 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <Badge t={t} kind={prio[1]} dot>{prio[0]}</Badge>
+                      {p.op_code && <span style={{ fontSize: 10.5, fontWeight: 800, fontFamily: 'monospace', padding: '3px 9px', borderRadius: 8, background: t.hover, color: t.muted }}>OP {p.op_code}</span>}
+                    </div>
+                    <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginTop: 10 }}>{p.name}</div>
+                    {p.description && <div style={{ fontSize: 12.5, color: t.muted, marginTop: 6, lineHeight: 1.45, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.description}</div>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 14 }}>
+                      <div style={{ flex: 1, height: 7, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${prog.pct}%`, borderRadius: 5, background: prog.pct === 100 ? uiTone(t, 'green').fg : t.accent }} /></div>
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: prog.pct === 100 ? uiTone(t, 'green').fg : t.text }}>{prog.pct}%</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: t.faint, marginTop: 6 }}>{prog.done}/{prog.total} itens</div>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {novo && (
+        <div onClick={() => !agindo && setNovo(null)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center' }}><Icon name="kanban" size={19} /></span>
+              <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>Novo projeto</div>
+            </div>
+            <PjCampos t={t} form={novo} setForm={setNovo} />
+            {novo.erro && <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{novo.erro}</div>}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+              <Btn t={t} kind="ghost" onClick={() => !agindo && setNovo(null)}>Cancelar</Btn>
+              <Btn t={t} icon="check" onClick={criar}>{agindo ? 'Criando…' : 'Criar projeto'}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {aberto && <DevProjetoModal t={t} projetoId={aberto} onClose={() => setAberto(null)} onChanged={() => carregar(aba, false)} />}
     </div>
   );
+}
+
+// Modal do projeto — GET /:id ao abrir; edição com estado DIRTY (PUT só do que mudou).
+function DevProjetoModal({ t, projetoId, onClose, onChanged }) {
+  const R = window.React;
+  const [proj, setProj] = useStateDV(null);   // snapshot do servidor
+  const [form, setForm] = useStateDV(null);   // {nome, desc, prioridade, cor, opCode, erro}
+  const [cls, setCls] = useStateDV([]);       // checklists editáveis (cópia profunda)
+  const [erro, setErro] = useStateDV(null);
+  const [agindo, setAgindo] = useStateDV(false);
+  const [confirmando, setConfirmando] = useStateDV(null); // 'arquivar' | 'excluir'
+  const [menuAberto, setMenuAberto] = useStateDV(false);
+
+  const carregar = R.useCallback(function () {
+    return window.FRApi.get(`/dev-projects/${projetoId}`, { skipLoading: true })
+      .then(function (r) {
+        setProj(r.data);
+        setForm({ nome: r.data.name, desc: r.data.description || '', prioridade: r.data.priority, cor: r.data.color, opCode: r.data.op_code || '', erro: null });
+        setCls(JSON.parse(JSON.stringify(r.data.checklists || [])));
+        setErro(null);
+      })
+      .catch(function (e) { setErro(pjErr(e)); });
+  }, [projetoId]);
+  R.useEffect(function () { carregar(); }, [carregar]);
+
+  // DIRTY por campo: o PUT leva SÓ o que mudou (op_code '' com vínculo anterior vira null).
+  const mudancas = function () {
+    if (!proj || !form) return {};
+    const body = {};
+    if (form.nome.trim() !== proj.name) body.name = form.nome.trim();
+    if (form.desc.trim() !== (proj.description || '')) body.description = form.desc.trim();
+    if (form.prioridade !== proj.priority) body.priority = form.prioridade;
+    if (form.cor !== proj.color) body.color = form.cor;
+    if (JSON.stringify(cls) !== JSON.stringify(proj.checklists || [])) body.checklists = cls;
+    const opAtual = proj.op_code || '';
+    const opNovo = String(form.opCode || '').trim();
+    if (opNovo !== opAtual) body.op_code = opNovo === '' ? null : opNovo;
+    return body;
+  };
+  const dirty = Object.keys(mudancas()).length > 0;
+
+  const salvar = function () {
+    const body = mudancas();
+    if (Object.keys(body).length === 0 || agindo) return;
+    if (body.name === '') { setForm({ ...form, erro: 'Nome é obrigatório.' }); return; }
+    setAgindo(true);
+    window.FRApi.put(`/dev-projects/${projetoId}`, body)
+      .then(function () { return carregar(); })
+      .then(function () { if (onChanged) onChanged(); })
+      .catch(function (e) { setForm(function (m) { return { ...m, erro: pjErr(e) }; }); })
+      .then(function () { setAgindo(false); });
+  };
+  const mudarStatus = function (alvo) {
+    setAgindo(true);
+    window.FRApi.put(`/dev-projects/${projetoId}`, { status: alvo })
+      .then(function () { if (onChanged) onChanged(); onClose(); })
+      .catch(function (e) { setErro(pjErr(e)); setConfirmando(null); setAgindo(false); });
+  };
+  const excluir = function () {
+    setAgindo(true);
+    window.FRApi.delete(`/dev-projects/${projetoId}`)
+      .then(function () { if (onChanged) onChanged(); onClose(); })
+      .catch(function (e) { setErro(pjErr(e)); setConfirmando(null); setAgindo(false); });
+  };
+
+  // Editor de checklists (limites da borda aplicados AQUI — a UI impede antes do 400).
+  const addChecklist = function (titulo) { const v = String(titulo || '').trim(); if (!v || cls.length >= 20) return; setCls(cls.concat([{ titulo: v.slice(0, 200), itens: [] }])); };
+  const renomear = function (ci, v) { setCls(cls.map(function (c, j) { return j === ci ? { ...c, titulo: v.slice(0, 200) } : c; })); };
+  const delChecklist = function (ci) { setCls(cls.filter(function (_, j) { return j !== ci; })); };
+  const addItem = function (ci, txt) { const v = String(txt || '').trim(); if (!v) return; setCls(cls.map(function (c, j) { return j === ci && c.itens.length < 100 ? { ...c, itens: c.itens.concat([{ t: v.slice(0, 500), done: false }]) } : c; })); };
+  const toggleItem = function (ci, ii) { setCls(cls.map(function (c, j) { return j === ci ? { ...c, itens: c.itens.map(function (i, k) { return k === ii ? { ...i, done: !i.done } : i; }) } : c; })); };
+  const delItem = function (ci, ii) { setCls(cls.map(function (c, j) { return j === ci ? { ...c, itens: c.itens.filter(function (_, k) { return k !== ii; }) } : c; })); };
+
+  const prog = pjProgresso(cls);
+  const arquivado = proj && proj.status === 'arquivado';
+
+  return (
+    <div onClick={() => { if (!agindo) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div onClick={(e) => { e.stopPropagation(); setMenuAberto(false); }} style={{ width: 'min(760px,97vw)', maxHeight: '94vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
+        {!proj ? (
+          <div style={{ padding: 48, textAlign: 'center', color: erro ? uiTone(t, 'red').fg : t.muted, fontSize: 13.5, fontWeight: erro ? 700 : 400 }}>{erro || 'Carregando projeto…'}</div>
+        ) : (
+          <React.Fragment>
+            <div style={{ height: 8, background: PJ_COR_HEX[form ? form.cor : proj.color] || PJ_COR_HEX.blue, flexShrink: 0 }} />
+            <div style={{ padding: '14px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ flex: 1, fontSize: 16, fontWeight: 850, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{proj.name}</div>
+              {arquivado && <Badge t={t} kind="gray" dot>Arquivado</Badge>}
+              <div style={{ position: 'relative' }}>
+                <button onClick={(e) => { e.stopPropagation(); setMenuAberto(!menuAberto); }} title="Opções" style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="dots" size={17} /></button>
+                {menuAberto && (
+                  <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', zIndex: 40, top: 'calc(100% + 6px)', right: 0, width: 200, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6 }}>
+                    <button onClick={() => { setMenuAberto(false); setConfirmando('excluir'); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: uiTone(t, 'red').fg }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                      <Icon name="trash" size={15} /> Excluir Projeto
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button onClick={() => !agindo && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+            </div>
+            <div className="fr-scroll" style={{ overflowY: 'auto', padding: '18px 22px', flex: 1 }}>
+              {form && <PjCampos t={t} form={form} setForm={setForm} />}
+              {/* progresso derivado — ao vivo, do estado editável */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 16 }}>
+                <div style={{ flex: 1, height: 7, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${prog.pct}%`, borderRadius: 5, background: prog.pct === 100 ? uiTone(t, 'green').fg : t.accent }} /></div>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: prog.pct === 100 ? uiTone(t, 'green').fg : t.text }}>{prog.pct}% · {prog.done}/{prog.total}</span>
+              </div>
+              {/* checklists */}
+              <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14, marginTop: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 12 }}>Checklists ({cls.length}/20)</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {cls.map(function (cl, ci) {
+                    return (
+                      <div key={ci}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <input value={cl.titulo} maxLength={200} onChange={(e) => renomear(ci, e.target.value)} style={{ flex: 1, minWidth: 0, height: 34, borderRadius: 8, border: `1px solid transparent`, background: 'transparent', color: t.text, padding: '0 8px', fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }}
+                            onFocus={(e) => { e.target.style.border = `1px solid ${t.border}`; e.target.style.background = t.elevated; }} onBlur={(e) => { e.target.style.border = '1px solid transparent'; e.target.style.background = 'transparent'; }} />
+                          <span style={{ fontSize: 11.5, color: t.muted, fontWeight: 600, flexShrink: 0 }}>{cl.itens.filter(function (i) { return i.done; }).length}/{cl.itens.length}</span>
+                          <button onClick={() => delChecklist(ci)} title="Excluir checklist" style={{ all: 'unset', cursor: 'pointer', width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}><Icon name="trash" size={14} /></button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {cl.itens.map(function (it, ii) {
+                            return (
+                              <div key={ii} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, background: it.done ? t.elevated : 'transparent', border: `1px solid ${t.border}` }}>
+                                <button onClick={() => toggleItem(ci, ii)} style={{ all: 'unset', cursor: 'pointer', width: 20, height: 20, borderRadius: 6, display: 'grid', placeItems: 'center', flexShrink: 0, background: it.done ? uiTone(t, 'green').fg : 'transparent', color: '#fff', border: `1.5px solid ${it.done ? 'transparent' : t.borderStrong}` }}>{it.done && <Icon name="check" size={13} />}</button>
+                                <span style={{ flex: 1, fontSize: 13.5, color: it.done ? t.muted : t.text, textDecoration: it.done ? 'line-through' : 'none', overflowWrap: 'anywhere' }}>{it.t}</span>
+                                <button onClick={() => delItem(ci, ii)} title="Remover item" style={{ all: 'unset', cursor: 'pointer', width: 24, height: 24, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.faint, flexShrink: 0 }}><Icon name="x" size={13} /></button>
+                              </div>
+                            );
+                          })}
+                          <DevAddItem t={t} onAdd={(txt) => addItem(ci, txt)} disabled={cl.itens.length >= 100} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <DevAddChecklist t={t} onAdd={addChecklist} disabled={cls.length >= 20} />
+                </div>
+              </div>
+              {form && form.erro && <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{form.erro}</div>}
+              {erro && <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erro}</div>}
+            </div>
+            <div style={{ padding: '13px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <Btn t={t} icon="check" kind={dirty ? 'primary' : 'ghost'} onClick={salvar}>{agindo ? 'Salvando…' : 'Salvar'}</Btn>
+              {dirty && <span style={{ fontSize: 12, color: t.muted }}>Alterações não salvas</span>}
+              <div style={{ marginLeft: 'auto' }}>
+                {arquivado
+                  ? <Btn t={t} icon="refresh" kind="soft" onClick={() => !agindo && mudarStatus('ativo')}>Reativar</Btn>
+                  : <Btn t={t} icon="box" kind="ghost" onClick={() => setConfirmando('arquivar')}>Arquivar</Btn>}
+              </div>
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+
+      {confirmando && (
+        <div onClick={(e) => { e.stopPropagation(); if (!agindo) setConfirmando(null); }} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, padding: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
+              <span style={{ width: 38, height: 38, borderRadius: 10, background: uiTone(t, confirmando === 'excluir' ? 'red' : 'amber').bg, color: uiTone(t, confirmando === 'excluir' ? 'red' : 'amber').fg, display: 'grid', placeItems: 'center' }}><Icon name="alert" size={18} /></span>
+              <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{confirmando === 'excluir' ? 'Excluir projeto' : 'Arquivar projeto'}</div>
+            </div>
+            <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.55 }}>
+              {confirmando === 'excluir'
+                ? 'Excluir apaga o projeto e os checklists definitivamente — para pausar, use Arquivar.'
+                : 'Arquivar tira o projeto da grade ativa (reversível — ele fica na aba Arquivados).'}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <Btn t={t} kind="ghost" onClick={() => !agindo && setConfirmando(null)}>Voltar</Btn>
+              <button onClick={() => { if (agindo) return; confirmando === 'excluir' ? excluir() : mudarStatus('arquivado'); }}
+                style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: confirmando === 'excluir' ? uiTone(t, 'red').fg : t.accent, color: '#fff', opacity: agindo ? 0.6 : 1 }}>
+                {agindo ? 'Aplicando…' : confirmando === 'excluir' ? 'Excluir definitivamente' : 'Arquivar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Gate padrão da casa: sem a page_key 'projetos' a tela interna NEM MONTA (zero rede).
+// Admin passa pelo bypass; a chave existe no universo (migration 013) e é concedível
+// a outros papéis pela tela Permissões.
+function DevProjetos({ t }) {
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('projetos')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Projetos" subtitle="Projetos internos do time de desenvolvimento." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (projetos) para ver os projetos.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return <DevProjetosReal t={t} />;
 }
 
 // ---------- Agenda (mês, estilo Google Agenda) ----------
@@ -627,9 +846,8 @@ function DevModule(props) {
   // O seed de chamados MORREU com a fila real. Os mocks restantes (Painel/Chat, ambos
   // inalcançáveis pelo cadeado de prefixo) recebem lista vazia até cada um ser ligado.
   const [chamados, setChamados] = useStateDV([]);
-  const [projetos, setProjetos] = useStateDV(DV_PROJ_SEED);
   const [agenda, setAgenda] = useStateDV(DV_AGENDA_SEED);
-  const p = { ...props, t, chamados, setChamados, projetos, setProjetos, agenda, setAgenda };
+  const p = { ...props, t, chamados, setChamados, agenda, setAgenda };
   if (props.active === 'dev-chamados') return <DevChamados {...p} />;
   if (props.active === 'dev-chat') return <DevChat {...p} />;
   if (props.active === 'dev-projetos') return <DevProjetos {...p} />;
