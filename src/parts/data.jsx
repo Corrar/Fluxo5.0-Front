@@ -48,6 +48,7 @@ const NAV = [
         children: [
           { id: 'solicitacoes', name: 'Solicitações' },
           { id: 'pedidos',      name: 'Meus Pedidos' },
+          { id: 'meuschamados', name: 'Meus Chamados' },
           { id: 'encomendar',   name: 'Encomendar 3D' },
         ],
       },
@@ -71,7 +72,6 @@ const NAV = [
       // + 403 do backend), como nas vizinhas.
       { id: 'auditoria',     name: 'Auditoria',         icon: 'clipboard' },
       { id: 'usuarios',      name: 'Usuários',          icon: 'user' },
-      { id: 'painelti',      name: 'Painel TI',         icon: 'terminal',  locked: true },
     ],
   },
 ];
@@ -110,11 +110,12 @@ const NAV_DEV = [
     label: 'Desenvolvimento',
     items: [
       { id: 'dev-painel',    name: 'Painel', icon: 'barChart2' },
-      { id: 'dev-chamados',  name: 'Chamados', icon: 'file', badge: 3 },
+      { id: 'dev-chamados',  name: 'Chamados', icon: 'file' },
       { id: 'dev-chat',      name: 'Chat', icon: 'bell' },
       { id: 'dev-projetos',  name: 'Projetos', icon: 'kanban' },
       { id: 'dev-agenda',    name: 'Agenda', icon: 'calendar' },
       { id: 'pedidos',       name: 'Meus Pedidos', icon: 'cart' },
+      { id: 'meuschamados',  name: 'Meus Chamados', icon: 'clipboard' },
       {
         id: 'configuracoes', name: 'Configurações', icon: 'gear',
         // 'permissoes' mora AQUI em DEFINITIVO (decisão do Bruno, 29/07/2026: administração
@@ -176,6 +177,7 @@ const NAV_PROD = [
       { id: 'prod-receb',   name: 'Recebimento', icon: 'download' },
       { id: 'prod-aponta',  name: 'Apontamentos', icon: 'clipboard' },
       { id: 'pedidos',      name: 'Meus Pedidos', icon: 'cart' },
+      { id: 'meuschamados', name: 'Meus Chamados', icon: 'clipboard' },
       { id: 'clientes',     name: 'Clientes e OPs', icon: 'users' },
       { id: 'devolucaoop',  name: 'Devolução por OP', icon: 'exchange' },
     ],
@@ -244,7 +246,12 @@ const FR_LOCKED_PAGES = new Set([
   // 'confronto' SAIU: ligada a /travel-orders (registrar saída = POST c/ X-Idempotency-Key +
   //   reserva; confronto = POST /:id/reconcile). 4 estágios do mock colapsados nos 2 do backend
   //   (pending/reconciled); origem e confronto-de-ajuste ficaram de fora (sem fonte/sem endpoint).
-  'controlesaida', 'painelti',
+  'controlesaida',
+  // 'painelti' MORREU DE VEZ (decisão do Bruno): o helpdesk vive no módulo Dev — a abertura
+  //   de chamado é a tela compartilhada Meus Chamados ('meuschamados', em todos os módulos
+  //   navegáveis) e o atendimento é o dev-chamados real. O id fica AQUI como rota morta:
+  //   localStorage velho apontando 'painelti' vê o cadeado, nunca uma tela.
+  'painelti',
   // Estoque — rotas-pai mock (não navegam pelo menu aberto, mas caem por busca / menu recolhido)
   'entradas', 'requisicao',
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)
@@ -277,8 +284,14 @@ const FR_LOCKED_PAGES = new Set([
 // prefixo FICA nesta lista — as abas mock do Dev (painel/chamados/chat/projetos/agenda)
 // seguem no cadeado até cada uma ser ligada de verdade. Destravar o módulo ≠ destravar mock.
 const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
+
+// EXCEÇÕES PONTUAIS ao cadeado de prefixo: rotas dev-* que ganharam tela REAL e saem do
+// bloqueio uma a uma (o prefixo continua valendo pras irmãs mock). Hoje só a fila do
+// helpdesk: 'dev-chamados' virou tela real (gate por canAccess('chamados') na própria tela).
+const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados']);
 function frIsLocked(id) {
   if (!id) return false;
+  if (FR_LOCKED_PREFIX_EXCECOES.has(id)) return false;
   if (FR_LOCKED_PAGES.has(id)) return true;
   return FR_LOCKED_MODULE_PREFIXES.some((p) => id.indexOf(p) === 0);
 }

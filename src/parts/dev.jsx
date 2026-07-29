@@ -1,27 +1,6 @@
-// dev.jsx — "Desenvolvedor" module: Painel, Chamados (board + detail + chat), Meus Trabalhos.
+// dev.jsx — módulo Desenvolvedor: Chamados (fila REAL do helpdesk) + mocks cadeados (Painel, Chat, Projetos, Agenda).
 const { useState: useStateDV } = React;
 const DV_ACCENT = '#0891b2', DV_ACCENT_T = '#22d3ee';
-
-const DV_STATUS = {
-  aberto:         { label: 'Aberto', kind: 'amber', next: 'analise', act: 'Iniciar análise' },
-  analise:        { label: 'Em análise', kind: 'blue', next: 'desenvolvimento', act: 'Iniciar desenvolvimento' },
-  desenvolvimento:{ label: 'Em desenvolvimento', kind: 'accent', next: 'concluido', act: 'Concluir chamado' },
-  concluido:      { label: 'Concluído', kind: 'green' },
-};
-const DV_STEPS = ['Aberto', 'Em análise', 'Desenvolvimento', 'Concluído'];
-const DV_CHAMADOS_SEED = [
-  { id: 'TI-1042', titulo: 'Erro ao exportar relatório em PDF', prioridade: ['Alta', 'red'], status: 'desenvolvimento', data: '17/06 08:40', prog: 70,
-    solicitante: 'Ana Paula', setor: 'Estoque', funcao: 'Gestora', desc: 'O botão PDF na página Relatórios não gera o arquivo.',
-    chat: [{ de: 'user', txt: 'O PDF não baixa, dá erro.', h: '08:41', ts: 100 }, { de: 'dev', txt: 'Reproduzi aqui, é a fonte. Corrigindo agora.', h: '09:02', ts: 200 }, { de: 'user', txt: 'Beleza, aguardando! Mandei um print do erro.', h: '09:40', ts: 900, unread: true }] },
-  { id: 'TI-1041', titulo: 'Adicionar filtro por tag em Produtos', prioridade: ['Baixa', 'blue'], status: 'aberto', data: '17/06 07:55', prog: 0,
-    solicitante: 'Carlos Moura', setor: 'Usinagem', funcao: 'Operador', desc: 'Seria útil filtrar o catálogo por etiqueta.', chat: [{ de: 'user', txt: 'Consegue adicionar esse filtro?', h: '07:55', ts: 500, unread: true }, { de: 'user', txt: 'Ajudaria bastante no dia a dia.', h: '07:56', ts: 520, unread: true }] },
-  { id: 'TI-1039', titulo: 'Lentidão na busca de produtos', prioridade: ['Média', 'amber'], status: 'analise', data: '16/06 15:20', prog: 20,
-    solicitante: 'Bruno Teixeira', setor: 'Diretoria', funcao: 'Admin', desc: 'A busca demora ~5s com muitos itens.',
-    chat: [{ de: 'user', txt: 'Tá bem lento pra buscar.', h: '15:22', ref: 'TI-1039', ts: 300 }] },
-  { id: 'TI-1031', titulo: 'Coluna de lote nas entradas', prioridade: ['Baixa', 'blue'], status: 'concluido', data: '14/06 10:05', prog: 100,
-    solicitante: 'Júlia Ramos', setor: 'Qualidade', funcao: 'Auditora', desc: 'Solicitação de nova coluna.',
-    chat: [{ de: 'dev', txt: 'Implementado e publicado ✅', h: '11:30', ts: 50 }] },
-];
 
 // ---------- Painel ----------
 function DevPainel({ t, chamados }) {
@@ -64,207 +43,142 @@ function DevPainel({ t, chamados }) {
   );
 }
 
-// ---------- Chamado detail (status + progress + chat) ----------
-function DevChamadoDetail({ t, c, onClose, onAdvance, onProgress, onReply, focus, onToggleFocus }) {
-  const [msg, setMsg] = useStateDV('');
-  const st = DV_STATUS[c.status];
-  const stepIdx = ['aberto', 'analise', 'desenvolvimento', 'concluido'].indexOf(c.status);
-  const send = () => { if (!msg.trim()) return; onReply(c.id, msg.trim()); setMsg(''); };
-  const W = focus ? 'min(1000px,98vw)' : 'min(680px,96vw)';
-  const H = focus ? '96vh' : '92vh';
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: focus ? t.panel : 'rgba(8,10,16,.6)', backdropFilter: focus ? 'none' : 'blur(2px)', display: 'grid', placeItems: 'center', padding: focus ? 0 : 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: W, maxHeight: H, height: focus ? '100%' : 'auto', display: 'flex', flexDirection: 'column', background: t.panel, border: focus ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: focus ? 0 : 20, boxShadow: focus ? 'none' : t.shadow, overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: t.muted }}>{c.id}</span>
-            <Badge t={t} kind={c.prioridade[1]} dot>{c.prioridade[0]}</Badge>
-            <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 800, padding: '4px 11px', borderRadius: 8, background: uiTone(t, st.kind).bg, color: uiTone(t, st.kind).fg, textTransform: 'uppercase' }}>{st.label}</span>
-            <button onClick={onToggleFocus} title={focus ? 'Sair do foco' : 'Modo foco'} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: focus ? t.accentText : t.muted, border: `1px solid ${t.border}` }}><Icon name={focus ? 'chevronsRight' : 'eye'} size={15} /></button>
-            <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{c.titulo}</div>
-        </div>
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
-          {/* stepper */}
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
-            {DV_STEPS.map((s, i) => (
-              <React.Fragment key={s}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                  <span style={{ width: 28, height: 28, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 800, background: i === stepIdx ? t.accent : i < stepIdx ? uiTone(t, 'green').fg : t.elevated, color: i <= stepIdx ? '#fff' : t.faint, border: i <= stepIdx ? 'none' : `2px solid ${t.border}` }}>{i < stepIdx ? <Icon name="check" size={13} /> : i + 1}</span>
-                  <span style={{ fontSize: 9.5, fontWeight: 700, color: i <= stepIdx ? t.text : t.faint, whiteSpace: 'nowrap' }}>{s}</span>
-                </div>
-                {i < DV_STEPS.length - 1 && <span style={{ flex: 1, height: 2, background: i < stepIdx ? uiTone(t, 'green').fg : t.border, margin: '0 6px', marginTop: -16 }} />}
-              </React.Fragment>
-            ))}
-          </div>
-          {/* solicitante */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 16 }}>
-            <span style={{ width: 36, height: 36, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 13 }}>{c.solicitante.split(' ').map((x) => x[0]).slice(0, 2).join('')}</span>
-            <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{c.solicitante}</div><div style={{ fontSize: 11.5, color: t.muted }}>{c.setor} · {c.funcao} · {c.data}</div></div>
-          </div>
-          <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5, marginBottom: 18 }}>{c.desc}</div>
-          {/* progress control */}
-          {c.status !== 'concluido' && c.status !== 'aberto' && (
-            <div style={{ marginBottom: 18 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700, color: t.muted, marginBottom: 7 }}><span>PROGRESSO</span><span style={{ color: t.accentText }}>{c.prog}%</span></div>
-              <input type="range" min="0" max="100" value={c.prog} onChange={(e) => onProgress(c.id, parseInt(e.target.value))} style={{ width: '100%', accentColor: t.accent }} />
-            </div>
-          )}
-          {/* chat */}
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Conversa com o solicitante</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {c.chat.length === 0 && <div style={{ fontSize: 12.5, color: t.faint }}>Sem mensagens ainda.</div>}
-            {c.chat.map((m, i) => { const mine = m.de === 'dev'; return (
-              <div key={i} style={{ display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
-                <div style={{ maxWidth: '76%' }}>
-                  <div style={{ padding: '9px 13px', borderRadius: 14, borderBottomRightRadius: mine ? 4 : 14, borderBottomLeftRadius: mine ? 14 : 4, background: mine ? t.accent : t.elevated, color: mine ? '#fff' : t.text, fontSize: 13.5, lineHeight: 1.45 }}>{m.txt}</div>
-                  <div style={{ fontSize: 10, color: t.faint, marginTop: 3, textAlign: mine ? 'right' : 'left' }}>{mine ? 'Você' : c.solicitante} · {m.h}</div>
-                </div>
-              </div>
-            ); })}
-          </div>
-        </div>
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', gap: 9 }}>
-            <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} placeholder="Responder ao solicitante…" style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
-            <button onClick={send} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: t.accent, color: '#fff', flexShrink: 0 }}><Icon name="send" size={18} /></button>
-          </div>
-          {st.next && <Btn t={t} icon={c.status === 'desenvolvimento' ? 'check' : 'printer'} onClick={() => onAdvance(c.id)}>{st.act}</Btn>}
-        </div>
-      </div>
-    </div>
-  );
-}
+// ---------- Chamados (fila REAL do atendente — helpdesk v1) ----------
+// LIGAÇÃO REAL: GET /tickets (fila única, requirePermission('chamados') no backend),
+// PUT /tickets/:id/status (transições lineares), PUT /tickets/:id/priority, e o detalhe/
+// timeline compartilhados de window.FRTicketDetail (pages_rest.jsx) com atendente=true.
+// O MOCK MORREU: DV_CHAMADOS_SEED, DV_STATUS/DV_STEPS (substituídos pelos mapas reais de
+// window.FRTk), o chat fake do detalhe, o DevTrabalhos (órfão, nunca roteado) e o
+// "Meus Scripts" (anotação particular sem relação com tickets — morre com o mock; se fizer
+// falta, volta como feature própria). dev-chat segue MOCK CADEADO (tempo real é v2).
+//
+// Gate canAccess('chamados') padrão da casa (tela interna nem monta). NOTA v1: a page_key
+// 'chamados' não está concedida a NENHUM papel — o atendente de hoje é o admin (bypass).
+// Conceder a chave pela tela de Permissões quando o papel de atendente nascer.
+//
+// Abas por GRUPO de status (padrão do mock): Novos = aberto+em_analise · Em desenvolvimento ·
+// Concluídos = concluido+cancelado (cancelado com badge). O filtro ?status= do backend é de
+// UM status — na aba de status único (Em desenvolvimento) o refetch usa o filtro server-side;
+// nas abas compostas o agrupamento é local sobre o fetch cheio (que também alimenta os
+// contadores). Filtro composto server-side é v2 se o volume um dia doer (envelope pronto).
 
-function DevChamados({ t, chamados, setChamados, scripts, setScripts }) {
+function DevChamadosReal({ t }) {
+  const R = window.React;
+  const Tk = window.FRTk;
+  const Detail = window.FRTicketDetail;
+  const [tickets, setTickets] = useStateDV([]);
+  const [loading, setLoading] = useStateDV(true);
+  const [error, setError] = useStateDV(null);
   const [tab, setTab] = useStateDV('novos');
-  const [openId, setOpenId] = useStateDV(null);
-  const [focus, setFocus] = useStateDV(false);
-  const [scriptsOpen, setScriptsOpen] = useStateDV(false);
-  const advance = (id) => setChamados((xs) => xs.map((x) => (x.id === id ? { ...x, status: DV_STATUS[x.status].next, prog: DV_STATUS[x.status].next === 'concluido' ? 100 : DV_STATUS[x.status].next === 'desenvolvimento' ? Math.max(x.prog, 10) : x.prog } : x)));
-  const progress = (id, v) => setChamados((xs) => xs.map((x) => (x.id === id ? { ...x, prog: v } : x)));
-  const reply = (id, txt) => setChamados((xs) => xs.map((x) => (x.id === id ? { ...x, chat: [...x.chat, { de: 'dev', txt, h: 'agora' }] } : x)));
+  const [aberto, setAberto] = useStateDV(null);
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setError(null);
+    return window.FRApi.get('/tickets', { skipLoading: true })
+      .then(function (r) { setTickets((r.data && r.data.tickets) || []); if (inicial) setLoading(false); })
+      .catch(function (e) { setError(tkFilaErr(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  // Cortesia do socket (sala 'admin' recebe comentário de requester): recarrega a fila.
+  R.useEffect(function () {
+    const h = function () { carregar(false); };
+    window.addEventListener('fr:ticket_updated', h);
+    return function () { window.removeEventListener('fr:ticket_updated', h); };
+  }, [carregar]);
+
+  // Prova do filtro server-side na aba de status único: refetch com ?status= e usa o
+  // resultado como view da aba (os contadores seguem do fetch cheio em `tickets`).
+  const [viewDev, setViewDev] = useStateDV(null);
+  R.useEffect(function () {
+    if (tab !== 'dev') { setViewDev(null); return; }
+    window.FRApi.get('/tickets?status=em_desenvolvimento', { skipLoading: true })
+      .then(function (r) { setViewDev((r.data && r.data.tickets) || []); })
+      .catch(function () { setViewDev(null); }); // fallback: agrupamento local
+  }, [tab, tickets]);
+
   const groups = {
-    novos: chamados.filter((c) => c.status === 'aberto' || c.status === 'analise'),
-    dev: chamados.filter((c) => c.status === 'desenvolvimento'),
-    feitos: chamados.filter((c) => c.status === 'concluido'),
+    novos: tickets.filter(function (x) { return x.status === 'aberto' || x.status === 'em_analise'; }),
+    dev: tickets.filter(function (x) { return x.status === 'em_desenvolvimento'; }),
+    feitos: tickets.filter(function (x) { return x.status === 'concluido' || x.status === 'cancelado'; }),
   };
   const tabs = [['novos', 'Novos'], ['dev', 'Em desenvolvimento'], ['feitos', 'Concluídos']];
-  const view = groups[tab];
-  const cur = chamados.find((c) => c.id === openId);
-  return (
-    <div>
-      <PageHeader t={t} title="Chamados" subtitle="Solicitações de suporte recebidas dos setores."
-        actions={<Btn t={t} kind="ghost" icon="terminal" onClick={() => setScriptsOpen(true)}>Meus Scripts</Btn>} />
-      <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 22 }}>
-        {tabs.map(([k, label]) => { const on = tab === k; return (
-          <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : t.muted }}>{label} <span style={{ opacity: .6, fontWeight: 800 }}>({groups[k].length})</span></button>
-        ); })}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 16 }}>
-        {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhum chamado neste status." /></Card></div>}
-        {view.map((c) => { const st = DV_STATUS[c.status]; return (
-          <Card t={t} key={c.id} hover style={{ padding: 16, cursor: 'pointer' }}>
-            <div onClick={() => setOpenId(c.id)}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ fontFamily: 'monospace', fontSize: 11.5, fontWeight: 800, color: t.muted }}>{c.id}</span><Badge t={t} kind={c.prioridade[1]} dot>{c.prioridade[0]}</Badge></div>
-                <Badge t={t} kind={st.kind} dot>{st.label}</Badge>
-              </div>
-              <div style={{ fontSize: 15.5, fontWeight: 800, color: t.text, margin: '11px 0 10px', lineHeight: 1.3 }}>{c.titulo}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                <span style={{ width: 28, height: 28, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 10.5 }}>{c.solicitante.split(' ').map((x) => x[0]).slice(0, 2).join('')}</span>
-                <span style={{ fontSize: 12, color: t.muted }}>{c.solicitante} · {c.setor}</span>
-              </div>
-              {c.status === 'desenvolvimento' && (
-                <div style={{ marginTop: 12 }}><div style={{ height: 5, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${c.prog}%`, borderRadius: 5, background: t.accent }} /></div></div>
-              )}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 13, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
-              <span style={{ fontSize: 11.5, color: t.faint }}>{c.data}</span>
-              <button onClick={() => setOpenId(c.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, background: t.accentSoft }}>Abrir {c.chat.length > 0 && `· ${c.chat.length}`} <Icon name="chevronRight" size={14} /></button>
-            </div>
-          </Card>
-        ); })}
-      </div>
-      {cur && <DevChamadoDetail t={t} c={cur} onClose={() => { setOpenId(null); setFocus(false); }} onAdvance={advance} onProgress={progress} onReply={reply} focus={focus} onToggleFocus={() => setFocus((f) => !f)} />}
-      {scriptsOpen && <DevScriptsModal t={t} scripts={scripts} onClose={() => setScriptsOpen(false)} onSave={setScripts} />}
-    </div>
-  );
-}
+  const view = tab === 'dev' && viewDev !== null ? viewDev : groups[tab];
 
-// ---------- Meus Trabalhos ----------
-function DevTrabalhos({ t, chamados, setChamados }) {
-  const ativos = chamados.filter((c) => c.status === 'desenvolvimento' || c.status === 'analise');
-  const progress = (id, v) => setChamados((xs) => xs.map((x) => (x.id === id ? { ...x, prog: v } : x)));
   return (
     <div>
-      <PageHeader t={t} title="Meus Trabalhos" subtitle="Chamados que você está desenvolvendo agora." />
-      {ativos.length === 0 ? (
-        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada em andamento" sub="Aceite um chamado para começar a trabalhar." /></Card>
+      <PageHeader t={t} title="Chamados" subtitle="Fila única de suporte — todos os chamados abertos pelos setores, direto do banco." />
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando a fila…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(true)}>Tentar novamente</Btn>
+        </Card>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {ativos.map((c) => { const st = DV_STATUS[c.status]; return (
-            <Card t={t} key={c.id} style={{ padding: 18 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <span style={{ width: 42, height: 42, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="terminal" size={20} /></span>
-                <div style={{ flex: 1, minWidth: 180 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ fontFamily: 'monospace', fontSize: 11.5, fontWeight: 800, color: t.muted }}>{c.id}</span><Badge t={t} kind={st.kind} dot>{st.label}</Badge></div>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 5 }}>{c.titulo}</div>
-                  <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>{c.solicitante} · {c.setor}</div>
-                </div>
-                <div style={{ width: 220, maxWidth: '100%' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700, color: t.muted, marginBottom: 6 }}><span>Progresso</span><span style={{ color: t.accentText }}>{c.prog}%</span></div>
-                  <input type="range" min="0" max="100" value={c.prog} onChange={(e) => progress(c.id, parseInt(e.target.value))} style={{ width: '100%', accentColor: t.accent }} />
-                </div>
-              </div>
-            </Card>
-          ); })}
-        </div>
+        <React.Fragment>
+          <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 22 }}>
+            {tabs.map(function ([k, label]) {
+              const on = tab === k;
+              return (
+                <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : t.muted }}>{label} <span style={{ opacity: .6, fontWeight: 800 }}>({groups[k].length})</span></button>
+              );
+            })}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 16 }}>
+            {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhum chamado neste grupo." /></Card></div>}
+            {view.map(function (c) {
+              const st = Tk.TK_STATUS[c.status] || Tk.TK_STATUS.aberto;
+              const prio = Tk.TK_PRIO[c.priority] || [c.priority, 'gray'];
+              return (
+                <Card t={t} key={c.id} hover style={{ padding: 16, cursor: 'pointer' }}>
+                  <div onClick={() => setAberto(c.id)}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ fontFamily: 'monospace', fontSize: 11.5, fontWeight: 800, color: t.muted }}>TI-{c.display_no}</span><Badge t={t} kind={prio[1]} dot>{prio[0]}</Badge></div>
+                      <Badge t={t} kind={st.kind} dot>{st.label}</Badge>
+                    </div>
+                    <div style={{ fontSize: 15.5, fontWeight: 800, color: t.text, margin: '11px 0 10px', lineHeight: 1.3 }}>{c.title}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      <span style={{ width: 28, height: 28, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 10.5 }}>{String(c.requester_name || '?').split(' ').map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase()}</span>
+                      <span style={{ fontSize: 12, color: t.muted }}>{c.requester_name} · {c.requester_sector}</span>
+                    </div>
+                    {c.assignee_name && <div style={{ fontSize: 11.5, color: t.faint, marginTop: 8 }}>Atendente: {c.assignee_name}</div>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 13, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
+                    <span style={{ fontSize: 11.5, color: t.faint }}>{Tk.tkQuando(c.created_at)}</span>
+                    <button onClick={() => setAberto(c.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, background: t.accentSoft }}>Abrir <Icon name="chevronRight" size={14} /></button>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </React.Fragment>
       )}
+      {aberto && <Detail t={t} ticketId={aberto} atendente={true} onClose={() => setAberto(null)} onChanged={() => carregar(false)} />}
     </div>
   );
 }
+function tkFilaErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
 
-// ---------- Scripts pessoais do dev (anotação particular, global) ----------
-function DevScriptsModal({ t, scripts, onClose, onSave }) {
-  const [list, setList] = useStateDV(scripts || []);
-  const [tit, setTit] = useStateDV('');
-  const [code, setCode] = useStateDV('');
-  const add = () => { if (!code.trim()) return; setList((xs) => [...xs, { titulo: tit.trim() || 'Snippet', code: code.trim() }]); setTit(''); setCode(''); };
-  const del = (i) => setList((xs) => xs.filter((_, j) => j !== i));
-  const copy = (txt) => { try { navigator.clipboard && navigator.clipboard.writeText(txt); } catch (e) {} };
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(640px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ width: 38, height: 38, borderRadius: 10, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="terminal" size={18} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>Meus Scripts & Anotações</div><div style={{ fontSize: 12, color: t.muted }}>Bloco particular do dev — consulte quando precisar.</div></div>
-          <button onClick={() => { onSave(list); onClose(); }} style={{ all: 'unset', cursor: 'pointer', fontSize: 13, fontWeight: 700, color: t.accentText, padding: '7px 12px', borderRadius: 9, background: t.accentSoft }}>Salvar</button>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-        </div>
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: 20, flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {list.map((s, i) => (
-            <div key={i} style={{ borderRadius: 12, border: `1px solid ${t.border}`, overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: t.elevated }}>
-                <Icon name="terminal" size={14} style={{ color: t.accentText }} />
-                <span style={{ fontSize: 12.5, fontWeight: 700, color: t.text, flex: 1 }}>{s.titulo}</span>
-                <button onClick={() => copy(s.code)} title="Copiar" style={{ all: 'unset', cursor: 'pointer', width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="copy" size={14} /></button>
-                <button onClick={() => del(i)} title="Excluir" style={{ all: 'unset', cursor: 'pointer', width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="trash" size={14} /></button>
-              </div>
-              <pre style={{ margin: 0, padding: '12px 14px', fontSize: 12.5, fontFamily: 'monospace', color: t.text, background: t.panel, overflowX: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{s.code}</pre>
-            </div>
-          ))}
-          {list.length === 0 && <div style={{ fontSize: 13, color: t.faint, textAlign: 'center', padding: 10 }}>Nenhum snippet ainda.</div>}
-          <div style={{ borderRadius: 12, border: `1px dashed ${t.borderStrong}`, padding: 12 }}>
-            <input value={tit} onChange={(e) => setTit(e.target.value)} placeholder="Título do snippet (opcional)" style={{ boxSizing: 'border-box', width: '100%', height: 38, borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none', marginBottom: 8 }} />
-            <textarea value={code} onChange={(e) => setCode(e.target.value)} rows={4} placeholder="Cole aqui o código / anotação técnica…" style={{ boxSizing: 'border-box', width: '100%', borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '10px 12px', fontSize: 12.5, fontFamily: 'monospace', outline: 'none', resize: 'vertical' }} />
-            <button onClick={add} style={{ all: 'unset', cursor: 'pointer', marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 9, fontSize: 13, fontWeight: 700, background: t.accent, color: '#fff' }}><Icon name="plus" size={15} /> Adicionar snippet</button>
+// Gate padrão da casa (mesmo desenho de Permissões/Auditoria/Usuários): sem a page_key
+// 'chamados', a fila nem monta — zero rede. Admin passa pelo bypass do canAccess.
+function DevChamados({ t }) {
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('chamados')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Chamados" subtitle="Fila única de suporte do time de desenvolvimento." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (chamados) para atender a fila.
           </div>
-        </div>
+        </Card>
       </div>
-    </div>
-  );
+    );
+  }
+  return <DevChamadosReal t={t} />;
 }
 
 // ---------- Chat centralizado ----------
@@ -710,11 +624,12 @@ function DevAgenda({ t, agenda, setAgenda }) {
 
 function DevModule(props) {
   const t = frTokens(props.theme, DV_ACCENT, DV_ACCENT_T);
-  const [chamados, setChamados] = useStateDV(DV_CHAMADOS_SEED);
+  // O seed de chamados MORREU com a fila real. Os mocks restantes (Painel/Chat, ambos
+  // inalcançáveis pelo cadeado de prefixo) recebem lista vazia até cada um ser ligado.
+  const [chamados, setChamados] = useStateDV([]);
   const [projetos, setProjetos] = useStateDV(DV_PROJ_SEED);
   const [agenda, setAgenda] = useStateDV(DV_AGENDA_SEED);
-  const [scripts, setScripts] = useStateDV([{ titulo: 'Reset cache do estoque', code: 'php artisan cache:clear\nphp artisan config:clear' }, { titulo: 'Query produtos críticos', code: 'SELECT sku, nome FROM produtos WHERE disponivel <= minimo;' }]);
-  const p = { ...props, t, chamados, setChamados, projetos, setProjetos, agenda, setAgenda, scripts, setScripts };
+  const p = { ...props, t, chamados, setChamados, projetos, setProjetos, agenda, setAgenda };
   if (props.active === 'dev-chamados') return <DevChamados {...p} />;
   if (props.active === 'dev-chat') return <DevChat {...p} />;
   if (props.active === 'dev-projetos') return <DevProjetos {...p} />;

@@ -2237,304 +2237,360 @@ function PageAuditoriaLogs({ t }) {
   );
 }
 
+// ---------- Helpdesk (chamados) — Meus Chamados + detalhe compartilhado ----------
+// LIGAÇÃO REAL ao backend (Commit 1 do helpdesk — migration 012):
+//   POST /tickets                    → abrir chamado (QUALQUER logado; requester sai do token)
+//   GET  /tickets/my                 → envelope {tickets, total} — só os do requester
+//   GET  /tickets/:id                → detalhe + timeline (dono OU atendente)
+//   POST /tickets/:id/comments       → comentar (encerrado = 409 do backend)
+//   PUT  /tickets/:id/status         → aqui SÓ o cancelamento do dono (status:'cancelado')
+// O mock PagePainelTI MORREU DE VEZ (decisão do Bruno): o front-office do helpdesk é ESTA
+// tela compartilhada — item nos NAVs dos módulos navegáveis, MESMO componente, SEM canAccess
+// (o gate é o authenticate do backend; a lista já vem filtrada por token). O que o painelti
+// tinha de aproveitável veio junto: form de abertura (título+prioridade+descrição) e o
+// stepper de 4 passos do solicitante. Hero "dev trabalhando"/status de serviços: teatro sem
+// fonte, morreu sem herdeiro. Anexos: FORA da v1 (dívida amarrada ao storage, DIVIDAS.md).
+// Tempo real: cortesia — socket.js repassa ticket_updated como evento de janela
+// 'fr:ticket_updated'; tela montada recarrega, sem toast global (o GET é a verdade).
 
-// ---------- Painel TI (Suporte ao Desenvolvedor) ----------
-const DEV = { nome: 'Diego Alves', cargo: 'Desenvolvedor', online: true };
-const DEV_ATUAL = { titulo: 'Integração NF-e v2', desc: 'Sincronização automática de notas fiscais com o estoque.', prog: 70, prazo: '17/06 · 18h', restante: 'hoje' };
-const DEV_TRABALHOS = [
-  { titulo: 'Integração NF-e v2', prog: 70, eta: 'hoje', tone: 'blue' },
-  { titulo: 'Correção fila de impressão 3D', prog: 40, eta: 'amanhã', tone: 'amber' },
-  { titulo: 'Relatório de auditoria export', prog: 15, eta: 'sex', tone: 'gray' },
-];
-const TICKET_STATUS = {
-  aberto:      { label: 'Aberto', kind: 'amber', step: 0 },
-  analise:     { label: 'Em análise', kind: 'blue', step: 1 },
-  desenvolvimento: { label: 'Em desenvolvimento', kind: 'accent', step: 2 },
-  concluido:   { label: 'Concluído', kind: 'green', step: 3 },
+const TK_PRIORIDADES = [['baixa', 'Baixa', 'blue'], ['media', 'Média', 'amber'], ['alta', 'Alta', 'red']];
+const TK_PRIO = { baixa: ['Baixa', 'blue'], media: ['Média', 'amber'], alta: ['Alta', 'red'] };
+const TK_STATUS = {
+  aberto:             { label: 'Aberto', kind: 'amber', step: 0 },
+  em_analise:         { label: 'Em análise', kind: 'blue', step: 1 },
+  em_desenvolvimento: { label: 'Em desenvolvimento', kind: 'accent', step: 2 },
+  concluido:          { label: 'Concluído', kind: 'green', step: 3 },
+  cancelado:          { label: 'Cancelado', kind: 'red', step: -1 }, // stepper vira badge
 };
-const TICKET_STEPS = ['Aberto', 'Em análise', 'Desenvolvimento', 'Concluído'];
-const CHAMADOS_SEED = [
-  { id: 'TI-1042', titulo: 'Erro ao exportar relatório em PDF', prioridade: ['Alta', 'red'], status: 'desenvolvimento', data: '17/06 08:40', desc: 'O botão PDF na página Relatórios não gera o arquivo.',
-    chat: [{ de: 'user', txt: 'O PDF não baixa, dá erro.', h: '08:41' }, { de: 'dev', txt: 'Reproduzi aqui, é a fonte. Corrigindo agora.', h: '09:02' }] },
-  { id: 'TI-1039', titulo: 'Lentidão na busca de produtos', prioridade: ['Média', 'amber'], status: 'analise', data: '16/06 15:20', desc: 'A busca demora ~5s com muitos itens.',
-    chat: [{ de: 'user', txt: 'Tá bem lento pra buscar.', h: '15:22' }] },
-  { id: 'TI-1031', titulo: 'Adicionar coluna de lote nas entradas', prioridade: ['Baixa', 'blue'], status: 'concluido', data: '14/06 10:05', desc: 'Solicitação de nova coluna.',
-    chat: [{ de: 'dev', txt: 'Implementado e publicado ✅', h: '11:30' }] },
-];
+const TK_STEPS = ['Aberto', 'Em análise', 'Desenvolvimento', 'Concluído'];
+function tkErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
+function tkQuando(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  return `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+}
 
-function PagePainelTI({ t }) {
-  const [chamados, setChamados] = useStateR(CHAMADOS_SEED);
-  const [novo, setNovo] = useStateR(false);
-  const [chatId, setChatId] = useStateR(null);
-  const [detId, setDetId] = useStateR(null);
-  const [msg, setMsg] = useStateR('');
-  const [form, setForm] = useStateR({ titulo: '', prioridade: 'Média', desc: '', imagens: [] });
-  const chatCham = chamados.find((c) => c.id === chatId);
-  const detCham = chamados.find((c) => c.id === detId);
-  const abertos = chamados.filter((c) => c.status !== 'concluido').length;
+// Stepper de 4 passos (padrão herdado do painelti); cancelado NÃO tem passo — o chamador
+// troca por badge antes de chegar aqui.
+function TkStepper({ t, status }) {
+  const st = TK_STATUS[status] || TK_STATUS.aberto;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+      {TK_STEPS.map((s, i) => (
+        <React.Fragment key={s}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+            <span style={{ width: 24, height: 24, borderRadius: '50%', display: 'grid', placeItems: 'center', background: i <= st.step ? (i === st.step ? t.accent : uiTone(t, 'green').fg) : t.elevated, color: i <= st.step ? '#fff' : t.faint, border: i <= st.step ? 'none' : `2px solid ${t.border}` }}>{i < st.step ? <Icon name="check" size={12} /> : <span style={{ fontSize: 10, fontWeight: 800 }}>{i + 1}</span>}</span>
+            <span style={{ fontSize: 9.5, fontWeight: 700, color: i <= st.step ? t.text : t.faint, whiteSpace: 'nowrap' }}>{s}</span>
+          </div>
+          {i < TK_STEPS.length - 1 && <span style={{ flex: 1, height: 2, background: i < st.step ? uiTone(t, 'green').fg : t.border, margin: '0 4px', marginTop: -14 }} />}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
 
-  const enviarMsg = () => {
-    if (!msg.trim()) return;
-    setChamados((xs) => xs.map((c) => c.id === chatId ? { ...c, chat: [...c.chat, { de: 'user', txt: msg.trim(), h: 'agora' }] } : c));
-    setMsg('');
+// DETALHE COMPARTILHADO (Meus Chamados E fila do atendente — dev.jsx usa via
+// window.FRTicketDetail). `atendente` liga os controles de transição/prioridade; o
+// cancelamento (só dono, só aberto) fica do lado do requester. Toda ação recarrega o
+// detalhe do servidor e avisa o pai (onChanged) pra lista acompanhar.
+function TicketDetail({ t, ticketId, atendente, onClose, onChanged }) {
+  const R = window.React;
+  const meuId = (window.FRAuth.user && window.FRAuth.user.id) || null;
+  const [tk, setTk] = R.useState(null);
+  const [erro, setErro] = R.useState(null);
+  const [msg, setMsg] = R.useState('');
+  const [agindo, setAgindo] = R.useState(false);
+  const [confirmando, setConfirmando] = R.useState(null); // {tipo:'cancelar'|'transicao'|'prioridade', alvo?}
+  const [feedback, setFeedback] = R.useState(null);
+
+  const carregar = R.useCallback(function () {
+    return window.FRApi.get(`/tickets/${ticketId}`, { skipLoading: true })
+      .then(function (r) { setTk(r.data); setErro(null); })
+      .catch(function (e) { setErro(tkErr(e)); });
+  }, [ticketId]);
+  R.useEffect(function () { carregar(); }, [carregar]);
+
+  // Cortesia do socket: atualização do MEU chamado recarrega o detalhe aberto.
+  R.useEffect(function () {
+    const h = function (ev) { if (ev.detail && ev.detail.ticketId === ticketId) carregar(); };
+    window.addEventListener('fr:ticket_updated', h);
+    return function () { window.removeEventListener('fr:ticket_updated', h); };
+  }, [ticketId, carregar]);
+
+  const aposMudanca = function () { setConfirmando(null); setAgindo(false); carregar(); if (onChanged) onChanged(); };
+  const comentar = function () {
+    const body = msg.trim();
+    if (!body || agindo) return;
+    setAgindo(true); setFeedback(null);
+    window.FRApi.post(`/tickets/${ticketId}/comments`, { body })
+      .then(function () { setMsg(''); aposMudanca(); })
+      .catch(function (e) { setFeedback(tkErr(e)); setAgindo(false); }); // 409 de encerrado cai aqui
   };
-  const onFiles = (files) => {
-    [...files].slice(0, 4).forEach((f) => { const r = new FileReader(); r.onload = () => setForm((s) => ({ ...s, imagens: [...s.imagens, { nome: f.name, url: r.result }] })); r.readAsDataURL(f); });
+  const mudarStatus = function (alvo) {
+    setAgindo(true); setFeedback(null);
+    window.FRApi.put(`/tickets/${ticketId}/status`, { status: alvo })
+      .then(aposMudanca)
+      .catch(function (e) { setFeedback(tkErr(e)); setConfirmando(null); setAgindo(false); });
   };
-  const criarChamado = () => {
-    if (!form.titulo.trim()) return;
-    const pmap = { Alta: 'red', Média: 'amber', Baixa: 'blue' };
-    const id = 'TI-' + (1043 + chamados.length);
-    setChamados((xs) => [{ id, titulo: form.titulo.trim(), prioridade: [form.prioridade, pmap[form.prioridade]], status: 'aberto', data: 'agora',
-      solicitante: USER.name, setor: USER.setor, funcao: USER.funcao, desc: form.desc.trim(), imagens: form.imagens,
-      chat: form.desc.trim() ? [{ de: 'user', txt: form.desc.trim(), h: 'agora', imagens: form.imagens }] : [] }, ...xs]);
-    setForm({ titulo: '', prioridade: 'Média', desc: '', imagens: [] }); setNovo(false);
+  const mudarPrioridade = function (alvo) {
+    setAgindo(true); setFeedback(null);
+    window.FRApi.put(`/tickets/${ticketId}/priority`, { priority: alvo })
+      .then(aposMudanca)
+      .catch(function (e) { setFeedback(tkErr(e)); setConfirmando(null); setAgindo(false); });
   };
-  const field = { boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
-  const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
+
+  const st = tk ? (TK_STATUS[tk.status] || TK_STATUS.aberto) : null;
+  const prio = tk ? (TK_PRIO[tk.priority] || [tk.priority, 'gray']) : null;
+  const encerrado = tk && (tk.status === 'concluido' || tk.status === 'cancelado');
+  const souDono = tk && tk.requester_id === meuId;
+  // Transição única do atendente, derivada do status (máquina linear do backend).
+  const proxima = tk && atendente
+    ? ({ aberto: ['em_analise', 'Iniciar análise', false],
+         em_analise: ['em_desenvolvimento', 'Iniciar desenvolvimento', false],
+         em_desenvolvimento: ['concluido', 'Concluir chamado', true] }[tk.status] || null)
+    : null;
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px,100%)', height: '100%', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: t.shadow }}>
+        {!tk ? (
+          <div style={{ flex: 1, display: 'grid', placeItems: 'center', color: erro ? uiTone(t, 'red').fg : t.muted, fontSize: 13.5, fontWeight: erro ? 700 : 400, padding: 20, textAlign: 'center' }}>{erro || 'Carregando chamado…'}</div>
+        ) : (
+          <React.Fragment>
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: t.muted }}>TI-{tk.display_no}</span>
+                <Badge t={t} kind={prio[1]} dot>{prio[0]}</Badge>
+                <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 800, padding: '4px 11px', borderRadius: 8, background: uiTone(t, st.kind).bg, color: uiTone(t, st.kind).fg, textTransform: 'uppercase' }}>{st.label}</span>
+                <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{tk.title}</div>
+              <div style={{ fontSize: 11.5, color: t.muted, marginTop: 4 }}>
+                {tk.requester_name} · {tk.requester_sector} · aberto em {tkQuando(tk.created_at)}
+                {tk.assignee_name ? ` · atendente: ${tk.assignee_name}` : ''}
+                {tk.closed_at ? ` · encerrado em ${tkQuando(tk.closed_at)}` : ''}
+              </div>
+            </div>
+            <div className="fr-scroll" style={{ flex: 1, overflowY: 'auto', padding: '18px 22px' }}>
+              {tk.status === 'cancelado'
+                ? <div style={{ marginBottom: 16 }}><Badge t={t} kind="red" dot>Cancelado</Badge></div>
+                : <div style={{ marginBottom: 18 }}><TkStepper t={t} status={tk.status} /></div>}
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 7 }}>Descrição</div>
+              <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.55, marginBottom: 18, whiteSpace: 'pre-wrap' }}>{tk.description}</div>
+              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Timeline ({(tk.comments || []).length})</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {(tk.comments || []).length === 0 && <div style={{ fontSize: 12.5, color: t.faint }}>Sem comentários ainda.</div>}
+                {(tk.comments || []).map(function (c) {
+                  const doDono = c.author_id === tk.requester_id; // o LADO deriva do autor vs requester
+                  return (
+                    <div key={c.id} style={{ display: 'flex', justifyContent: doDono ? 'flex-start' : 'flex-end' }}>
+                      <div style={{ maxWidth: '80%' }}>
+                        <div style={{ padding: '9px 13px', borderRadius: 13, borderBottomLeftRadius: doDono ? 4 : 13, borderBottomRightRadius: doDono ? 13 : 4, background: doDono ? t.elevated : t.accent, color: doDono ? t.text : '#fff', fontSize: 13.5, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{c.body}</div>
+                        <div style={{ fontSize: 10, color: t.faint, marginTop: 3, textAlign: doDono ? 'left' : 'right' }}>{c.author_name} · {tkQuando(c.created_at)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {feedback && (
+                <Card t={t} style={{ marginTop: 14, padding: 12, textAlign: 'center' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{feedback}</div>
+                </Card>
+              )}
+            </div>
+            <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 11 }}>
+              {!encerrado && (
+                <div style={{ display: 'flex', gap: 9 }}>
+                  <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && comentar()} placeholder={atendente ? 'Responder ao solicitante…' : 'Comentar no chamado…'} style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
+                  <button onClick={comentar} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: t.accent, color: '#fff', flexShrink: 0, opacity: agindo ? 0.6 : 1 }}><Icon name="send" size={18} /></button>
+                </div>
+              )}
+              {encerrado && <div style={{ fontSize: 12, color: t.muted, textAlign: 'center' }}>Chamado encerrado — a timeline está bloqueada. Precisa retomar o assunto? Abra um novo chamado.</div>}
+              {atendente && (
+                <div style={{ display: 'flex', gap: 9, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {proxima && (
+                    <Btn t={t} icon={proxima[0] === 'concluido' ? 'check' : 'chevronRight'}
+                      onClick={() => proxima[2] ? setConfirmando({ tipo: 'transicao', alvo: proxima[0], rotulo: proxima[1] }) : mudarStatus(proxima[0])}>
+                      {agindo ? 'Aplicando…' : proxima[1]}
+                    </Btn>
+                  )}
+                  {!encerrado && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.05em', color: t.faint, textTransform: 'uppercase' }}>Prioridade</span>
+                      {TK_PRIORIDADES.map(function ([k, label, tone]) {
+                        const on = tk.priority === k;
+                        return <button key={k} onClick={() => !on && setConfirmando({ tipo: 'prioridade', alvo: k, rotulo: label })} style={{ all: 'unset', cursor: on ? 'default' : 'pointer', fontSize: 11.5, fontWeight: 700, padding: '5px 10px', borderRadius: 8, background: on ? uiTone(t, tone).fg : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? 'transparent' : t.border}` }}>{label}</button>;
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!atendente && souDono && tk.status === 'aberto' && (
+                <button onClick={() => setConfirmando({ tipo: 'cancelar' })} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 40, borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 800, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg }}>
+                  <Icon name="ban" size={15} /> Cancelar chamado
+                </button>
+              )}
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+
+      {confirmando && (
+        <div onClick={(e) => { e.stopPropagation(); if (!agindo) setConfirmando(null); }} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(440px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, padding: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
+              <span style={{ width: 38, height: 38, borderRadius: 10, background: uiTone(t, confirmando.tipo === 'cancelar' ? 'red' : 'amber').bg, color: uiTone(t, confirmando.tipo === 'cancelar' ? 'red' : 'amber').fg, display: 'grid', placeItems: 'center' }}><Icon name="alert" size={18} /></span>
+              <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>
+                {confirmando.tipo === 'cancelar' ? 'Cancelar chamado' : confirmando.tipo === 'prioridade' ? 'Reclassificar prioridade' : confirmando.rotulo}
+              </div>
+            </div>
+            <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5 }}>
+              {confirmando.tipo === 'cancelar' && 'Cancelar este chamado? Ação definitiva — para reabrir o assunto será preciso abrir um novo.'}
+              {confirmando.tipo === 'prioridade' && `Mudar a prioridade para ${confirmando.rotulo}? A mudança fica registrada na Auditoria.`}
+              {confirmando.tipo === 'transicao' && 'Concluir o chamado? A timeline encerra (sem novos comentários) e o solicitante é avisado.'}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <Btn t={t} kind="ghost" onClick={() => !agindo && setConfirmando(null)}>Voltar</Btn>
+              <button onClick={() => { if (agindo) return; if (confirmando.tipo === 'cancelar') mudarStatus('cancelado'); else if (confirmando.tipo === 'prioridade') mudarPrioridade(confirmando.alvo); else mudarStatus(confirmando.alvo); }}
+                style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: confirmando.tipo === 'cancelar' ? uiTone(t, 'red').fg : t.accent, color: '#fff', opacity: agindo ? 0.6 : 1 }}>
+                {agindo ? 'Aplicando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+// Compartilhado com a fila real do atendente (dev.jsx): o detalhe E os mapas de rótulo —
+// uma fonte só pra status/prioridade dos chamados nas duas superfícies.
+Object.assign(window, { FRTicketDetail: TicketDetail, FRTk: { TK_STATUS, TK_PRIO, tkQuando } });
+
+// MEUS CHAMADOS — tela compartilhada do solicitante (padrão 'pedidos': item em todos os
+// NAVs navegáveis, componente único). SEM canAccess de propósito: qualquer logado abre e
+// acompanha os próprios; o gate é o authenticate do backend e a lista já vem por token.
+function PageMeusChamados({ t }) {
+  const R = window.React;
+  const [tickets, setTickets] = R.useState([]);
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+  const [novo, setNovo] = R.useState(null);   // {titulo, prioridade, desc, erro}
+  const [aberto, setAberto] = R.useState(null); // ticketId do detalhe
+  const [agindo, setAgindo] = R.useState(false);
+  const [flash, setFlash] = R.useState(null);
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setError(null);
+    return window.FRApi.get('/tickets/my', { skipLoading: true })
+      .then(function (r) { setTickets((r.data && r.data.tickets) || []); if (inicial) setLoading(false); })
+      .catch(function (e) { setError(tkErr(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  // Cortesia do socket: qualquer ticket_updated meu recarrega a lista (sem toast).
+  R.useEffect(function () {
+    const h = function () { carregar(false); };
+    window.addEventListener('fr:ticket_updated', h);
+    return function () { window.removeEventListener('fr:ticket_updated', h); };
+  }, [carregar]);
+
+  const criar = function () {
+    const n = novo || {};
+    const titulo = String(n.titulo || '').trim();
+    const desc = String(n.desc || '').trim();
+    if (!titulo) return setNovo({ ...n, erro: 'Título é obrigatório.' });
+    if (titulo.length > 200) return setNovo({ ...n, erro: 'Título deve ter no máximo 200 caracteres.' });
+    if (!desc) return setNovo({ ...n, erro: 'Descrição é obrigatória.' });
+    setAgindo(true);
+    window.FRApi.post('/tickets', { title: titulo, description: desc, priority: n.prioridade || 'media' })
+      .then(function (r) {
+        setNovo(null);
+        setFlash(`Chamado TI-${r.data.display_no} aberto.`);
+        setTimeout(function () { setFlash(null); }, 3000);
+        return carregar(false);
+      })
+      .catch(function (e) { setNovo(function (m) { return { ...m, erro: tkErr(e) }; }); })
+      .then(function () { setAgindo(false); });
+  };
+
+  const inputM = { boxSizing: 'border-box', width: '100%', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '10px 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
+  const lblM = { display: 'block', fontSize: 10.5, fontWeight: 800, letterSpacing: '.07em', color: t.faint, textTransform: 'uppercase', margin: '13px 0 6px' };
 
   return (
     <div>
-      <PageHeader t={t} title="Suporte & TI" subtitle="Abra chamados, acompanhe o desenvolvimento e fale com o time de TI."
-        actions={<Btn t={t} icon="plus" onClick={() => setNovo(true)}>Abrir chamado</Btn>} />
+      <PageHeader t={t} title="Meus Chamados" subtitle="Abra chamados pro time de desenvolvimento e acompanhe cada um até a solução."
+        actions={<Btn t={t} icon="plus" onClick={() => setNovo({ titulo: '', prioridade: 'media', desc: '' })}>Abrir chamado</Btn>} />
 
-      {/* hero — trabalho atual do dev */}
-      <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 20, padding: '26px 28px', marginBottom: 22, background: `linear-gradient(120deg, #0b1430 0%, ${t.accent} 145%)`, color: '#fff' }}>
-        <Icon name="terminal" size={170} style={{ position: 'absolute', right: -24, top: -30, opacity: 0.1 }} />
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', padding: '5px 12px', borderRadius: 999, background: 'rgba(255,255,255,.18)', marginBottom: 14 }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 0 3px rgba(52,211,153,.35)' }} /> Dev trabalhando agora
-            </div>
-            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'rgba(255,255,255,.7)' }}>{DEV.nome} · {DEV.cargo}</div>
-            <h2 style={{ margin: '6px 0 0', fontSize: 26, fontWeight: 850, letterSpacing: '-.02em', lineHeight: 1.1 }}>{DEV_ATUAL.titulo}</h2>
-            <p style={{ margin: '8px 0 0', fontSize: 13, color: 'rgba(255,255,255,.82)', maxWidth: 440, lineHeight: 1.5 }}>{DEV_ATUAL.desc}</p>
-            <div style={{ marginTop: 18, maxWidth: 420 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 700, marginBottom: 7 }}><span style={{ color: 'rgba(255,255,255,.85)' }}>Progresso</span><span>{DEV_ATUAL.prog}%</span></div>
-              <div style={{ height: 8, borderRadius: 6, background: 'rgba(255,255,255,.2)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${DEV_ATUAL.prog}%`, borderRadius: 6, background: '#34d399' }} /></div>
-            </div>
-          </div>
-          <div style={{ background: 'rgba(255,255,255,.13)', border: '1px solid rgba(255,255,255,.2)', borderRadius: 16, padding: '16px 20px', minWidth: 170 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: 'rgba(255,255,255,.8)', textTransform: 'uppercase' }}><Icon name="clock" size={13} /> Prazo de término</div>
-            <div style={{ fontSize: 22, fontWeight: 850, marginTop: 7 }}>{DEV_ATUAL.prazo}</div>
-            <div style={{ fontSize: 12, color: 'rgba(255,255,255,.78)', marginTop: 3 }}>Conclui {DEV_ATUAL.restante}</div>
-          </div>
-        </div>
-      </div>
-
-
-      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        {/* coluna principal: chamados */}
-        <div style={{ flex: '2 1 420px', minWidth: 300 }}>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 18 }}>
-            <KPI t={t} mini icon="clipboard" label="Meus chamados" value={chamados.length} kind="accent" />
-            <KPI t={t} mini icon="clock" label="Em aberto" value={abertos} kind="amber" />
-            <KPI t={t} mini icon="check" label="Resolvidos" value={chamados.length - abertos} kind="green" />
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 12 }}>Acompanhe seus chamados</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {chamados.map((c) => {
-              const st = TICKET_STATUS[c.status]; const col = uiTone(t, st.kind);
-              return (
-                <Card t={t} key={c.id} hover style={{ padding: 16 }}>
-                  <div onClick={() => setDetId(c.id)} style={{ cursor: 'pointer' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: t.muted }}>{c.id}</span>
-                        <Badge t={t} kind={c.prioridade[1]} dot>{c.prioridade[0]}</Badge>
-                      </div>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 8, background: col.bg, color: col.fg, textTransform: 'uppercase' }}>{st.label}</span>
-                    </div>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: t.text, margin: '10px 0 12px' }}>{c.titulo}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-                      {TICKET_STEPS.map((s, i) => (
-                        <React.Fragment key={s}>
-                          <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: i <= st.step ? (i === st.step ? t.accent : uiTone(t, 'green').fg) : t.elevated, color: i <= st.step ? '#fff' : t.faint, border: i <= st.step ? 'none' : `2px solid ${t.border}` }}>{i < st.step ? <Icon name="check" size={11} /> : <span style={{ fontSize: 9, fontWeight: 800 }}>{i + 1}</span>}</span>
-                          {i < TICKET_STEPS.length - 1 && <span style={{ flex: 1, height: 2, background: i < st.step ? uiTone(t, 'green').fg : t.border }} />}
-                        </React.Fragment>
-                      ))}
-                    </div>
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando seus chamados…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(true)}>Tentar novamente</Btn>
+        </Card>
+      ) : tickets.length === 0 ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhum chamado" sub="Encontrou um problema ou tem uma ideia? Abra um chamado." /></Card>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }}>
+          {tickets.map(function (tk) {
+            const st = TK_STATUS[tk.status] || TK_STATUS.aberto;
+            const prio = TK_PRIO[tk.priority] || [tk.priority, 'gray'];
+            return (
+              <Card t={t} key={tk.id} hover style={{ padding: 16, cursor: 'pointer' }}>
+                <div onClick={() => setAberto(tk.id)}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 11.5, fontWeight: 800, color: t.muted }}>TI-{tk.display_no}</span>
+                    <Badge t={t} kind={prio[1]} dot>{prio[0]}</Badge>
+                    <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 8, background: uiTone(t, st.kind).bg, color: uiTone(t, st.kind).fg, textTransform: 'uppercase' }}>{st.label}</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
-                    <span style={{ fontSize: 11.5, color: t.faint }}>{c.data}</span>
-                    <button onClick={() => setChatId(c.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 11px', borderRadius: 9, background: t.accentSoft }}><Icon name="bell" size={14} /> Chat {c.chat.length > 0 && `· ${c.chat.length}`}</button>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: t.text, margin: '10px 0 12px' }}>{tk.title}</div>
+                  {tk.status === 'cancelado'
+                    ? <Badge t={t} kind="red" dot>Cancelado</Badge>
+                    : <TkStepper t={t} status={tk.status} />}
+                  <div style={{ fontSize: 11.5, color: t.faint, marginTop: 12 }}>
+                    Aberto em {tkQuando(tk.created_at)}{tk.closed_at ? ` · encerrado em ${tkQuando(tk.closed_at)}` : ''}
                   </div>
-                </Card>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* coluna lateral: dev + status */}
-        <div style={{ flex: '1 1 280px', minWidth: 260, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Card t={t} style={{ padding: 18 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ position: 'relative' }}>
-                <span style={{ width: 46, height: 46, borderRadius: '50%', background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 15 }}>DA</span>
-                <span style={{ position: 'absolute', bottom: 1, right: 1, width: 12, height: 12, borderRadius: '50%', background: uiTone(t, 'green').fg, border: `2.5px solid ${t.panel}` }} />
-              </div>
-              <div style={{ flex: 1 }}><div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{DEV.nome}</div><div style={{ fontSize: 12, color: uiTone(t, 'green').fg, fontWeight: 600 }}>● Online · {DEV.cargo}</div></div>
-            </div>
-            <button onClick={() => setChatId(chamados[0] && chamados[0].id)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 42, marginTop: 16, borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent }}><Icon name="bell" size={16} /> Falar com o Dev</button>
-          </Card>
-
-          <Card t={t} style={{ padding: 18 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-              <Icon name="terminal" size={16} style={{ color: t.accentText }} />
-              <span style={{ fontSize: 13.5, fontWeight: 850, color: t.text }}>Trabalhos em andamento</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {DEV_TRABALHOS.map((w) => (
-                <div key={w.titulo}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, gap: 8 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600, color: t.text }}>{w.titulo}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: t.muted, whiteSpace: 'nowrap' }}>{w.prog}% · {w.eta}</span>
-                  </div>
-                  <div style={{ height: 6, borderRadius: 6, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${w.prog}%`, borderRadius: 6, background: uiTone(t, w.tone).fg }} /></div>
                 </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card t={t} style={{ padding: 18 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 850, color: t.text, marginBottom: 14 }}>Status dos serviços</div>
-            {[['API Principal', 'green'], ['Banco de Dados', 'green'], ['Impressão 3D', 'amber'], ['NF-e', 'green']].map(([nome, tone], i, arr) => (
-              <div key={nome} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 0', borderBottom: i === arr.length - 1 ? 'none' : `1px solid ${t.border}` }}>
-                <span style={{ width: 9, height: 9, borderRadius: '50%', background: uiTone(t, tone).fg, boxShadow: `0 0 0 3px ${uiTone(t, tone).bg}`, flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: t.text }}>{nome}</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: uiTone(t, tone).fg }}>{tone === 'green' ? 'Operacional' : 'Instável'}</span>
-              </div>
-            ))}
-          </Card>
+              </Card>
+            );
+          })}
         </div>
-      </div>
+      )}
 
-      {/* modal novo chamado */}
       {novo && (
-        <div onClick={() => setNovo(false)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-            <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
-              <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center' }}><Icon name="plus" size={19} /></span>
-              <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Abrir chamado</div><div style={{ fontSize: 12.5, color: t.muted }}>Descreva o problema ou solicitação ao Dev.</div></div>
-              <button onClick={() => setNovo(false)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+        <div onClick={() => !agindo && setNovo(null)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(500px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center' }}><Icon name="plus" size={19} /></span>
+              <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>Abrir chamado</div>
             </div>
-            <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
-                <span style={{ width: 38, height: 38, borderRadius: '50%', background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 14, flexShrink: 0 }}>{USER.name[0]}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>{USER.name}</div>
-                  <div style={{ fontSize: 11.5, color: t.muted }}>{USER.setor} · {USER.funcao}</div>
-                </div>
-                <Badge t={t} kind="accent">Solicitante</Badge>
-              </div>
-              <div><label style={lab}>Título</label><input value={form.titulo} onChange={(e) => setForm((s) => ({ ...s, titulo: e.target.value }))} placeholder="Ex: Erro ao salvar produto" style={field} /></div>
-              <div>
-                <label style={lab}>Prioridade</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {['Baixa', 'Média', 'Alta'].map((p) => { const on = form.prioridade === p; const k = { Baixa: 'blue', Média: 'amber', Alta: 'red' }[p]; return (
-                    <button key={p} onClick={() => setForm((s) => ({ ...s, prioridade: p }))} style={{ all: 'unset', cursor: 'pointer', flex: 1, textAlign: 'center', height: 40, lineHeight: '40px', borderRadius: 10, fontSize: 13, fontWeight: 700, background: on ? uiTone(t, k).fg : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? 'transparent' : t.border}` }}>{p}</button>
-                  ); })}
-                </div>
-              </div>
-              <div><label style={lab}>Descrição</label><textarea value={form.desc} onChange={(e) => setForm((s) => ({ ...s, desc: e.target.value }))} rows={4} placeholder="Detalhe o que aconteceu…" style={{ ...field, height: 'auto', padding: '12px 13px', resize: 'vertical' }} /></div>
-              <div>
-                <label style={lab}>Anexar imagens</label>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {form.imagens.map((im, i) => (
-                    <div key={i} style={{ position: 'relative', width: 72, height: 72, borderRadius: 10, overflow: 'hidden', border: `1px solid ${t.border}` }}>
-                      <img src={im.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      <button onClick={() => setForm((s) => ({ ...s, imagens: s.imagens.filter((_, j) => j !== i) }))} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 3, right: 3, width: 20, height: 20, borderRadius: '50%', background: 'rgba(8,10,16,.7)', color: '#fff', display: 'grid', placeItems: 'center' }}><Icon name="x" size={12} /></button>
-                    </div>
-                  ))}
-                  {form.imagens.length < 4 && (
-                    <label style={{ width: 72, height: 72, borderRadius: 10, border: `2px dashed ${t.borderStrong}`, display: 'grid', placeItems: 'center', cursor: 'pointer', color: t.muted }}>
-                      <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => onFiles(e.target.files)} />
-                      <Icon name="upload" size={20} />
-                    </label>
-                  )}
-                </div>
-                <div style={{ fontSize: 11, color: t.faint, marginTop: 7 }}>Anexe prints do problema (até 4 imagens).</div>
-              </div>
+            <label style={lblM}>Título (até 200 caracteres)</label>
+            <input value={novo.titulo} maxLength={200} onChange={(e) => setNovo({ ...novo, titulo: e.target.value, erro: null })} placeholder="Ex.: Erro ao exportar relatório em PDF" style={inputM} />
+            <label style={lblM}>Prioridade</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {TK_PRIORIDADES.map(function ([k, label, tone]) {
+                const on = (novo.prioridade || 'media') === k;
+                return <button key={k} onClick={() => setNovo({ ...novo, prioridade: k, erro: null })} style={{ all: 'unset', cursor: 'pointer', flex: 1, textAlign: 'center', height: 40, lineHeight: '40px', borderRadius: 10, fontSize: 13, fontWeight: 700, background: on ? uiTone(t, tone).fg : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? 'transparent' : t.border}` }}>{label}</button>;
+              })}
             </div>
-            <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <Btn t={t} kind="ghost" onClick={() => setNovo(false)}>Cancelar</Btn>
-              <Btn t={t} icon="check" onClick={criarChamado}>Abrir chamado</Btn>
+            <label style={lblM}>Descrição</label>
+            <textarea value={novo.desc} onChange={(e) => setNovo({ ...novo, desc: e.target.value, erro: null })} rows={4} placeholder="Detalhe o que aconteceu ou o que você precisa…" style={{ ...inputM, resize: 'vertical' }} />
+            {novo.erro && <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{novo.erro}</div>}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+              <Btn t={t} kind="ghost" onClick={() => !agindo && setNovo(null)}>Cancelar</Btn>
+              <Btn t={t} icon="check" onClick={criar}>{agindo ? 'Abrindo…' : 'Abrir chamado'}</Btn>
             </div>
           </div>
         </div>
       )}
 
-      {/* modal detalhe chamado */}
-      {detCham && (() => { const st = TICKET_STATUS[detCham.status]; return (
-        <div onClick={() => setDetId(null)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px,96vw)', maxHeight: '90vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-            <div style={{ padding: '22px 24px', borderBottom: `1px solid ${t.border}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 800, color: t.muted }}>{detCham.id}</span>
-                <Badge t={t} kind={detCham.prioridade[1]} dot>{detCham.prioridade[0]}</Badge>
-                <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 800, padding: '4px 10px', borderRadius: 8, background: uiTone(t, st.kind).bg, color: uiTone(t, st.kind).fg, textTransform: 'uppercase' }}>{st.label}</span>
-                <button onClick={() => setDetId(null)} style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{detCham.titulo}</div>
-            </div>
-            <div style={{ padding: 24, overflowY: 'auto' }} className="fr-scroll">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 22 }}>
-                {TICKET_STEPS.map((s, i) => (
-                  <React.Fragment key={s}>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                      <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', background: i <= st.step ? (i === st.step ? t.accent : uiTone(t, 'green').fg) : t.elevated, color: i <= st.step ? '#fff' : t.faint, border: i <= st.step ? 'none' : `2px solid ${t.border}` }}>{i < st.step ? <Icon name="check" size={13} /> : <span style={{ fontSize: 11, fontWeight: 800 }}>{i + 1}</span>}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: i <= st.step ? t.text : t.faint, whiteSpace: 'nowrap' }}>{s}</span>
-                    </div>
-                    {i < TICKET_STEPS.length - 1 && <span style={{ flex: 1, height: 2, background: i < st.step ? uiTone(t, 'green').fg : t.border, marginTop: -18 }} />}
-                  </React.Fragment>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 7 }}>Solicitante</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 18 }}>
-                <span style={{ width: 36, height: 36, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 13 }}>{(detCham.solicitante || USER.name)[0]}</span>
-                <div><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{detCham.solicitante || USER.name}</div><div style={{ fontSize: 11.5, color: t.muted }}>{detCham.setor || USER.setor} · {detCham.funcao || USER.funcao}</div></div>
-              </div>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 7 }}>Descrição</div>
-              <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5, marginBottom: detCham.imagens && detCham.imagens.length ? 14 : 20 }}>{detCham.desc || '—'}</div>
-              {detCham.imagens && detCham.imagens.length > 0 && (
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
-                  {detCham.imagens.map((im, i) => <img key={i} src={im.url} alt="" style={{ width: 84, height: 84, borderRadius: 10, objectFit: 'cover', border: `1px solid ${t.border}` }} />)}
-                </div>
-              )}
-              <button onClick={() => { setDetId(null); setChatId(detCham.id); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', height: 44, borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13.5, fontWeight: 800, background: t.accentSoft, color: t.accentText }}><Icon name="bell" size={16} /> Abrir chat do chamado</button>
-            </div>
-          </div>
-        </div>
-      ); })()}
+      {aberto && <TicketDetail t={t} ticketId={aberto} atendente={false} onClose={() => setAberto(null)} onChanged={() => carregar(false)} />}
 
-      {/* chat drawer */}
-      {chatCham && (
-        <div onClick={() => setChatId(null)} style={{ position: 'fixed', inset: 0, zIndex: 66, background: 'rgba(8,10,16,.5)', display: 'flex', justifyContent: 'flex-end' }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(420px,100%)', height: '100%', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: t.shadow }}>
-            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 11 }}>
-              <div style={{ position: 'relative' }}><span style={{ width: 38, height: 38, borderRadius: '50%', background: t.accent, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 13 }}>DA</span><span style={{ position: 'absolute', bottom: 0, right: 0, width: 11, height: 11, borderRadius: '50%', background: uiTone(t, 'green').fg, border: `2px solid ${t.panel}` }} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{DEV.nome}</div><div style={{ fontSize: 11.5, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chatCham.id} · {chatCham.titulo}</div></div>
-              <button onClick={() => setChatId(null)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-            </div>
-            <div className="fr-scroll" style={{ flex: 1, overflowY: 'auto', padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {chatCham.chat.length === 0 && <div style={{ textAlign: 'center', color: t.faint, fontSize: 13, marginTop: 30 }}>Envie uma mensagem para o Dev.</div>}
-              {chatCham.chat.map((m, i) => {
-                const mine = m.de === 'user';
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
-                    <div style={{ maxWidth: '78%' }}>
-                      <div style={{ padding: '10px 13px', borderRadius: 14, borderBottomRightRadius: mine ? 4 : 14, borderBottomLeftRadius: mine ? 14 : 4, background: mine ? t.accent : t.elevated, color: mine ? t.onAccent : t.text, fontSize: 13.5, lineHeight: 1.45 }}>{m.txt}</div>
-                      <div style={{ fontSize: 10, color: t.faint, marginTop: 4, textAlign: mine ? 'right' : 'left' }}>{mine ? 'Você' : DEV.nome} · {m.h}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ padding: 14, borderTop: `1px solid ${t.border}`, display: 'flex', gap: 9 }}>
-              <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && enviarMsg()} placeholder="Pergunta rápida…" style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
-              <button onClick={enviarMsg} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: t.accent, color: t.onAccent, flexShrink: 0 }}><Icon name="send" size={18} /></button>
-            </div>
-          </div>
+      {flash && (
+        <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 70, display: 'flex', alignItems: 'center', gap: 10, padding: '13px 20px', borderRadius: 13, background: '#10b981', color: '#fff', fontWeight: 700, fontSize: 13.5, boxShadow: '0 10px 30px rgba(0,0,0,.3)' }}>
+          <Icon name="check" size={18} /> {flash}
         </div>
       )}
     </div>
@@ -2545,5 +2601,5 @@ function PagePainelTI({ t }) {
 Object.assign(window, {
   PageTarefas, PageEletrica, PageAvisos, PageCalculadora, PageEncomendar,
   PageReposicoes, PageConfronto, PageControleSaida,
-  PageCriticos, PagePermissoes, PageAuditoria, PagePainelTI,
+  PageCriticos, PagePermissoes, PageAuditoria, PageMeusChamados,
 });

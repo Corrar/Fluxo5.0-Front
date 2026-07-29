@@ -97,6 +97,14 @@ function connect() {
       setTimeout(() => FRAuth.logout(), 3000);
     }
   });
+
+  // --- Helpdesk (cortesia, não garantia): o backend emite ticket_updated pra sala do
+  // requester (e pra 'admin' quando o requester comenta). Aqui só REPASSA como evento de
+  // janela — SEM toast global: quem estiver com Meus Chamados/fila montada recarrega;
+  // quem não estiver, refaz o GET quando abrir a tela (o dado autoritativo é sempre o GET).
+  s.on('ticket_updated', (data) => {
+    try { window.dispatchEvent(new CustomEvent('fr:ticket_updated', { detail: data })); } catch (e) { /* ignora */ }
+  });
 }
 
 function disconnect() {

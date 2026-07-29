@@ -2042,7 +2042,8 @@ const PAGE_TITLES = {
   requisicao: 'Requisição', solicitacoes: 'Solicitações', pedidos: 'Meus Pedidos', encomendar: 'Encomendar 3D',
   quadrogestao: 'Quadro Gestão', reposicoes: 'Reposições', confronto: 'Confronto',
   controlesaida: 'Controle de Saída', criticos: 'Críticos', configuracoes: 'Configurações',
-  permissoes: 'Permissões', auditoria: 'Auditoria', clientes: 'Clientes e OPs', painelti: 'Painel TI',
+  permissoes: 'Permissões', auditoria: 'Auditoria', clientes: 'Clientes e OPs',
+  painelti: 'Painel TI', meuschamados: 'Meus Chamados',
   entradas: 'Entradas', relatorios: 'Relatórios', usuarios: 'Usuários',
   'prod-painel': 'Painel', 'prod-montagem': 'Montagem de Máquinas',
 };
@@ -2075,6 +2076,7 @@ function renderPage(active, props) {
   if (active === 'clientes') return <PageClientes {...props} readOnly={props.mod && props.mod.id === 'producaoger'} />;
   if (active === 'solicitacoes') return <PageSolicitacoes {...props} />;
   if (active === 'pedidos') return <PageMeusPedidos {...props} />;
+  if (active === 'meuschamados') return <PageMeusChamados {...props} />;
   if (active === 'relatorios') return <PageRelatorios {...props} />;
   if (active === 'tarefas') return <PageTarefas {...props} />;
   if (active === 'eletrica') return <PageEletrica {...props} />;
@@ -2089,7 +2091,6 @@ function renderPage(active, props) {
   if (active === 'criticos') return <PageCriticos {...props} />;
   if (active === 'permissoes') return <PagePermissoes {...props} />;
   if (active === 'auditoria') return <PageAuditoria {...props} />;
-  if (active === 'painelti') return <PagePainelTI {...props} />;
   return <PagePlaceholder t={props.t} title={PAGE_TITLES[active] || 'Página'} />;
 }
 

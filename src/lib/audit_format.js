@@ -1,8 +1,8 @@
 // lib/audit_format.js — formatador PURO do livro de auditoria (tela Auditoria v1).
 //
-// Mapa das 26 actions CONHECIDAS (22 do recon do banco de validação de 27/07 +
+// Mapa das 33 actions CONHECIDAS (22 do recon do banco de validação de 27/07 +
 // UPDATE_ROLE_PERMISSIONS da tela de Permissões + SUSPEND_USER/REACTIVATE_USER/
-// REDEFINIR_SENHA da tela de Usuários) →
+// REDEFINIR_SENHA da tela de Usuários + as 7 *_CHAMADO do helpdesk v1) →
 // { verbo, kind (cor do uiTone), icon (icons.jsx), alvo(details), frase(details) }.
 //
 // CONTRATO DE RESILIÊNCIA (inegociável): o backend emite actions que este mapa não conhece
@@ -123,6 +123,30 @@ export const AUDIT_ACTIONS = {
   UPDATE_ROLE_PERMISSIONS: { verbo: 'Permissões', kind: 'blue', icon: 'key',
     alvo: (d) => `Cargo · ${ou(d.role_target)}`,
     frase: (d) => fraseDiffPermissoes(d, `${ou(d.count, '0')} permissão(ões) no conjunto`) },
+
+  // ── Helpdesk (chamados) ──
+  // Alvo padrão: "Chamado · TI-42" (display_no humano); transições carregam {de, para}.
+  CRIAR_CHAMADO: { verbo: 'Abriu', kind: 'green', icon: 'file',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: (d) => `Chamado aberto com prioridade ${ou(d.priority)}` },
+  INICIAR_ANALISE_CHAMADO: { verbo: 'Assumiu', kind: 'blue', icon: 'eye',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: (d) => `Análise iniciada (${ou(d.de)} → ${ou(d.para)})` },
+  INICIAR_DEV_CHAMADO: { verbo: 'Desenvolvendo', kind: 'accent', icon: 'terminal',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: (d) => `Desenvolvimento iniciado (${ou(d.de)} → ${ou(d.para)})` },
+  CONCLUIR_CHAMADO: { verbo: 'Concluiu', kind: 'green', icon: 'check',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: () => 'Chamado resolvido e encerrado (timeline bloqueada)' },
+  CANCELAR_CHAMADO: { verbo: 'Cancelou', kind: 'red', icon: 'ban',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: () => 'Cancelado pelo solicitante (só possível com o chamado ainda aberto)' },
+  COMENTAR_CHAMADO: { verbo: 'Comentou', kind: 'gray', icon: 'send',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: () => 'Novo comentário na timeline' },
+  RECLASSIFICAR_CHAMADO: { verbo: 'Reclassificou', kind: 'amber', icon: 'refresh',
+    alvo: (d) => `Chamado · TI-${ou(d.display_no)}`,
+    frase: (d) => `Prioridade ${ou(d.de)} → ${ou(d.para)}` },
 
   // ── Sistema ──
   UPDATE_SETTING: { verbo: 'Configurou', kind: 'amber', icon: 'gear',
