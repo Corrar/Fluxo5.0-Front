@@ -772,6 +772,13 @@ function P3PartModal({ t, peca, onClose, onSave, salvando, erro }) {
 
 function P3Catalogo({ t }) {
   const { items: pecas, loading, error, reload } = useFR3DParts();
+  // O PUT /producao-3d/parts/:id passou a exigir 'producao_3d' (migration 017) — os mesmos campos
+  // que a Precificação usa no custo. A VISUALIZAÇÃO do catálogo continua livre (só authenticate,
+  // como sempre foi); o que some sem a chave é o botão de editar a ficha. Sem isso o operador
+  // abriria o modal, preencheria e tomaria 403 no salvar.
+  // Mesmo teste exato do gate das abas (P3TemProducao3D) — canAccess liberaria por prefixo quem
+  // só tem 'producao_3d:edit', e esse é justamente quem o backend recusa no PUT.
+  const podeEditar = P3TemProducao3D();
   const [q, setQ] = useStateP3('');
   const [edit, setEdit] = useStateP3(null);
   const [salvando, setSalvando] = useStateP3(false);
@@ -843,7 +850,7 @@ function P3Catalogo({ t }) {
                 ? <img src={window.__asset(p.image)} alt={p.nome} style={{ display: 'block', width: '100%', height: 220, objectFit: 'cover', background: '#e9ebf0' }} />
                 : <div style={{ display: 'grid', placeItems: 'center', width: '100%', height: 220, background: '#e9ebf0', color: '#9aa3b2' }}><Icon name="box" size={42} /></div>}
               {/* Badges "Etiqueta" e "N em estoque" REMOVIDOS: nenhum dos dois existe no GET /parts. */}
-              <button onClick={() => { setErro(null); setEdit(p); }} title="Editar peça" style={{ all: 'unset', cursor: 'pointer', position: 'absolute', bottom: 10, right: 10, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)' }}><Icon name="pencil" size={16} /></button>
+              {podeEditar && <button onClick={() => { setErro(null); setEdit(p); }} title="Editar peça" style={{ all: 'unset', cursor: 'pointer', position: 'absolute', bottom: 10, right: 10, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)' }}><Icon name="pencil" size={16} /></button>}
               <button onClick={() => remove(p)} disabled={salvando} title="Excluir peça (arquiva)" style={{ all: 'unset', cursor: salvando ? 'not-allowed' : 'pointer', position: 'absolute', bottom: 10, right: 52, width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(8,10,16,.7)', color: '#fff', backdropFilter: 'blur(4px)', opacity: salvando ? 0.5 : 1 }}
                 onMouseEnter={(e) => { if (!salvando) e.currentTarget.style.background = uiTone(t, 'red').fg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(8,10,16,.7)'; }}><Icon name="trash" size={16} /></button>
             </div>
@@ -895,12 +902,668 @@ function P3Catalogo({ t }) {
 //     Histórico, Demandas e Catálogo baixam os 2,7MB cada um, por montagem de tela. Onda 2: ou o
 //     get3DParts para de devolver image no list (só no detalhe), ou o useFR3DParts vira cache único.
 
+// ==========================================================================
+// REGISTRO DE VALORES (p3d-valores) e PRECIFICAÇÃO (p3d-precificacao) — migration 017.
+//
+// LIGAÇÃO REAL: /printers-3d (CRUD de impressora + manutenções), GET /producao-3d/pricing (o
+// cálculo inteiro, incluindo a lista de bobinas), PUT /producao-3d/parts/:id/pricing (ficha +
+// margem + aplicar preço) e PUT /admin/settings (tarifa e impressora de referência).
+// Gate P3TemProducao3D nas duas telas: exige a page_key 'producao_3d' EXATA, igual ao backend —
+// a chave que existia no universo e não gateava nada até a 017.
+//
+// ⚠ A TELA NÃO CALCULA NADA. Todo número de dinheiro vem pronto do backend, onde a fórmula
+// canônica vive em `numeric` (decimal exato). Aqui só se formata. Duas cópias da mesma conta
+// divergem no dia em que uma mudar — e quem descobre é o cliente, no orçamento errado.
+// ==========================================================================
+
+const P3_STATUS_IMP = {
+  ativa:      { label: 'Ativa', kind: 'green' },
+  manutencao: { label: 'Em manutenção', kind: 'amber' },
+  inativa:    { label: 'Inativa', kind: 'gray' },
+};
+// Divergência a partir da qual a média real vira alerta na tela: a ficha provavelmente
+// envelheceu. É DIAGNÓSTICO — não entra em conta nenhuma (decisão travada).
+const P3_DIVERGENCIA = 0.20;
+
+function p3Moeda(v) {
+  if (v === null || v === undefined) return '—';
+  return 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+// Os intermediários vêm com 4 casas do backend; mostrar 2 aqui é APRESENTAÇÃO — o número que
+// vale (e que é gravado) é o preco_venda_arredondado, calculado lá.
+function p3Moeda4(v) {
+  if (v === null || v === undefined) return '—';
+  return 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+}
+function p3Hoje() {
+  const d = new Date();
+  const p = (x) => String(x).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+function p3DataBR(iso) {
+  if (!iso) return '—';
+  const s = String(iso).slice(0, 10).split('-');
+  return s.length === 3 ? `${s[2]}/${s[1]}/${s[0]}` : String(iso);
+}
+
+// ---------- modal: impressora (cadastro/edição) ----------
+function P3ImpressoraModal({ t, imp, onClose, onSave, salvando, erro }) {
+  const [f, setF] = useStateP3({
+    name: imp ? imp.name : '', model: imp ? imp.model || '' : '',
+    power_watts: imp ? String(imp.power_watts) : '', notes: imp ? imp.notes || '' : '',
+  });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const watts = parseInt(String(f.power_watts).replace(/[^0-9]/g, ''), 10);
+  // Bordas ESPELHADAS do backend: nome obrigatório e watts inteiro > 0.
+  const valid = f.name.trim() && Number.isInteger(watts) && watts > 0;
+  const field = { boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
+  const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 18 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, overflow: 'hidden' }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 38, height: 38, borderRadius: 10, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center' }}><Icon name="printer" size={19} /></span>
+          <div style={{ flex: 1, fontSize: 17, fontWeight: 850, color: t.text }}>{imp ? `Editar IMP-${imp.display_no}` : 'Cadastrar impressora'}</div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+        </div>
+        <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div><label style={lab}>Nome</label><input value={f.name} maxLength={200} onChange={(e) => set('name', e.target.value)} placeholder="Ex: Ender 3 — bancada 1" style={field} /></div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div><label style={lab}>Modelo</label><input value={f.model} maxLength={100} onChange={(e) => set('model', e.target.value)} placeholder="Ex: Ender-3 V2" style={field} /></div>
+            <div>
+              <label style={lab}>Potência (W)</label>
+              <input value={f.power_watts} onChange={(e) => set('power_watts', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="300" style={field} />
+            </div>
+          </div>
+          <div><label style={lab}>Observações</label><input value={f.notes} maxLength={1000} onChange={(e) => set('notes', e.target.value)} placeholder="Opcional" style={field} /></div>
+          <div style={{ fontSize: 12, color: t.muted, lineHeight: 1.5 }}>
+            A potência entra no custo de energia: <b style={{ color: t.text }}>(minutos ÷ 60) × (W ÷ 1000) × tarifa</b>.
+          </div>
+          {erro && <div style={{ fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erro}</div>}
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
+          <button onClick={() => valid && !salvando && onSave({ name: f.name.trim(), model: f.model.trim(), power_watts: watts, notes: f.notes.trim() })} disabled={!valid || salvando}
+            style={{ all: 'unset', boxSizing: 'border-box', cursor: valid && !salvando ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 11, fontSize: 13.5, fontWeight: 800, background: valid && !salvando ? t.accent : t.elevated, color: valid && !salvando ? '#fff' : t.faint }}>
+            <Icon name="check" size={16} /> {salvando ? 'Salvando…' : 'Salvar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- modal: manutenções da impressora ----------
+function P3ManutencoesModal({ t, imp, onClose, onAdd, onDel, busy, erro }) {
+  const [f, setF] = useStateP3({ date: p3Hoje(), description: '', cost: '' });
+  const [confirmar, setConfirmar] = useStateP3(null);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const valid = f.date && f.description.trim();
+  const field = { boxSizing: 'border-box', width: '100%', height: 42, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
+  const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', color: t.muted, textTransform: 'uppercase', marginBottom: 6 };
+  const manut = imp.manutencoes || [];
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 18 }}>
+      <div onClick={(e) => e.stopPropagation()} className="fr-scroll" style={{ width: 'min(620px,96vw)', maxHeight: '92vh', overflowY: 'auto', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 38, height: 38, borderRadius: 10, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, display: 'grid', placeItems: 'center' }}><Icon name="settings" size={19} /></span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>Manutenções · IMP-{imp.display_no}</div>
+            <div style={{ fontSize: 12.5, color: t.muted }}>{imp.name}</div>
+          </div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+        </div>
+        <div style={{ padding: 22 }}>
+          {/* A honestidade do escopo, na própria tela. */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}`, color: t.muted, fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
+            <Icon name="alert" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>O custo da manutenção fica registrado, mas <b>ainda não entra</b> no custo da peça — o rateio depende de uma base de horas por período e chega numa próxima versão.</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 120px', gap: 10, alignItems: 'end', marginBottom: 14 }}>
+            <div><label style={lab}>Data</label><input type="date" value={f.date} onChange={(e) => set('date', e.target.value)} style={field} /></div>
+            <div><label style={lab}>Descrição</label><input value={f.description} maxLength={500} onChange={(e) => set('description', e.target.value)} placeholder="Ex: troca de bico 0.4mm" style={field} /></div>
+            <div><label style={lab}>Custo (R$)</label><input value={f.cost} onChange={(e) => set('cost', e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" placeholder="0,00" style={field} /></div>
+          </div>
+          <Btn t={t} icon="plus" onClick={() => valid && !busy && onAdd({ date: f.date, description: f.description.trim(), cost: Number(String(f.cost).replace(',', '.')) || 0 })}>{busy ? 'Registrando…' : 'Registrar manutenção'}</Btn>
+          {erro && <div style={{ marginTop: 12, fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erro}</div>}
+
+          <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {manut.length === 0 && <div style={{ fontSize: 12.5, color: t.faint }}>Nenhuma manutenção registrada.</div>}
+            {manut.map((m) => (
+              <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: t.muted, minWidth: 74 }}>{p3DataBR(m.date)}</span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: t.text }}>{m.description}</span>
+                <span style={{ fontSize: 13, fontWeight: 800, color: t.text }}>{p3Moeda(m.cost)}</span>
+                {confirmar === m.id ? (
+                  <span style={{ display: 'inline-flex', gap: 6 }}>
+                    <button onClick={() => { onDel(m.id); setConfirmar(null); }} style={{ all: 'unset', cursor: 'pointer', fontSize: 11.5, fontWeight: 800, color: '#fff', background: '#ef4444', padding: '5px 10px', borderRadius: 7 }}>Excluir</button>
+                    <button onClick={() => setConfirmar(null)} style={{ all: 'unset', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: t.muted, padding: '5px 8px' }}>Não</button>
+                  </span>
+                ) : (
+                  <button onClick={() => setConfirmar(m.id)} title="Excluir" style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="trash" size={14} /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- REGISTRO DE VALORES ----------
+function P3ValoresReal({ t }) {
+  const R = window.React;
+  const [imps, setImps] = useStateP3([]);
+  const [cfg, setCfg] = useStateP3(null);        // { tarifa_kwh, impressora, filamentos... } do pricing
+  const [loading, setLoading] = useStateP3(true);
+  const [erro, setErro] = useStateP3(null);
+  const [modal, setModal] = useStateP3(null);    // {tipo:'nova'|'edit'|'manut', imp}
+  const [busy, setBusy] = useStateP3(false);
+  const [erroModal, setErroModal] = useStateP3(null);
+  const [toast, setToast] = useStateP3(null);
+  const [tarifaEdit, setTarifaEdit] = useStateP3(null);
+  const [confirmarDel, setConfirmarDel] = useStateP3(null); // id da impressora aguardando confirmação
+  R.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+
+  // PUT /admin/settings é requireAdmin no backend (papel lido de profiles.role, em tempo real).
+  // Aqui o espelho usa o helper da casa: FRAuth.user só carrega {id, email} — o papel mora no
+  // profile, e é o hasRole quem sabe disso.
+  const ehAdmin = !!(window.FRAuth && typeof window.FRAuth.hasRole === 'function' && window.FRAuth.hasRole(['admin']));
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setErro(null);
+    return Promise.all([
+      window.FRApi.get('/printers-3d?status=todos', { skipLoading: true }),
+      // O pricing carrega junto porque é ele quem sabe a tarifa, a impressora de referência e a
+      // lista de bobinas — uma fonte só pras duas abas.
+      window.FRApi.get('/producao-3d/pricing', { skipLoading: true }),
+    ])
+      .then(function ([rImp, rPri]) {
+        setImps((rImp.data && rImp.data.printers) || []);
+        setCfg(rPri.data || null);
+        if (inicial) setLoading(false);
+      })
+      .catch(function (e) { setErro(p3Err(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  const acao = (promessa, msgOk) => {
+    setBusy(true); setErroModal(null);
+    return promessa
+      .then(function () { setModal(null); return carregar(false); })
+      .then(function () { if (msgOk) setToast({ kind: 'ok', msg: msgOk }); })
+      .catch(function (e) { setErroModal(p3Err(e)); setToast({ kind: 'err', msg: p3Err(e) }); })
+      .then(function () { setBusy(false); });
+  };
+
+  const salvarImpressora = (body) => acao(
+    modal && modal.tipo === 'edit'
+      ? window.FRApi.put('/printers-3d/' + modal.imp.id, body)
+      : window.FRApi.post('/printers-3d', body),
+    modal && modal.tipo === 'edit' ? 'Impressora atualizada.' : 'Impressora cadastrada.',
+  );
+  const mudarStatus = (imp, status) => acao(window.FRApi.put('/printers-3d/' + imp.id + '/status', { status: status }), 'Status atualizado.');
+  const excluirImpressora = (imp) => acao(window.FRApi.delete('/printers-3d/' + imp.id), 'Impressora excluída.');
+  const addManut = (body) => {
+    setBusy(true); setErroModal(null);
+    const impId = modal.imp.id;
+    return window.FRApi.post('/printers-3d/' + impId + '/maintenances', body)
+      .then(function () { return window.FRApi.get('/printers-3d/' + impId, { skipLoading: true }); })
+      .then(function (r) { setModal({ tipo: 'manut', imp: r.data }); return carregar(false); })
+      .catch(function (e) { setErroModal(p3Err(e)); })
+      .then(function () { setBusy(false); });
+  };
+  const delManut = (mid) => {
+    const impId = modal.imp.id;
+    return window.FRApi.delete('/printers-3d/' + impId + '/maintenances/' + mid)
+      .then(function () { return window.FRApi.get('/printers-3d/' + impId, { skipLoading: true }); })
+      .then(function (r) { setModal({ tipo: 'manut', imp: r.data }); return carregar(false); })
+      .catch(function (e) { setErroModal(p3Err(e)); });
+  };
+  const salvarSetting = (key, value, msgOk) => {
+    setBusy(true);
+    return window.FRApi.put('/admin/settings', { key: key, value: String(value) })
+      .then(function () { setTarifaEdit(null); return carregar(false); })
+      .then(function () { setToast({ kind: 'ok', msg: msgOk }); })
+      .catch(function (e) { setToast({ kind: 'err', msg: p3Err(e) }); })
+      .then(function () { setBusy(false); });
+  };
+
+  const abrirManut = (imp) => {
+    window.FRApi.get('/printers-3d/' + imp.id, { skipLoading: true })
+      .then(function (r) { setErroModal(null); setModal({ tipo: 'manut', imp: r.data }); })
+      .catch(function (e) { setToast({ kind: 'err', msg: p3Err(e) }); });
+  };
+
+  const filamentos = (cfg && cfg.filamentos) || [];
+  const tarifa = cfg ? cfg.tarifa_kwh : null;
+  const tarifaOk = !!(cfg && cfg.tarifa_configurada);
+  const impPadrao = cfg ? cfg.impressora : null;
+
+  return (
+    <div>
+      <PageHeader t={t} title="Registro de Valores" subtitle="Impressoras, filamentos e energia — os números que alimentam o custo das peças."
+        actions={<Btn t={t} icon="plus" onClick={() => { setErroModal(null); setModal({ tipo: 'nova' }); }}>Cadastrar impressora</Btn>} />
+
+      {erro && <Card t={t} style={{ padding: 20, marginBottom: 18, textAlign: 'center' }}>
+        <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{erro}</div>
+        <Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Tentar novamente</Btn>
+      </Card>}
+
+      {/* ENERGIA + IMPRESSORA DE REFERÊNCIA */}
+      <Card t={t} style={{ padding: 22, marginBottom: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 4 }}>Energia e impressora de referência</div>
+        <div style={{ fontSize: 12, color: t.muted, marginBottom: 18 }}>Entram no custo de energia de toda peça: <b>(minutos ÷ 60) × (watts ÷ 1000) × tarifa</b>.</div>
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 220 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Tarifa (R$/kWh)</div>
+            {tarifaEdit === null ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 24, fontWeight: 850, color: tarifaOk ? t.text : t.faint }}>{tarifaOk ? p3Moeda4(tarifa) : '—'}</span>
+                {ehAdmin
+                  ? <Btn t={t} kind="ghost" icon="pencil" onClick={() => setTarifaEdit(String(tarifa ?? ''))}>Editar</Btn>
+                  : <span style={{ fontSize: 11.5, color: t.faint }}>edição requer administrador</span>}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input autoFocus value={tarifaEdit} onChange={(e) => setTarifaEdit(e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" placeholder="0,95"
+                  style={{ boxSizing: 'border-box', width: 120, height: 42, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 15, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+                <Btn t={t} icon="check" onClick={() => salvarSetting('energia_kwh_brl', String(tarifaEdit).replace(',', '.'), 'Tarifa salva.')}>{busy ? 'Salvando…' : 'Salvar'}</Btn>
+                <Btn t={t} kind="ghost" onClick={() => setTarifaEdit(null)}>Cancelar</Btn>
+              </div>
+            )}
+            {!tarifaOk && <div style={{ fontSize: 11.5, color: uiTone(t, 'amber').fg, marginTop: 6, fontWeight: 700 }}>Sem tarifa, o custo de energia fica em branco na Precificação.</div>}
+          </div>
+
+          <div style={{ minWidth: 280, flex: 1 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Impressora do cálculo</div>
+            {ehAdmin ? (
+              <div style={{ position: 'relative', maxWidth: 340 }}>
+                <select value={impPadrao ? impPadrao.id : ''} onChange={(e) => salvarSetting('impressora_padrao_3d', e.target.value, 'Impressora de referência definida.')}
+                  style={{ boxSizing: 'border-box', width: '100%', height: 42, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 32px 0 12px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer' }}>
+                  <option value="">Nenhuma (energia fica em branco)</option>
+                  {imps.map((i) => <option key={i.id} value={i.id}>IMP-{i.display_no} · {i.name} · {i.power_watts} W</option>)}
+                </select>
+                <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} />
+              </div>
+            ) : (
+              <div style={{ fontSize: 15, fontWeight: 800, color: impPadrao ? t.text : t.faint }}>
+                {impPadrao ? `IMP-${impPadrao.display_no} · ${impPadrao.name} · ${impPadrao.power_watts} W` : '—'}
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: t.faint, marginLeft: 8 }}>edição requer administrador</span>
+              </div>
+            )}
+            {/* A limitação declarada, na cara do usuário — não escondida no código. */}
+            <div style={{ fontSize: 11.5, color: t.muted, marginTop: 6, lineHeight: 1.5 }}>
+              Esta versão usa <b>uma impressora de referência</b> para todas as peças. Custo por peça × impressora específica chega depois.
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* IMPRESSORAS */}
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint, margin: '4px 2px 12px' }}>Impressoras</div>
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando…</Card>
+      ) : imps.length === 0 ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma impressora cadastrada" sub="Cadastre a primeira para o custo de energia sair do zero." /></Card>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16, marginBottom: 24 }}>
+          {imps.map((i) => {
+            const st = P3_STATUS_IMP[i.status] || { label: i.status, kind: 'gray' };
+            const ehPadrao = impPadrao && impPadrao.id === i.id;
+            return (
+              <Card t={t} key={i.id} style={{ padding: 18, border: ehPadrao ? `1px solid ${frHexToRgba(t.accent, 0.5)}` : `1px solid ${t.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{i.name}</div>
+                    <div style={{ fontSize: 12, color: t.muted, marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <Badge t={t} kind="gray">IMP-{i.display_no}</Badge>{i.model || '—'}
+                    </div>
+                  </div>
+                  <Badge t={t} kind={st.kind} dot>{st.label}</Badge>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '14px 0 4px' }}>
+                  <span style={{ fontSize: 26, fontWeight: 850, color: t.text }}>{i.power_watts}</span>
+                  <span style={{ fontSize: 13, color: t.muted, fontWeight: 700 }}>W</span>
+                  {ehPadrao && <span style={{ marginLeft: 'auto' }}><Badge t={t} kind="accent">no cálculo</Badge></span>}
+                </div>
+                <div style={{ fontSize: 11.5, color: t.faint }}>{i.manutencoes || 0} manutenção(ões) · {p3Moeda(i.custo_manutencoes || 0)}</div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${t.border}`, flexWrap: 'wrap' }}>
+                  <button onClick={() => { setErroModal(null); setModal({ tipo: 'edit', imp: i }); }} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 8, background: t.accentSoft }}>Editar</button>
+                  <button onClick={() => abrirManut(i)} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: t.muted, padding: '6px 10px', borderRadius: 8, border: `1px solid ${t.border}` }}>Manutenções</button>
+                  <div style={{ position: 'relative', marginLeft: 'auto' }}>
+                    <select value={i.status} onChange={(e) => mudarStatus(i, e.target.value)}
+                      style={{ boxSizing: 'border-box', height: 30, borderRadius: 8, border: `1px solid ${t.border}`, background: t.elevated, color: t.muted, padding: '0 26px 0 8px', fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit', outline: 'none', appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer' }}>
+                      {Object.keys(P3_STATUS_IMP).map((k) => <option key={k} value={k}>{P3_STATUS_IMP[k].label}</option>)}
+                    </select>
+                    <Icon name="chevronDown" size={13} style={{ position: 'absolute', right: 8, top: 9, color: t.muted, pointerEvents: 'none' }} />
+                  </div>
+                  <button onClick={() => setConfirmarDel(i.id)} title="Excluir" style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={15} /></button>
+                </div>
+                {/* Exclusão irreversível não sai de um clique só — mesmo confirm inline da lista de
+                    manutenções e do "Aplicar preço". O 409 do backend só cobre quem tem manutenção;
+                    a impressora limpa sumiria sem pergunta nenhuma. */}
+                {confirmarDel === i.id && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10, padding: '10px 12px', borderRadius: 10, background: uiTone(t, 'red').bg, border: `1px solid ${frHexToRgba(uiTone(t, 'red').fg, 0.35)}` }}>
+                    <span style={{ fontSize: 12, color: t.text, flex: 1, minWidth: 150 }}>Excluir <b>{i.name}</b>? Não pode ser desfeito.</span>
+                    <button onClick={() => { setConfirmarDel(null); excluirImpressora(i); }} style={{ all: 'unset', cursor: 'pointer', fontSize: 11.5, fontWeight: 800, color: '#fff', background: '#ef4444', padding: '5px 10px', borderRadius: 7 }}>Excluir</button>
+                    <button onClick={() => setConfirmarDel(null)} style={{ all: 'unset', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: t.muted, padding: '5px 8px' }}>Não</button>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* FILAMENTOS — read-only na v1 */}
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint, margin: '4px 2px 12px' }}>Filamentos</div>
+      <Card t={t} style={{ padding: 18 }}>
+        <div style={{ fontSize: 12, color: t.muted, marginBottom: 14, lineHeight: 1.5 }}>
+          As bobinas entram pelo <b style={{ color: t.text }}>Estoque</b> (compra, nota, saldo) — o preço por quilo vem de lá, e é o mesmo que a Precificação usa. Aqui é só conferência.
+        </div>
+        {filamentos.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: t.faint }}>Nenhum produto marcado como filamento.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filamentos.map((f) => (
+              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
+                <span style={{ width: 32, height: 32, borderRadius: 8, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={16} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{f.name}</div>
+                  <div style={{ fontSize: 11, color: t.muted }}>SKU {f.sku}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{p3Moeda(f.preco_kg)}</div>
+                  <div style={{ fontSize: 11, color: t.muted }}>por {f.unit || 'kg'}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {modal && (modal.tipo === 'nova' || modal.tipo === 'edit') &&
+        <P3ImpressoraModal t={t} imp={modal.tipo === 'edit' ? modal.imp : null} salvando={busy} erro={erroModal} onClose={() => setModal(null)} onSave={salvarImpressora} />}
+      {modal && modal.tipo === 'manut' &&
+        <P3ManutencoesModal t={t} imp={modal.imp} busy={busy} erro={erroModal} onClose={() => setModal(null)} onAdd={addManut} onDel={delManut} />}
+      <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
+    </div>
+  );
+}
+
+// ---------- modal: ficha + margem da peça ----------
+function P3FichaModal({ t, peca, filamentos, onClose, onSave, salvando, erro }) {
+  const [f, setF] = useStateP3({
+    gramas: String(peca.ficha.filament_grams ?? 0),
+    minutos: String(peca.ficha.production_minutes ?? 0),
+    filamento: peca.filament ? peca.filament.id : '',
+    margem: String(peca.margin_percent ?? 0),
+  });
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const field = { boxSizing: 'border-box', width: '100%', height: 42, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
+  const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', color: t.muted, textTransform: 'uppercase', marginBottom: 6 };
+  const media = peca.media_real;
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 18 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, overflow: 'hidden' }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 38, height: 38, borderRadius: 10, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center' }}><Icon name="box" size={19} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16.5, fontWeight: 850, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peca.name}</div>
+            <div style={{ fontSize: 12.5, color: t.muted }}>SKU {peca.sku}</div>
+          </div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+        </div>
+        <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div><label style={lab}>Filamento por peça (g)</label><input value={f.gramas} onChange={(e) => set('gramas', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
+            <div><label style={lab}>Tempo por peça (min)</label><input value={f.minutos} onChange={(e) => set('minutos', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
+          </div>
+          {/* O diagnóstico: a realidade ao lado da ficha, SEM entrar na conta. */}
+          {media && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}`, fontSize: 12, color: t.muted, lineHeight: 1.5 }}>
+              <Icon name="barChart2" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>Média real ({media.producoes} produção(ões)): <b style={{ color: t.text }}>{media.gramas} g</b> e <b style={{ color: t.text }}>{media.minutos} min</b> por peça. É diagnóstico — o custo usa a ficha acima.</span>
+            </div>
+          )}
+          <div>
+            <label style={lab}>Filamento usado</label>
+            <div style={{ position: 'relative' }}>
+              <select value={f.filamento} onChange={(e) => set('filamento', e.target.value)} style={{ ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}>
+                <option value="">Nenhum (custo de material fica em branco)</option>
+                {filamentos.map((x) => <option key={x.id} value={x.id}>{x.name} · {p3Moeda(x.preco_kg)}/{x.unit || 'kg'}</option>)}
+              </select>
+              <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} />
+            </div>
+          </div>
+          <div style={{ maxWidth: 180 }}><label style={lab}>Margem de lucro (%)</label><input value={f.margem} onChange={(e) => set('margem', e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" style={field} /></div>
+          {erro && <div style={{ fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erro}</div>}
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
+          <Btn t={t} icon="check" onClick={() => !salvando && onSave({
+            filament_grams: parseInt(f.gramas || '0', 10) || 0,
+            production_minutes: parseInt(f.minutos || '0', 10) || 0,
+            filament_product_id: f.filamento || null,
+            margin_percent: Number(String(f.margem).replace(',', '.')) || 0,
+          })}>{salvando ? 'Salvando…' : 'Salvar ficha'}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- PRECIFICAÇÃO ----------
+function P3PrecificacaoReal({ t }) {
+  const R = window.React;
+  const [d, setD] = useStateP3(null);
+  const [loading, setLoading] = useStateP3(true);
+  const [erro, setErro] = useStateP3(null);
+  const [ficha, setFicha] = useStateP3(null);
+  const [busy, setBusy] = useStateP3(false);
+  const [erroModal, setErroModal] = useStateP3(null);
+  const [confirmar, setConfirmar] = useStateP3(null);
+  const [toast, setToast] = useStateP3(null);
+  R.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setErro(null);
+    return window.FRApi.get('/producao-3d/pricing', { skipLoading: true })
+      .then(function (r) { setD(r.data || null); if (inicial) setLoading(false); })
+      .catch(function (e) { setErro(p3Err(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  const salvarFicha = (body) => {
+    setBusy(true); setErroModal(null);
+    window.FRApi.put('/producao-3d/parts/' + ficha.id + '/pricing', body)
+      .then(function () { setFicha(null); return carregar(false); })
+      .then(function () { setToast({ kind: 'ok', msg: 'Ficha salva.' }); })
+      .catch(function (e) { setErroModal(p3Err(e)); })
+      .then(function () { setBusy(false); });
+  };
+  // aplicar_preco NÃO manda preço: o servidor recalcula e grava. A tela só confirma a intenção.
+  const aplicarPreco = (peca) => {
+    setBusy(true);
+    window.FRApi.put('/producao-3d/parts/' + peca.id + '/pricing', { aplicar_preco: true })
+      .then(function (r) { setConfirmar(null); return carregar(false).then(function () { return r; }); })
+      .then(function (r) { setToast({ kind: 'ok', msg: 'Preço de venda gravado: ' + p3Moeda(r.data && r.data.preco_aplicado) + '.' }); })
+      .catch(function (e) { setToast({ kind: 'err', msg: p3Err(e) }); setConfirmar(null); })
+      .then(function () { setBusy(false); });
+  };
+
+  const pecas = (d && d.pecas) || [];
+  const filamentos = (d && d.filamentos) || [];
+  const semTarifa = d && !d.tarifa_configurada;
+  const semImpressora = d && !d.impressora_configurada;
+
+  return (
+    <div>
+      <PageHeader t={t} title="Precificação" subtitle="Custo real por peça e preço de venda — a conta inteira, aberta."
+        actions={<Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Atualizar</Btn>} />
+
+      {(semTarifa || semImpressora) && (
+        <Card t={t} style={{ padding: 16, marginBottom: 18, border: `1px solid ${frHexToRgba('#d97706', 0.4)}`, background: uiTone(t, 'amber').bg }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: uiTone(t, 'amber').fg, lineHeight: 1.5 }}>
+            <Icon name="alert" size={17} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              {semTarifa && semImpressora ? 'A tarifa de energia e a impressora de referência ainda não foram configuradas'
+                : semTarifa ? 'A tarifa de energia ainda não foi configurada'
+                : 'A impressora de referência ainda não foi configurada'} — o custo de energia fica em branco até lá. Configure em <b>Registro de Valores</b>.
+            </span>
+          </div>
+        </Card>
+      )}
+
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando a precificação…</Card>
+      ) : erro ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{erro}</div>
+          <Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Tentar novamente</Btn>
+        </Card>
+      ) : pecas.length === 0 ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma peça 3D ativa" sub="O catálogo alimenta esta tela." /></Card>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {pecas.map((p) => {
+            const semFil = p.alertas.indexOf('SEM_FILAMENTO') >= 0;
+            const media = p.media_real;
+            // Divergência ficha × realidade: diagnóstico visual, nunca cálculo.
+            const divG = media && p.ficha.filament_grams > 0 ? Math.abs(media.gramas - p.ficha.filament_grams) / p.ficha.filament_grams : 0;
+            const divM = media && p.ficha.production_minutes > 0 ? Math.abs(media.minutos - p.ficha.production_minutes) / p.ficha.production_minutes : 0;
+            const divergente = divG > P3_DIVERGENCIA || divM > P3_DIVERGENCIA;
+            const temTotal = p.custo.total !== null && p.custo.total !== undefined;
+            return (
+              <Card t={t} key={p.id} style={{ padding: 18 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 200, flex: 1 }}>
+                    <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{p.name}</div>
+                    <div style={{ fontSize: 11.5, color: t.muted, marginTop: 2 }}>SKU {p.sku} · {p.impressas} impressa(s)</div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <Badge t={t} kind="gray">{p.ficha.filament_grams} g</Badge>
+                      <Badge t={t} kind="gray">{p.ficha.production_minutes} min</Badge>
+                      {p.filament
+                        ? <Badge t={t} kind="accent">{p.filament.name} · {p3Moeda(p.filament.preco_kg)}/kg</Badge>
+                        : <Badge t={t} kind="red">sem filamento vinculado</Badge>}
+                      <Btn t={t} kind="ghost" icon="pencil" onClick={() => { setErroModal(null); setFicha(p); }}>Editar ficha</Btn>
+                    </div>
+                    {media && (
+                      <div style={{ marginTop: 10, fontSize: 11.5, color: divergente ? uiTone(t, 'amber').fg : t.muted, fontWeight: divergente ? 700 : 500, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <Icon name={divergente ? 'alert' : 'barChart2'} size={13} />
+                        Média real: {media.gramas} g · {media.minutos} min ({media.producoes} produção(ões))
+                        {divergente ? ' — a ficha pode estar desatualizada' : ''}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* A CONTA ABERTA — a fórmula visível, não uma caixa-preta. */}
+                  <div style={{ minWidth: 300, display: 'flex', flexDirection: 'column', gap: 6, padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}
+                    title={`material = (${p.ficha.filament_grams} ÷ 1000) × preço/kg   ·   energia = (${p.ficha.production_minutes} ÷ 60) × (W ÷ 1000) × tarifa`}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: t.muted }}>
+                      <span>Material {semFil ? '(sem filamento)' : ''}</span><span style={{ fontWeight: 700, color: p.custo.material === null ? t.faint : t.text }}>{p3Moeda4(p.custo.material)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: t.muted }}>
+                      <span>Energia {p.custo.energia === null ? '(sem tarifa/impressora)' : ''}</span><span style={{ fontWeight: 700, color: p.custo.energia === null ? t.faint : t.text }}>{p3Moeda4(p.custo.energia)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, paddingTop: 6, borderTop: `1px solid ${t.border}` }}>
+                      <span style={{ fontWeight: 800, color: t.text }}>Custo total</span>
+                      <span style={{ fontWeight: 850, color: temTotal ? t.text : t.faint }}>{p3Moeda4(p.custo.total)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: t.muted, marginTop: 2 }}>
+                      <span>Margem</span><span style={{ fontWeight: 700, color: t.text }}>{Number(p.margin_percent || 0).toLocaleString('pt-BR')}%</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 4 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: t.accentText }}>Preço sugerido</span>
+                      <span style={{ fontSize: 19, fontWeight: 850, color: temTotal ? t.accentText : t.faint }}>{p3Moeda(p.preco_venda_arredondado)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: t.faint }}>
+                      <span>Preço atual cadastrado</span><span>{p3Moeda(p.sales_price_atual)}</span>
+                    </div>
+                    {confirmar === p.id ? (
+                      <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, background: t.panel, border: `1px solid ${t.borderStrong}` }}>
+                        <div style={{ fontSize: 12.5, color: t.text, marginBottom: 10, lineHeight: 1.5 }}>Gravar <b>{p3Moeda(p.preco_venda_arredondado)}</b> como preço de venda de <b>{p.name}</b>?</div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <Btn t={t} icon="check" onClick={() => aplicarPreco(p)}>{busy ? 'Gravando…' : 'Confirmar'}</Btn>
+                          <Btn t={t} kind="ghost" onClick={() => setConfirmar(null)}>Cancelar</Btn>
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={() => temTotal && setConfirmar(p.id)} disabled={!temTotal}
+                        style={{ all: 'unset', boxSizing: 'border-box', marginTop: 10, cursor: temTotal ? 'pointer' : 'not-allowed', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 38, borderRadius: 10, fontSize: 12.5, fontWeight: 800, background: temTotal ? t.accent : t.hover, color: temTotal ? '#fff' : t.faint }}>
+                        <Icon name="check" size={15} /> Aplicar preço
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {d && <div style={{ marginTop: 16, fontSize: 11.5, color: t.faint, textAlign: 'right' }}>
+        Cálculo feito no servidor · tarifa {d.tarifa_configurada ? p3Moeda4(d.tarifa_kwh) + '/kWh' : 'não configurada'}
+        {d.impressora ? ` · IMP-${d.impressora.display_no} (${d.impressora.power_watts} W)` : ''}
+      </div>}
+
+      {ficha && <P3FichaModal t={t} peca={ficha} filamentos={filamentos} salvando={busy} erro={erroModal} onClose={() => setFicha(null)} onSave={salvarFicha} />}
+      <P3Toast t={t} toast={toast} onClose={() => setToast(null)} />
+    </div>
+  );
+}
+
+// Gate padrão da casa nas duas abas: sem a page_key 'producao_3d' a tela interna NEM MONTA
+// (zero rede). Admin passa pelo bypass; a chave nasceu no universo pela migration 017.
+//
+// POR QUE NÃO canAccess: ele libera por prefixo de módulo — quem tem 'producao_3d:view' passa
+// em canAccess('producao_3d'). Isso vale para chave guarda-chuva, e 'producao_3d' NÃO é uma:
+// é permissão própria, que o backend confere por igualdade em requirePermission. Usar canAccess
+// aqui deixava o almoxarife montar a tela e tomar 403 na cara — front liberando o que o backend
+// nega é a pior das duas negações. Este teste é o mesmo do backend, letra por letra.
+function P3TemProducao3D() {
+  const A = window.FRAuth;
+  if (!A) return false;
+  if (typeof A.hasRole === 'function' && A.hasRole(['admin'])) return true; // mesmo bypass do backend
+  return Array.isArray(A.permissions) && A.permissions.indexOf('producao_3d') !== -1;
+}
+
+function P3GateProducao3D({ t, titulo, subtitulo, children }) {
+  if (!P3TemProducao3D()) {
+    return (
+      <div>
+        <PageHeader t={t} title={titulo} subtitle={subtitulo} />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (producao_3d) para esta tela.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return children;
+}
+function P3Valores({ t }) {
+  return <P3GateProducao3D t={t} titulo="Registro de Valores" subtitulo="Impressoras, filamentos e energia."><P3ValoresReal t={t} /></P3GateProducao3D>;
+}
+function P3Precificacao({ t }) {
+  return <P3GateProducao3D t={t} titulo="Precificação" subtitulo="Custo real por peça e preço de venda."><P3PrecificacaoReal t={t} /></P3GateProducao3D>;
+}
+
 function renderPage3D(active, props) {
   const t = frTokens(props.theme, P3_ACCENT, P3_ACCENT_T);
   const p = { ...props, t };
   if (active === 'p3d-producao') return <P3Historico {...p} />;
   if (active === 'p3d-demandas') return <P3Demandas {...p} />;
   if (active === 'p3d-catalogo') return <P3Catalogo {...p} />;
+  if (active === 'p3d-valores') return <P3Valores {...p} />;
+  if (active === 'p3d-precificacao') return <P3Precificacao {...p} />;
   return <P3Dashboard {...p} />;
 }
 

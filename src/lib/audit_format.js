@@ -19,6 +19,22 @@ const shortId = (v) => (v == null || v === '' ? '—' : String(v).slice(0, 8));
 
 const ou = (v, alt = '—') => (v == null || v === '' ? alt : String(v));
 
+// Data do log em PT-BR. O mesmo campo chega em dois formatos conforme o caminho: 'yyyy-mm-dd'
+// (veio do corpo da requisição) ou ISO completo (veio de uma coluna DATE relida do banco). Corta
+// os 10 primeiros e reordena — new Date() aqui erraria o dia, porque 'yyyy-mm-dd' é lido como
+// meia-noite UTC e volta um dia atrás em qualquer fuso negativo.
+const dataBR = (v) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v == null ? '' : v));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : ou(v);
+};
+
+// Dinheiro do log em PT-BR: o banco devolve numeric como string ('45.90'), e 45.9 na tela de
+// auditoria é o mesmo defeito que R$ 45,9 na nota.
+const moedaBR = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : ou(v);
+};
+
 // details -> "chave: valor · chave: valor" legível (base do fallback).
 function legivel(details) {
   if (details == null) return '—';
@@ -182,6 +198,33 @@ export const AUDIT_ACTIONS = {
   RETOMAR_MAQUINA: { verbo: 'Retomou', kind: 'green', icon: 'check',
     alvo: (d) => `Máquina · MAQ-${ou(d.display_no)}`,
     frase: () => 'Montagem retomada — parada encerrada' },
+
+  // ── Expansão 3D: Registro de Valores e Precificação (migration 017) ──
+  // details: {id, display_no, name, power_watts} na impressora; {id, display_no, alterados} na
+  // edição (NOMES dos campos, nunca valores); {id, printer_id, display_no, date, cost} na
+  // manutenção; {id, sku, alterados} na ficha da peça.
+  CRIAR_IMPRESSORA: { verbo: 'Cadastrou', kind: 'green', icon: 'printer',
+    alvo: (d) => `Impressora · IMP-${ou(d.display_no)} ${ou(d.name)}`,
+    frase: (d) => `Impressora 3D de ${ou(d.power_watts)} W no cadastro` },
+  EDITAR_IMPRESSORA: { verbo: 'Editou', kind: 'blue', icon: 'pencil',
+    alvo: (d) => `Impressora · IMP-${ou(d.display_no)}`,
+    frase: (d) => `Campos alterados: ${Array.isArray(d.alterados) ? d.alterados.join(', ') : '—'}` },
+  EXCLUIR_IMPRESSORA: { verbo: 'Excluiu', kind: 'red', icon: 'trash',
+    alvo: (d) => `Impressora · IMP-${ou(d.display_no)} ${ou(d.name)}`,
+    // era_padrao vem do backend: quando é true, a exclusão também esvaziou a impressora de
+    // referência do cálculo. Quem lê o livro precisa ver os dois efeitos, não só um.
+    frase: (d) => (d.era_padrao
+      ? 'Impressora removida do cadastro — era a referência do cálculo, que ficou sem impressora'
+      : 'Impressora removida do cadastro (sem manutenções registradas)') },
+  REGISTRAR_MANUTENCAO: { verbo: 'Registrou', kind: 'amber', icon: 'settings',
+    alvo: (d) => `Manutenção · IMP-${ou(d.display_no)}`,
+    frase: (d) => `Manutenção em ${dataBR(d.date)} · custo ${moedaBR(d.cost)}` },
+  EXCLUIR_MANUTENCAO: { verbo: 'Excluiu', kind: 'red', icon: 'trash',
+    alvo: () => 'Manutenção de impressora',
+    frase: (d) => `Registro de ${dataBR(d.date)} apagado` },
+  EDITAR_FICHA_3D: { verbo: 'Editou', kind: 'blue', icon: 'box',
+    alvo: (d) => `Ficha 3D · ${ou(d.sku)}`,
+    frase: (d) => `Campos alterados: ${Array.isArray(d.alterados) ? d.alterados.join(', ') : '—'}` },
 
   // ── Sistema ──
   UPDATE_SETTING: { verbo: 'Configurou', kind: 'amber', icon: 'gear',

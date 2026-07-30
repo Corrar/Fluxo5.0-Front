@@ -95,6 +95,12 @@ const NAV_3D = [
       { id: 'p3d-producao',  name: 'Histórico de Produção', icon: 'printer' },
       { id: 'p3d-demandas',  name: 'Quadro de Demandas',    icon: 'kanban' },
       { id: 'p3d-catalogo',  name: 'Catálogo de Peças',     icon: 'box' },
+      // Expansão 3D (migration 017): as duas abas de custo. O gate é na própria tela e exige a
+      // page_key 'producao_3d' EXATA (P3TemProducao3D) — a chave que já existia no universo e
+      // não gateava nada até a 017. Aparecer no NAV e negar na tela é de propósito: quem tem o
+      // módulo enxerga que a aba existe e lê o motivo, em vez de o item sumir sem explicação.
+      { id: 'p3d-valores',       name: 'Registro de Valores', icon: 'dollar' },
+      { id: 'p3d-precificacao',  name: 'Precificação',        icon: 'barChart' },
     ],
   },
 ];
