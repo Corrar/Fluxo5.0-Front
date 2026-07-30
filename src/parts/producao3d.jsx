@@ -939,6 +939,9 @@ const P3_STATUS_IMP = {
 // Divergência a partir da qual a média real vira alerta na tela: a ficha provavelmente
 // envelheceu. É DIAGNÓSTICO — não entra em conta nenhuma (decisão travada).
 const P3_DIVERGENCIA = 0.20;
+// Peças por página na Precificação = limit default do backend (teto 100; acima disso ele dá 400,
+// e é de propósito — clamp silencioso esconderia bug de chamada nosso).
+const P3_PAGE_SIZE = 25;
 
 function p3Moeda(v) {
   if (v === null || v === undefined) return '—';
@@ -1383,15 +1386,33 @@ function P3PrecificacaoReal({ t }) {
   const [erroModal, setErroModal] = useStateP3(null);
   const [confirmar, setConfirmar] = useStateP3(null);
   const [toast, setToast] = useStateP3(null);
+  // Paginação e busca SERVER-SIDE (envelope { pecas, total, limit, offset }): filtrar array no
+  // cliente em cima de uma resposta cortada é a armadilha que a Auditoria já mapeou — o que não
+  // veio na página não existe para o filtro local, e a tela mentiria sem saber.
+  const [offset, setOffset] = useStateP3(0);
+  const [qInput, setQInput] = useStateP3('');   // o que está digitado
+  const [q, setQ] = useStateP3('');             // o que já virou request
   R.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
+
+  // Debounce: tecla não vira request; 400ms de silêncio viram UMA (mesmo tempo da Auditoria).
+  R.useEffect(function () {
+    const id = setTimeout(function () { setQ(qInput.trim()); }, 400);
+    return function () { clearTimeout(id); };
+  }, [qInput]);
+
+  // Trocou a busca → volta pra primeira página. Sem isto, quem está na página 3 e busca algo com
+  // 2 resultados cai numa página vazia que parece "não achei nada" — a página fantasma.
+  R.useEffect(function () { setOffset(0); }, [q]);
 
   const carregar = R.useCallback(function (inicial) {
     if (inicial) setLoading(true);
     setErro(null);
-    return window.FRApi.get('/producao-3d/pricing', { skipLoading: true })
+    const params = { limit: P3_PAGE_SIZE, offset: offset };
+    if (q) params.q = q;
+    return window.FRApi.get('/producao-3d/pricing', { params: params, skipLoading: true })
       .then(function (r) { setD(r.data || null); if (inicial) setLoading(false); })
       .catch(function (e) { setErro(p3Err(e)); if (inicial) setLoading(false); });
-  }, []);
+  }, [offset, q]);
   R.useEffect(function () { carregar(true); }, [carregar]);
 
   const salvarFicha = (body) => {
@@ -1417,6 +1438,17 @@ function P3PrecificacaoReal({ t }) {
   const semTarifa = d && !d.tarifa_configurada;
   const semImpressora = d && !d.impressora_configurada;
 
+  // Navegação 100% do envelope: quem manda no "tem próxima" é o total do servidor, não o que
+  // sobrou na tela. `limitEfetivo` sai da resposta — se o backend um dia mudar o default, a
+  // conta acompanha sozinha.
+  const total = (d && typeof d.total === 'number') ? d.total : pecas.length;
+  const limitEfetivo = (d && d.limit) || P3_PAGE_SIZE;
+  const primeiro = total === 0 ? 0 : offset + 1;
+  const ultimo = offset + pecas.length;
+  const temAnterior = offset > 0;
+  const temProxima = offset + limitEfetivo < total;
+  const pageBtn = (enabled) => ({ all: 'unset', boxSizing: 'border-box', cursor: enabled ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, color: enabled ? t.text : t.faint, border: `1px solid ${t.border}`, background: t.panel, opacity: enabled ? 1 : 0.55 });
+
   return (
     <div>
       <PageHeader t={t} title="Precificação" subtitle="Custo real por peça e preço de venda — a conta inteira, aberta."
@@ -1435,6 +1467,22 @@ function P3PrecificacaoReal({ t }) {
         </Card>
       )}
 
+      {/* Busca server-side: o ?q= filtra sku OU name no banco, então achar peça da página 4 não
+          depende dela estar carregada. */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 260px', minWidth: 200, height: 44, padding: '0 14px', borderRadius: 11, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text' }}>
+          <Icon name="search" size={17} />
+          <input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Buscar por SKU ou nome da peça…"
+            style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
+          {qInput && <button onClick={() => setQInput('')} title="Limpar busca" style={{ all: 'unset', cursor: 'pointer', color: t.faint, display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} /></button>}
+        </label>
+        <div style={{ fontSize: 12, color: t.muted, fontWeight: 600 }}>
+          {loading ? 'Carregando…'
+            : total === 0 ? (q ? 'Nenhuma peça encontrada' : 'Nenhuma peça 3D ativa')
+            : `${primeiro}–${ultimo} de ${total} ${total === 1 ? 'peça' : 'peças'}`}
+        </div>
+      </div>
+
       {loading ? (
         <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando a precificação…</Card>
       ) : erro ? (
@@ -1443,7 +1491,24 @@ function P3PrecificacaoReal({ t }) {
           <Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Tentar novamente</Btn>
         </Card>
       ) : pecas.length === 0 ? (
-        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma peça 3D ativa" sub="O catálogo alimenta esta tela." /></Card>
+        // Dois vazios diferentes, porque são dois fatos diferentes: "não existe peça" e "sua
+        // busca não achou". O segundo não pode parecer catálogo vazio.
+        <Card t={t} style={{ padding: 10 }}>
+          {offset > 0 && total > 0 ? (
+            // Página vazia com total > 0: alguém arquivou peças enquanto o usuário navegava.
+            // Dizer "nenhuma peça" aqui seria mentira — o que acabou foi esta página. O botão vem
+            // FORA do EmptyState porque ele não tem slot de ação (e não é hora de mexer num
+            // componente que o sistema inteiro usa).
+            <div>
+              <EmptyState t={t} title="Esta página ficou vazia" sub={`O catálogo tem ${total} peça(s) agora — alguma saiu enquanto você navegava.`} />
+              <div style={{ display: 'grid', placeItems: 'center', paddingBottom: 28, marginTop: -18 }}>
+                <Btn t={t} icon="chevronLeft" onClick={() => setOffset(0)}>Voltar ao início</Btn>
+              </div>
+            </div>
+          ) : q
+            ? <EmptyState t={t} title={`Nenhuma peça para "${q}"`} sub="A busca vale para SKU e nome, em todas as páginas. Limpe o campo para ver o catálogo inteiro." />
+            : <EmptyState t={t} title="Nenhuma peça 3D ativa" sub="O catálogo alimenta esta tela." />}
+        </Card>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {pecas.map((p) => {
@@ -1519,6 +1584,14 @@ function P3PrecificacaoReal({ t }) {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {/* Só aparece quando há mais de uma página: dois botões mortos embaixo de 8 peças é ruído. */}
+      {!erro && !loading && (temAnterior || temProxima) && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <button disabled={!temAnterior} onClick={() => temAnterior && setOffset(Math.max(0, offset - limitEfetivo))} style={pageBtn(temAnterior)}><Icon name="chevronLeft" size={15} /> Anterior</button>
+          <button disabled={!temProxima} onClick={() => temProxima && setOffset(offset + limitEfetivo)} style={pageBtn(temProxima)}>Próxima <Icon name="chevronRight" size={15} /></button>
         </div>
       )}
 
