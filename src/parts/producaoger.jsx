@@ -76,10 +76,17 @@ function useFROpEvents(csid, tipo) { return pgUseGet(csid ? '/op-materials/event
 function frOpReceive(separationId, items, idemKey) {
   return window.FRApi.post('/op-materials/receive', { separationId: separationId, items: items }, { headers: { 'X-Idempotency-Key': idemKey } });
 }
-function frOpConsume(clientServiceId, productId, qty, idemKey) {
-  return window.FRApi.post('/op-materials/consume', { clientServiceId: clientServiceId, productId: productId, qty: qty }, { headers: { 'X-Idempotency-Key': idemKey } });
+// machineId é OPCIONAL (Montagem v1, migration 016): ETIQUETA o consumo com a máquina que
+// recebeu a peça. Só vai no corpo quando escolhido — o backend trata ausência como NULL, e a
+// projeção de saldo da OP não enxerga a etiqueta (é dimensão, não eixo).
+function frOpConsume(clientServiceId, productId, qty, idemKey, machineId) {
+  const body = { clientServiceId: clientServiceId, productId: productId, qty: qty };
+  if (machineId) body.machineId = machineId;
+  return window.FRApi.post('/op-materials/consume', body, { headers: { 'X-Idempotency-Key': idemKey } });
 }
-Object.assign(window, { useFROpPendingReceipts, useFROpBalance, useFROpEvents, frOpReceive, frOpConsume, pgErr, pgGenKey, pgDateTime, pgNum });
+// pgOpsAbertas sai pro window porque a Montagem (montagem.jsx) precisa da MESMA lista de OPs
+// abertas — duplicar o normalizador lá faria as duas telas divergirem no dia que o critério mudar.
+Object.assign(window, { useFROpPendingReceipts, useFROpBalance, useFROpEvents, frOpReceive, frOpConsume, pgOpsAbertas, pgErr, pgGenKey, pgDateTime, pgNum });
 
 // ---------- Toast (erro/sucesso) — mesmo visual das telas já ligadas ----------
 function PGToast({ t, toast, onClose }) {
@@ -298,6 +305,12 @@ function PGAponta({ t }) {
   const [sel, setSel] = useStatePG(null);          // produto escolhido (linha do saldo)
   const [qtd, setQtd] = useStatePG('');
   const [idemKey, setIdemKey] = useStatePG(null);  // âncora gerada ao ESCOLHER a peça (abre o form)
+  // ETIQUETA DE MÁQUINA (Montagem v1, migration 016) — OPCIONAL. As máquinas vêm filtradas pela
+  // OP escolhida: o backend recusa com 400 máquina de outra OP (guard de integridade da árvore),
+  // e a UI não deve deixar o operador chegar lá. O 400 continua sendo a defesa de corrida (a
+  // máquina pode mudar entre o load e o submit) — a UI só evita o erro previsível.
+  const [maquinas, setMaquinas] = useStatePG([]);
+  const [maquinaId, setMaquinaId] = useStatePG('');
   const [busy, setBusy] = useStatePG(false);
   const [toast, setToast] = useStatePG(null);
   React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
@@ -307,6 +320,19 @@ function PGAponta({ t }) {
   // Foco automático no campo do SKU: o leitor Elgin digita e dá Enter sozinho — se o campo não
   // estiver focado, a bipada se perde. Refoca ao trocar de OP e depois de cada apontamento.
   React.useEffect(() => { if (opId && !sel && skuRef.current) skuRef.current.focus(); }, [opId, sel]);
+
+  // Máquinas EM MONTAGEM da OP escolhida. Sem a page_key 'montagem' o GET volta 403 — a tela de
+  // apontamento NÃO quebra por isso: cai pra lista vazia e o seletor some (quem aponta pode não
+  // ser quem monta; os gates são independentes por decisão).
+  React.useEffect(() => {
+    setMaquinaId('');
+    if (!opId) { setMaquinas([]); return; }
+    let vivo = true;
+    window.FRApi.get('/assembly-machines?status=andamento', { skipLoading: true })
+      .then((r) => { if (vivo) setMaquinas(((r.data && r.data.machines) || []).filter((m) => String(m.client_service_id) === String(opId))); })
+      .catch(() => { if (vivo) setMaquinas([]); });
+    return () => { vivo = false; };
+  }, [opId]);
 
   const comSaldo = saldo.filter((s) => pgNum(s.saldo) > 0);
   // Bipada/Enter: casa SKU exato primeiro (é o que o scanner entrega); só então tenta nome.
@@ -333,10 +359,11 @@ function PGAponta({ t }) {
     if (!(n > 0)) { setToast({ kind: 'err', msg: 'Informe uma quantidade maior que zero.' }); return; }
     setBusy(true);
     try {
-      await frOpConsume(opId, sel.product_id, n, idemKey);
+      await frOpConsume(opId, sel.product_id, n, idemKey, maquinaId || null);
       setSel(null); setQtd(''); setIdemKey(null);       // só o SUCESSO fecha o form e queima a chave
       reloadBal(); reloadEv();
-      setToast({ kind: 'ok', msg: `Apontado: ${n} ${sel.unit || ''} de ${sel.name}.` });
+      const maq = maquinas.find((x) => x.id === maquinaId);
+      setToast({ kind: 'ok', msg: `Apontado: ${n} ${sel.unit || ''} de ${sel.name}${maq ? ` · MAQ-${maq.display_no}` : ''}.` });
       setTimeout(() => skuRef.current && skuRef.current.focus(), 0);
     } catch (e) {
       // NO ERRO: form aberto e MESMA idemKey (retry idempotente). O 400 do guard traz o saldo real.
@@ -394,6 +421,21 @@ function PGAponta({ t }) {
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmar(); } }}
                     inputMode="numeric" style={{ ...field, width: '100%', fontWeight: 800 }} />
                 </div>
+                {/* Etiqueta OPCIONAL: só aparece se a OP tiver máquina em montagem. Sem escolha,
+                    o consumo é da OP (machine_id NULL) — retrocompatível e válido. */}
+                {maquinas.length > 0 && (
+                  <div style={{ minWidth: 220 }}>
+                    <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Máquina (opcional)</label>
+                    <div style={{ position: 'relative' }}>
+                      <select value={maquinaId} onChange={(e) => setMaquinaId(e.target.value)}
+                        style={{ ...field, width: '100%', appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}>
+                        <option value="">Sem máquina (consumo da OP)</option>
+                        {maquinas.map((mq) => <option key={mq.id} value={mq.id}>MAQ-{mq.display_no} · {mq.name}</option>)}
+                      </select>
+                      <Icon name="chevronDown" size={16} style={{ position: 'absolute', right: 11, top: 15, color: t.muted, pointerEvents: 'none' }} />
+                    </div>
+                  </div>
+                )}
                 <Btn t={t} kind="ghost" onClick={cancelar}>Cancelar</Btn>
                 <button onClick={confirmar} disabled={busy}
                   style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 46, padding: '0 20px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: busy ? t.elevated : t.accent, color: busy ? t.faint : '#fff' }}>
@@ -554,12 +596,12 @@ window.renderPageProd = renderPageProd;
 //     ref_event_id. Modelar como consumido(B) direto faria o saldo de B ficar negativo.
 //  3. LOTE: o mock tinha lote (LT-###) como grão. O razão é por (OP, produto) — lote não tem coluna.
 //     Se lote importar (validade/rastreio), é coluna nova em op_material_events.
-//  4. MÁQUINA + árvore do produto: o PGLoteModal era o ÚNICO emissor do CustomEvent
-//     'fr-maq-consumo', que montagem.jsx escuta (drain, ~505-526) pra somar material na BOM da
-//     máquina. Com o modal fora, esse listener nunca mais dispara. Os dois lados eram mock (a BOM
-//     da Montagem morre no F5), então nada real quebrou — mas a Montagem perdeu sua única fonte de
-//     material. op_material_events não tem machine_id: ligar Montagem exige decidir se a máquina é
-//     um eixo do consumo (coluna) ou um agregado à parte.
+//  4. MÁQUINA + árvore do produto: RESOLVIDO em 30/07/2026 (migration 016, caminho B). A ponte de
+//     browser morreu de vez — FR_MAQUINAS / __frMaqQueue / CustomEvent 'fr-maq-consumo' não
+//     existem mais em lugar nenhum. O elo agora é o BANCO: op_material_events ganhou machine_id
+//     (DIMENSÃO, nunca eixo — a projeção de saldo e o advisory lock seguem por OP,produto) e o
+//     seletor opcional de máquina desta tela manda machineId no consume. A árvore do produto da
+//     Montagem é PROJEÇÃO (SUM de 'consumido' por machine_id), não cadastro.
 //  5. PAINEL (prod-painel): LIGADO em 24/07/2026 — OPs do GET /clients + KPIs do GET
 //     /op-materials/summary. Os 5 indicadores chumbados sem fonte (concluídas-no-mês, lead time,
 //     atrasadas, produtividade mensal, eficiência por setor) SAÍRAM por decisão de produto; cada

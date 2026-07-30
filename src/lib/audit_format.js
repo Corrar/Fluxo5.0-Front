@@ -167,6 +167,22 @@ export const AUDIT_ACTIONS = {
     alvo: (d) => `Projeto · ${ou(d.name)}`,
     frase: () => 'Projeto e checklists apagados definitivamente' },
 
+  // ── Montagem de Máquinas (migration 016 — caminho B) ──
+  // details: {id, display_no, name, op_code} no CRIAR; {id, display_no, alterados} no EDITAR
+  // (NOMES dos campos, nunca valores); {id, display_no, reason, sector} no PARAR.
+  CRIAR_MAQUINA: { verbo: 'Cadastrou', kind: 'green', icon: 'settings',
+    alvo: (d) => `Máquina · MAQ-${ou(d.display_no)} ${ou(d.name)}`,
+    frase: (d) => `Máquina vinculada à OP ${ou(d.op_code)}` },
+  EDITAR_MAQUINA: { verbo: 'Editou', kind: 'blue', icon: 'pencil',
+    alvo: (d) => `Máquina · MAQ-${ou(d.display_no)}`,
+    frase: (d) => `Campos alterados: ${Array.isArray(d.alterados) ? d.alterados.join(', ') : '—'}` },
+  PARAR_MAQUINA: { verbo: 'Parou', kind: 'red', icon: 'alert',
+    alvo: (d) => `Máquina · MAQ-${ou(d.display_no)}`,
+    frase: (d) => `Parada (${ou(d.sector)}): ${ou(d.reason)}` },
+  RETOMAR_MAQUINA: { verbo: 'Retomou', kind: 'green', icon: 'check',
+    alvo: (d) => `Máquina · MAQ-${ou(d.display_no)}`,
+    frase: () => 'Montagem retomada — parada encerrada' },
+
   // ── Sistema ──
   UPDATE_SETTING: { verbo: 'Configurou', kind: 'amber', icon: 'gear',
     alvo: (d) => `Config · ${ou(d.key)}`, frase: (d) => `Valor: ${ou(d.value)}` },

@@ -177,7 +177,7 @@ const NAV_PROD = [
     label: 'Produção',
     items: [
       { id: 'prod-painel',  name: 'Painel', icon: 'barChart2' },
-      { id: 'prod-montagem', name: 'Montagem de Máquinas', icon: 'settings', locked: true },
+      { id: 'prod-montagem', name: 'Montagem de Máquinas', icon: 'settings' },
       { id: 'prod-armazem', name: 'Armazém', icon: 'box' },
       { id: 'prod-receb',   name: 'Recebimento', icon: 'download' },
       { id: 'prod-aponta',  name: 'Apontamentos', icon: 'clipboard' },
@@ -262,7 +262,10 @@ const FR_LOCKED_PAGES = new Set([
   // Produção — telas mock/incompletas (visíveis no menu com cadeado)
   // 'prod-painel' SAIU: OPs do GET /clients + KPIs do GET /op-materials/summary; os 5
   //   indicadores sem fonte (lead time, atrasadas, gráfico...) foram removidos da tela.
-  'prod-montagem',
+  // 'prod-montagem' SAIU: tela real desde a migration 016 (caminho B) — /assembly-machines com
+  //   gate por canAccess('montagem') na própria tela, checklists dirty-save e a árvore do produto
+  //   como PROJEÇÃO do razão (consumo etiquetado com machine_id na tela Apontamentos). O mock
+  //   inteiro morreu junto com a ponte de browser FR_MAQUINAS/__frMaqQueue/'fr-maq-consumo'.
   // Config do módulo Dev (mock) — Dev é não-navegável, mas trava defensiva se a rota for atingida
   // 'auditoria' SAIU: ligada ao GET /admin/logs real (contrato v1 — envelope {logs,total,limit,
   //   offset}, filtros e paginação 100% server-side, formatador com fallback em audit_format.js,
