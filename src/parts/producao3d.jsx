@@ -111,12 +111,26 @@ const P3_MES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', '
 // P3_DADOS (KPIs + série do gráfico chumbados) REMOVIDO — p3Aggregate deriva tudo das produções REAIS.
 // Agrega as produções do período em KPIs + barras. Puro: recebe a lista já adaptada e devolve números.
 // Bucket por dia (7d), semana (30d) ou mês (90d) — mais barras que isso vira poeira ilegível.
+// FUTURO ENTRA CLAMPADO, NÃO É DESCARTADO. `date` da produção é o relógio de QUEM REGISTRA
+// (producao3d.jsx:263 manda new Date() do cliente; não há campo de data no formulário) e o filtro
+// aqui usa o relógio de QUEM LÊ. Operador com o PC 10 min adiantado registrava, e o supervisor
+// noutra máquina não via a peça no card por 10 minutos — enquanto ela já estava no estoque e já
+// contava na Precificação. O `ts <= now` derrubava a linha em silêncio, contradizendo o clamp da
+// borda antiga logo abaixo, que existe justamente para nenhuma linha filtrada sumir do gráfico.
+// Sem tolerância em minutos: número mágico aqui só mudaria de lugar o ponto onde a peça some, e a
+// produção existe de fato — contá-la no período atual é mais verdadeiro do que fazê-la sumir. A
+// raiz (o servidor deveria carimbar a data) é dívida registrada, não conserto desta linha.
 function p3Aggregate(prods, days) {
   const now = Date.now(), from = now - days * 86400000;
   const rows = [];
   for (let i = 0; i < prods.length; i++) {
-    const ts = prods[i].dateISO ? new Date(prods[i].dateISO).getTime() : NaN;
-    if (!isNaN(ts) && ts >= from && ts <= now) rows.push({ ...prods[i], ts: ts });
+    const tsReal = prods[i].dateISO ? new Date(prods[i].dateISO).getTime() : NaN;
+    // O clamp é aqui, UMA vez: quem chega do futuro passa a valer "agora" para tudo a jusante —
+    // bucket, dias ativos e média. Clampar só no índice da barra deixaria a peça no gráfico de hoje
+    // e o dia dela (amanhã) contando como mais um dia ativo, baixando a média com um dia que não
+    // existiu.
+    const ts = Math.min(tsReal, now);
+    if (!isNaN(ts) && ts >= from) rows.push({ ...prods[i], ts: ts });
   }
   const pecas = rows.reduce((a, r) => a + r.qtd, 0);
   const gramas = rows.reduce((a, r) => a + r.gramas, 0);
@@ -138,7 +152,8 @@ function p3Aggregate(prods, days) {
   }
   // Clamp: a produção exatamente na borda do período (now - days) cairia em idx -1 e sumiria da barra
   // sem sumir do KPI. Toda linha que passou no filtro tem que aparecer no gráfico — soma das barras
-  // SEMPRE bate com o card "Peças produzidas".
+  // SEMPRE bate com o card "Peças produzidas". O Math.min do outro lado é cinto de segurança: o
+  // futuro já vem clampado do filtro, e nenhum r.ts passa de `now`.
   rows.forEach((r) => {
     const idx = Math.min(nB - 1, Math.max(0, nB - 1 - Math.floor((now - r.ts) / span)));
     buckets[idx].v += r.qtd;
