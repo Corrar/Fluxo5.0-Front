@@ -1,4 +1,6 @@
-// dev.jsx — módulo Desenvolvedor: Chamados (fila REAL do helpdesk) + mocks cadeados (Painel, Chat, Projetos, Agenda).
+// dev.jsx — módulo Desenvolvedor: Chamados (fila REAL do helpdesk) e Projetos (grade REAL,
+// migration 013) + mocks cadeados (Painel, Chat). A Agenda MORREU na decisão C do Bruno
+// (30/07/2026) — a lápide com o motivo e o critério de reabertura mora no NAV_DEV (data.jsx).
 const { useState: useStateDV } = React;
 const DV_ACCENT = '#0891b2', DV_ACCENT_T = '#22d3ee';
 
@@ -682,176 +684,15 @@ function DevProjetos({ t }) {
   return <DevProjetosReal t={t} />;
 }
 
-// ---------- Agenda (mês, estilo Google Agenda) ----------
-const DV_AGENDA_SEED = [
-  { id: 'a1', dia: 3, allday: true, titulo: 'Atividade: T2', cor: 'blue' },
-  { id: 'a2', dia: 4, allday: true, titulo: 'Corpo de Deus', cor: 'green' },
-  { id: 'a3', dia: 8, allday: true, titulo: 'Entrega Final NF-e', cor: 'blue' },
-  { id: 'a4', dia: 12, allday: true, titulo: 'Dia dos Namorados', cor: 'green' },
-  { id: 'a5', dia: 12, hora: '20:59', titulo: 'Deploy P2', cor: 'blue' },
-  { id: 'a6', dia: 16, allday: true, titulo: 'Review App Mobile', cor: 'blue' },
-  { id: 'a7', dia: 17, hora: '10:30', titulo: 'Corrigir export PDF', cor: 'red' },
-  { id: 'a8', dia: 17, hora: '14:00', titulo: 'Reunião com Estoque', cor: 'amber' },
-];
-const DV_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-const DV_WD = ['Dom.', 'Seg.', 'Ter.', 'Qua.', 'Qui.', 'Sex.', 'Sáb.'];
-
-function DevAgenda({ t, agenda, setAgenda }) {
-  const HOJE = 17;
-  const [mesRef, setMesRef] = useStateDV({ ano: 2026, mes: 5 }); // junho = 5
-  const [add, setAdd] = useStateDV(null);
-  const [selDia, setSelDia] = useStateDV(null);
-  const [form, setForm] = useStateDV({ hora: '09:00', titulo: '', cor: 'blue', allday: false });
-  const [viewOpen, setViewOpen] = useStateDV(false);
-  const cores = [['blue', 'Azul'], ['green', 'Verde'], ['amber', 'Âmbar'], ['red', 'Vermelho'], ['accent', 'Ciano']];
-
-  const first = new Date(mesRef.ano, mesRef.mes, 1);
-  const startDow = first.getDay();
-  const diasNoMes = new Date(mesRef.ano, mesRef.mes + 1, 0).getDate();
-  const prevDias = new Date(mesRef.ano, mesRef.mes, 0).getDate();
-  const isJunho2026 = mesRef.ano === 2026 && mesRef.mes === 5;
-  // build 6 weeks grid
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    const dayNum = i - startDow + 1;
-    if (dayNum < 1) cells.push({ dia: prevDias + dayNum, out: true });
-    else if (dayNum > diasNoMes) cells.push({ dia: dayNum - diasNoMes, out: true });
-    else cells.push({ dia: dayNum, out: false });
-  }
-  const weeks = cells.length / 7;
-  const evDay = (d) => agenda.filter((a) => a.dia === d).sort((a, b) => (a.allday ? -1 : 1) - (b.allday ? -1 : 1) || (a.hora || '').localeCompare(b.hora || ''));
-  const nav = (dir) => setMesRef((m) => { let mes = m.mes + dir, ano = m.ano; if (mes < 0) { mes = 11; ano--; } if (mes > 11) { mes = 0; ano++; } return { ano, mes }; });
-  const submit = () => { if (!form.titulo.trim()) return; setAgenda((xs) => [...xs, { id: 'a' + Date.now(), dia: add, hora: form.allday ? '' : form.hora, allday: form.allday, titulo: form.titulo.trim(), cor: form.cor }]); setSelDia(add); setForm({ hora: '09:00', titulo: '', cor: 'blue', allday: false }); setAdd(null); };
-  const del = (id) => setAgenda((xs) => xs.filter((x) => x.id !== id));
-  const clickDia = (dia) => { if (evDay(dia).length > 0) setSelDia(dia); else { setAdd(dia); setForm({ hora: '09:00', titulo: '', cor: 'blue', allday: false }); } };
-
-  return (
-    <div>
-      {/* toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18, flexWrap: 'wrap' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, fontSize: 22, fontWeight: 850, color: t.text }}><Icon name="calendar" size={24} style={{ color: t.accentText }} /> Agenda</span>
-        <button onClick={() => setMesRef({ ano: 2026, mes: 5 })} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 18px', borderRadius: 999, fontSize: 13.5, fontWeight: 700, color: t.text, border: `1px solid ${t.border}` }}>Hoje</button>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <button onClick={() => nav(-1)} style={{ all: 'unset', cursor: 'pointer', width: 36, height: 36, borderRadius: '50%', display: 'grid', placeItems: 'center', color: t.muted }} onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="chevronLeft" size={20} /></button>
-          <button onClick={() => nav(1)} style={{ all: 'unset', cursor: 'pointer', width: 36, height: 36, borderRadius: '50%', display: 'grid', placeItems: 'center', color: t.muted }} onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="chevronRight" size={20} /></button>
-        </div>
-        <span style={{ fontSize: 20, fontWeight: 700, color: t.text }}>{DV_MESES[mesRef.mes]} de {mesRef.ano}</span>
-        <div style={{ marginLeft: 'auto', position: 'relative' }}>
-          <button onClick={() => setViewOpen((o) => !o)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 13.5, fontWeight: 700, color: t.text, border: `1px solid ${t.border}` }}>Mês <Icon name="chevronDown" size={15} style={{ color: t.muted }} /></button>
-          {viewOpen && (
-            <React.Fragment>
-              <div onClick={() => setViewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
-              <div style={{ position: 'absolute', zIndex: 10, top: 'calc(100% + 6px)', right: 0, width: 200, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6 }}>
-                {[['Dia', 'D'], ['Semana', 'W'], ['Mês', 'M'], ['Ano', 'Y'], ['Programação', 'A']].map(([l, k]) => (
-                  <div key={l} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 11px', borderRadius: 9, fontSize: 13.5, color: l === 'Mês' ? t.accentText : t.text, fontWeight: l === 'Mês' ? 700 : 500, background: l === 'Mês' ? t.accentSoft : 'transparent', cursor: 'pointer' }}
-                    onMouseEnter={(e) => { if (l !== 'Mês') e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { if (l !== 'Mês') e.currentTarget.style.background = 'transparent'; }}>{l}<span style={{ fontSize: 11, color: t.faint }}>{k}</span></div>
-                ))}
-              </div>
-            </React.Fragment>
-          )}
-        </div>
-      </div>
-
-      {/* calendar grid + side panel */}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-      <Card t={t} style={{ padding: 0, overflow: 'hidden', flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', borderBottom: `1px solid ${t.border}` }}>
-          {DV_WD.map((w) => <div key={w} style={{ padding: '10px 0', textAlign: 'center', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>{w}</div>)}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridTemplateRows: `repeat(${weeks}, minmax(110px, 1fr))` }}>
-          {cells.map((c, i) => {
-            const isToday = !c.out && isJunho2026 && c.dia === HOJE;
-            const evs = c.out ? [] : evDay(c.dia);
-            return (
-              <div key={i} onClick={() => !c.out && clickDia(c.dia)} style={{ borderRight: (i % 7 === 6) ? 'none' : `1px solid ${t.border}`, borderBottom: i < cells.length - 7 ? `1px solid ${t.border}` : 'none', padding: 6, minHeight: 110, cursor: c.out ? 'default' : 'pointer', background: c.out ? t.elevated : (!c.out && c.dia === selDia ? t.accentSoft : 'transparent'), opacity: c.out ? 0.5 : 1, overflow: 'hidden' }}>
-                <div style={{ textAlign: 'center', marginBottom: 4 }}>
-                  <span style={{ display: 'inline-grid', placeItems: 'center', width: 24, height: 24, borderRadius: '50%', fontSize: 12.5, fontWeight: isToday ? 800 : 600, background: isToday ? t.accent : 'transparent', color: isToday ? '#fff' : t.text }}>{c.dia}</span>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  {evs.slice(0, 3).map((a) => a.allday ? (
-                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 7px', borderRadius: 5, background: uiTone(t, a.cor).fg, color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.titulo}</div>
-                  ) : (
-                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 5px', fontSize: 11, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: uiTone(t, a.cor).fg, flexShrink: 0 }} /><span style={{ fontWeight: 700, color: t.muted }}>{a.hora}</span> {a.titulo}</div>
-                  ))}
-                  {evs.length > 3 && <div style={{ fontSize: 10.5, fontWeight: 700, color: t.muted, padding: '0 5px' }}>+{evs.length - 3} mais</div>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      {/* side panel — detalhes do dia */}
-      {selDia !== null && (
-        <Card t={t} style={{ padding: 0, overflow: 'hidden', width: 320, flexShrink: 0, alignSelf: 'stretch' }}>
-          <div style={{ padding: '18px 20px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ textAlign: 'center', flexShrink: 0 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>{DV_WD[new Date(mesRef.ano, mesRef.mes, selDia).getDay()].replace('.', '')}</div>
-              <div style={{ fontSize: 30, fontWeight: 850, color: t.accentText, lineHeight: 1 }}>{selDia}</div>
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{DV_MESES[mesRef.mes]}</div><div style={{ fontSize: 12, color: t.muted }}>{evDay(selDia).length} {evDay(selDia).length === 1 ? 'evento' : 'eventos'}</div></div>
-            <button onClick={() => { setAdd(selDia); setForm({ hora: '09:00', titulo: '', cor: 'blue', allday: false }); }} title="Adicionar evento" style={{ all: 'unset', cursor: 'pointer', width: 36, height: 36, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.accent, color: '#fff', flexShrink: 0 }}><Icon name="plus" size={18} /></button>
-            <button onClick={() => setSelDia(null)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}><Icon name="x" size={16} /></button>
-          </div>
-          <div className="fr-scroll" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflowY: 'auto' }}>
-            {evDay(selDia).length === 0 && <div style={{ fontSize: 13, color: t.faint, textAlign: 'center', padding: '24px 0' }}>Nenhum evento neste dia.</div>}
-            {evDay(selDia).map((a) => (
-              <div key={a.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '12px 13px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}`, borderLeft: `3px solid ${uiTone(t, a.cor).fg}` }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{a.titulo}</div>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: t.muted, marginTop: 4 }}><Icon name={a.allday ? 'calendar' : 'clock'} size={12} /> {a.allday ? 'Dia todo' : a.hora}</div>
-                </div>
-                <button onClick={() => del(a.id)} title="Excluir" style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={15} /></button>
-              </div>
-            ))}
-            <button onClick={() => { setAdd(selDia); setForm({ hora: '09:00', titulo: '', cor: 'blue', allday: false }); }} style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, height: 40, borderRadius: 10, fontSize: 13, fontWeight: 700, color: t.accentText, border: `1px dashed ${t.borderStrong}` }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="plus" size={15} /> Adicionar evento</button>
-          </div>
-        </Card>
-      )}
-      </div>
-
-      {add !== null && (
-        <div onClick={() => setAdd(null)} style={{ position: 'fixed', inset: 0, zIndex: 66, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(440px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 11 }}>
-              <span style={{ width: 38, height: 38, borderRadius: 10, background: t.accent, color: '#fff', display: 'grid', placeItems: 'center' }}><Icon name="calendar" size={18} /></span>
-              <div style={{ flex: 1, fontSize: 17, fontWeight: 850, color: t.text }}>Novo evento · {add} {DV_MESES[mesRef.mes].slice(0, 3)}</div>
-              <button onClick={() => setAdd(null)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
-            </div>
-            <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div><label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Título</label><input value={form.titulo} onChange={(e) => setForm((s) => ({ ...s, titulo: e.target.value }))} placeholder="Ex: Reunião de planejamento" style={{ boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} /></div>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-                <button onClick={() => setForm((s) => ({ ...s, allday: !s.allday }))} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 13px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: form.allday ? t.accentSoft : t.elevated, color: form.allday ? t.accentText : t.muted, border: `1px solid ${form.allday ? frHexToRgba(t.accent, 0.4) : t.border}` }}><span style={{ width: 18, height: 18, borderRadius: 5, display: 'grid', placeItems: 'center', background: form.allday ? t.accent : 'transparent', color: '#fff', border: `1.5px solid ${form.allday ? 'transparent' : t.borderStrong}` }}>{form.allday && <Icon name="check" size={12} />}</span> Dia todo</button>
-                {!form.allday && <div style={{ flex: 1 }}><label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Hora</label><input type="time" value={form.hora} onChange={(e) => setForm((s) => ({ ...s, hora: e.target.value }))} style={{ boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} /></div>}
-              </div>
-              <div><label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Cor</label>
-                <div style={{ display: 'flex', gap: 8 }}>{cores.map(([k, label]) => { const on = form.cor === k; return <button key={k} onClick={() => setForm((s) => ({ ...s, cor: k }))} title={label} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, background: uiTone(t, k).fg, outline: on ? `2px solid ${t.text}` : 'none', outlineOffset: 2 }} />; })}</div>
-              </div>
-            </div>
-            <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <Btn t={t} kind="ghost" onClick={() => setAdd(null)}>Cancelar</Btn>
-              <Btn t={t} icon="check" onClick={submit}>Criar</Btn>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function DevModule(props) {
   const t = frTokens(props.theme, DV_ACCENT, DV_ACCENT_T);
   // O seed de chamados MORREU com a fila real. Os mocks restantes (Painel/Chat, ambos
   // inalcançáveis pelo cadeado de prefixo) recebem lista vazia até cada um ser ligado.
   const [chamados, setChamados] = useStateDV([]);
-  const [agenda, setAgenda] = useStateDV(DV_AGENDA_SEED);
-  const p = { ...props, t, chamados, setChamados, agenda, setAgenda };
+  const p = { ...props, t, chamados, setChamados };
   if (props.active === 'dev-chamados') return <DevChamados {...p} />;
   if (props.active === 'dev-chat') return <DevChat {...p} />;
   if (props.active === 'dev-projetos') return <DevProjetos {...p} />;
-  if (props.active === 'dev-agenda') return <DevAgenda {...p} />;
   return <DevPainel {...p} />;
 }
 

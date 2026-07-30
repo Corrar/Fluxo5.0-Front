@@ -113,7 +113,12 @@ const NAV_DEV = [
       { id: 'dev-chamados',  name: 'Chamados', icon: 'file' },
       { id: 'dev-chat',      name: 'Chat', icon: 'bell' },
       { id: 'dev-projetos',  name: 'Projetos', icon: 'kanban' },
-      { id: 'dev-agenda',    name: 'Agenda', icon: 'calendar' },
+      // dev-agenda MORREU (decisão C do Bruno, 30/07/2026): zero dado futuro no universo do
+      // Dev — agenda manual competia com o calendário pessoal e nasceria vazia. A faixa
+      // temporal honesta (últimos 7 dias, em andamento) vive no dev-painel. Reabre SE
+      // due_date em tickets nascer e pegar como disciplina (prazo primeiro, agenda depois).
+      // O id NÃO entra em FR_LOCKED_PAGES — rota inexistente cai no fallback do boot
+      // (padrão provado: descarta e vai pra home).
       { id: 'pedidos',       name: 'Meus Pedidos', icon: 'cart' },
       { id: 'meuschamados',  name: 'Meus Chamados', icon: 'clipboard' },
       {
@@ -281,8 +286,9 @@ const FR_LOCKED_PAGES = new Set([
 // nunca na tela mock. As rotas compartilhadas funcionais (clientes, pedidos) NÃO têm prefixo
 // e por isso continuam livres (resolvem nos componentes reais do Estoque).
 // EXCEÇÃO 'dev-': o MÓDULO Dev foi destravado (Permissões mora lá em definitivo), mas o
-// prefixo FICA nesta lista — as abas mock do Dev (painel/chamados/chat/projetos/agenda)
-// seguem no cadeado até cada uma ser ligada de verdade. Destravar o módulo ≠ destravar mock.
+// prefixo FICA nesta lista — as abas mock do Dev que restam (painel, chat) seguem no cadeado
+// até cada uma ser ligada de verdade. Destravar o módulo ≠ destravar mock. (chamados e
+// projetos saíram pelas exceções abaixo; a agenda MORREU — ver a lápide no NAV_DEV.)
 const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
 
 // EXCEÇÕES PONTUAIS ao cadeado de prefixo: rotas dev-* que ganharam tela REAL e saem do
