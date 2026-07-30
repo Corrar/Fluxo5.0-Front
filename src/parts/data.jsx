@@ -64,14 +64,12 @@ const NAV = [
       { id: 'criticos',      name: 'Críticos',          icon: 'alert' },
       { id: 'relatorios',    name: 'Relatórios',        icon: 'barChart' },
       { id: 'clientes',      name: 'Clientes e OPs',    icon: 'users' },
-      // Auditoria e Usuários seguem aqui PROVISÓRIOS (casa definitiva: NAV_DEV; movem
-      // quando o Bruno decidir). 'permissoes' JÁ SAIU: administração de permissões é
-      // controle exclusivo do módulo Dev, por decisão do Bruno (29/07/2026) — a tela vive
-      // em DEFINITIVO no NAV_DEV (Configurações), não aqui. Acesso fino continua nas
-      // próprias telas (canAccess('logs')/canAccess('usuarios')/canAccess('permissoes')
-      // + 403 do backend), como nas vizinhas.
-      { id: 'auditoria',     name: 'Auditoria',         icon: 'clipboard' },
-      { id: 'usuarios',      name: 'Usuários',          icon: 'user' },
+      // AUDITORIA, PERMISSÕES E USUÁRIOS SAÍRAM DAQUI — fim do provisório. Administração do
+      // sistema é território do módulo Dev (decisão do Bruno, 31/07/2026); as três moram no
+      // NAV_DEV › Configurações. 'permissoes' foi na frente (29/07); 'auditoria' e 'usuarios'
+      // fecham o movimento. As telas NÃO mudaram de lugar no código — são rotas sem prefixo
+      // que o renderPage resolve pelo id, então quem chegar por link velho ou por
+      // fr_active_page antigo continua abrindo normal. O que mudou foi só o MENU.
     ],
   },
 ];
@@ -123,10 +121,13 @@ const NAV_DEV = [
       { id: 'meuschamados',  name: 'Meus Chamados', icon: 'clipboard' },
       {
         id: 'configuracoes', name: 'Configurações', icon: 'gear',
-        // 'permissoes' mora AQUI em DEFINITIVO (decisão do Bruno, 29/07/2026: administração
-        // de permissões é controle exclusivo do Dev — saiu da Gestão Admin do Estoque).
-        // As demais são rotas compartilhadas sem prefixo: resolvem no MESMO componente real
-        // independente do módulo (renderPage), e auditoria/usuarios seguem TAMBÉM no Estoque.
+        // Casa definitiva (decisão do Bruno, 31/07/2026): administração do sistema —
+        // Auditoria, Permissões, Usuários — é território do módulo Dev. Acesso fino continua
+        // nas próprias telas (canAccess + 403 do backend); o NAV é navegação, não segurança.
+        // 'permissoes' chegou primeiro (29/07); 'auditoria' e 'usuarios' vieram em 31/07 e
+        // NÃO estão mais na Gestão Admin do Estoque — o movimento acabou, não há provisório.
+        // Os quatro são rotas SEM PREFIXO: o renderPage resolve pelo id e devolve o MESMO
+        // componente real, venha o clique de qual módulo vier.
         children: [
           { id: 'permissoes', name: 'Permissões' },
           { id: 'auditoria',  name: 'Auditoria' },
