@@ -1736,6 +1736,9 @@ const PERM_GRUPOS = [
   { grupo: 'Produção 3D', prefixos: ['producao_3d', 'solicitar_3d', 'producao'] },
   { grupo: 'Painéis e Relatórios', prefixos: ['dashboard', 'office_dashboard', 'relatorios'] },
   { grupo: 'Tarefas e Utilidades', prefixos: ['tarefas_eletrica', 'avisos', 'calculadora'] },
+  // As três chaves do módulo Dev caíam em "Outras" — com rótulo agora em PERM_BASES, ganham
+  // grupo próprio pra tela não parecer inacabada (apresentação, nunca semântica).
+  { grupo: 'Desenvolvimento', prefixos: ['dev_dashboard', 'chamados', 'projetos'] },
   { grupo: 'Gestão Admin', prefixos: ['usuarios', 'permissoes', 'logs', 'clientes'] },
 ];
 function permGrupoDe(key) {
@@ -1755,6 +1758,9 @@ const PERM_BASES = {
   relatorios: 'Relatórios', producao_3d: 'Produção 3D', solicitar_3d: 'Encomendar 3D',
   producao: 'Produção', tarefas_eletrica: 'Quadro Elétrica', avisos: 'Avisos',
   calculadora: 'Calculadora', usuarios: 'Usuários', permissoes: 'Permissões', logs: 'Auditoria',
+  // Chaves do módulo Dev (helpdesk 012, dev-projetos 013, dev-painel 015). Estavam aparecendo
+  // como CHAVE CRUA em "Outras" desde que nasceram — dívida paga aqui.
+  chamados: 'Chamados (atender)', projetos: 'Projetos do Dev', dev_dashboard: 'Painel do Dev',
 };
 const PERM_ACOES = { view: 'ver', add: 'adicionar', edit: 'editar', delete: 'excluir', apontar: 'apontar' };
 function permLabelDe(key) {

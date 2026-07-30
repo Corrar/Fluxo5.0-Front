@@ -286,16 +286,20 @@ const FR_LOCKED_PAGES = new Set([
 // nunca na tela mock. As rotas compartilhadas funcionais (clientes, pedidos) NÃO têm prefixo
 // e por isso continuam livres (resolvem nos componentes reais do Estoque).
 // EXCEÇÃO 'dev-': o MÓDULO Dev foi destravado (Permissões mora lá em definitivo), mas o
-// prefixo FICA nesta lista — as abas mock do Dev que restam (painel, chat) seguem no cadeado
-// até cada uma ser ligada de verdade. Destravar o módulo ≠ destravar mock. (chamados e
-// projetos saíram pelas exceções abaixo; a agenda MORREU — ver a lápide no NAV_DEV.)
+// prefixo FICA nesta lista — sobrou UMA aba mock do Dev, o chat, e ela segue no cadeado até o
+// tempo real nascer. Destravar o módulo ≠ destravar mock. (chamados, projetos e painel saíram
+// pelas exceções abaixo; a agenda MORREU — ver a lápide no NAV_DEV.)
 const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
 
 // EXCEÇÕES PONTUAIS ao cadeado de prefixo: rotas dev-* que ganharam tela REAL e saem do
 // bloqueio uma a uma (o prefixo continua valendo pras irmãs mock). Hoje só a fila do
 // helpdesk: 'dev-chamados' virou tela real (gate por canAccess('chamados') na própria tela).
 // dev-projetos: tela real desde a migration 013 (gate por canAccess('projetos') na própria tela).
-const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos']);
+// dev-painel: tela real desde a migration 015 (gate por canAccess('dev_dashboard')). PRECISA da
+// exceção mesmo sendo a rota DEFAULT do módulo: o renderPage (pages_admin.jsx) consulta o
+// frIsLocked ANTES de despachar pro renderPageDev, então sem a exceção o padrão do módulo
+// cairia no <EmDesenvolvimento> e o DevPainel real nunca montaria.
+const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos', 'dev-painel']);
 function frIsLocked(id) {
   if (!id) return false;
   if (FR_LOCKED_PREFIX_EXCECOES.has(id)) return false;

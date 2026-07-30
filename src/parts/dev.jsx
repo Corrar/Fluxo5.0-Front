@@ -1,48 +1,263 @@
-// dev.jsx — módulo Desenvolvedor: Chamados (fila REAL do helpdesk) e Projetos (grade REAL,
-// migration 013) + mocks cadeados (Painel, Chat). A Agenda MORREU na decisão C do Bruno
-// (30/07/2026) — a lápide com o motivo e o critério de reabertura mora no NAV_DEV (data.jsx).
+// dev.jsx — módulo Desenvolvedor: Painel (agregado REAL, migration 015), Chamados (fila REAL
+// do helpdesk) e Projetos (grade REAL, migration 013). Sobra UM mock cadeado: o Chat (tempo
+// real é v2). A Agenda MORREU na decisão C do Bruno (30/07/2026) — a lápide com o motivo e o
+// critério de reabertura mora no NAV_DEV (data.jsx).
 const { useState: useStateDV } = React;
 const DV_ACCENT = '#0891b2', DV_ACCENT_T = '#22d3ee';
 
-// ---------- Painel ----------
-function DevPainel({ t, chamados }) {
-  const abertos = chamados.filter((c) => c.status !== 'concluido').length;
-  const emDev = chamados.filter((c) => c.status === 'desenvolvimento').length;
-  const resolv = chamados.filter((c) => c.status === 'concluido').length;
-  const meses = [{ label: 'Seg', v: 4 }, { label: 'Ter', v: 7, accent: true }, { label: 'Qua', v: 5 }, { label: 'Qui', v: 9, accent: true }, { label: 'Sex', v: 6 }];
-  const fila = chamados.filter((c) => c.status === 'desenvolvimento' || c.status === 'analise');
+// ---------- Painel (tela REAL — GET /dev-dashboard) ----------
+// LIGAÇÃO REAL: GET /dev-dashboard (chamada ÚNICA; o painel não faz 5 GETs), router inteiro
+// atrás de requirePermission('dev_dashboard') — chave PRÓPRIA porque o painel cruza chamados
+// E projetos (migration 015). Gate canAccess na própria tela: sem a chave nem monta.
+//
+// O MOCK MORREU INTEIRO — era ~90% teatro e a régua do Bruno é "nenhum número sem SQL
+// demonstrável": "Resolvidos no mês = 31" (string chumbada), "Tempo médio = 1,8 d"
+// (chumbado), BarChart com Seg–Sex fixos [4,7,5,9,6], badge "+15% vs. anterior" (comparação
+// inventada), e o "Trabalhando agora" com `c.prog`% — progresso de CHAMADO nunca existiu no
+// banco. O que tinha fonte renasceu com a query que o sustenta; o resto não voltou.
+//
+// N=0 mostra "—" + a frase honesta, NUNCA placeholder: painel de time novo é vazio mesmo, e
+// inventar número aqui seria a mentira que matou a agenda.
+
+const DP_DIAS_CURTOS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+// 'YYYY-MM-DD' → 'Qui'. Ancorado ao MEIO-DIA UTC: o backend já fechou o dia em
+// America/Sao_Paulo, então aqui só falta o nome — e meio-dia imuniza contra o fuso do
+// navegador virar o dia pra trás/frente.
+function dpDiaLabel(iso) {
+  const p = String(iso || '').split('-');
+  if (p.length !== 3) return '';
+  const d = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]), 12));
+  return DP_DIAS_CURTOS[d.getUTCDay()] || '';
+}
+// Média de resolução: horas até 48h, dias acima disso (1,8 d lia melhor que 43,2 h).
+function dpDuracao(horas) {
+  const h = Number(horas);
+  if (!Number.isFinite(h)) return '—';
+  if (h < 1) return `${Math.round(h * 60)} min`;
+  if (h < 48) return `${h.toFixed(1).replace('.', ',')} h`;
+  return `${(h / 24).toFixed(1).replace('.', ',')} d`;
+}
+function dpHora(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+// Barras dos 7 dias com DUAS séries. Por que não o BarChart da casa: ele desenha UMA série
+// (um `accent` por item) e duas séries comparáveis exigem ESCALA COMPARTILHADA — dois
+// BarCharts lado a lado teriam max independentes e um dia com 1 concluído pareceria do mesmo
+// tamanho de um dia com 4 abertos. Mesmo vocabulário visual do BarChart (altura relativa,
+// minHeight 4, transição, label do dia embaixo), escala única. Série toda-zero é caso normal:
+// max cai pra 1 e as barras ficam na linha de base — sem divisão por zero, sem gráfico falso.
+function DpBarras7({ t, dias }) {
+  const max = Math.max(1, ...dias.map((d) => Math.max(d.abertos, d.concluidos)));
   return (
     <div>
-      <PageHeader t={t} title="Painel do Desenvolvedor" subtitle="Visão geral dos chamados e do trabalho em andamento." />
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} icon="file" label="Chamados abertos" value={abertos} kind="amber" />
-        <KPI t={t} icon="terminal" label="Em desenvolvimento" value={emDev} kind="accent" />
-        <KPI t={t} icon="check" label="Resolvidos no mês" value="31" kind="green" />
-        <KPI t={t} icon="clock" label="Tempo médio" value="1,8 d" sub="até resolver" kind="blue" />
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 170, padding: '0 2px' }}>
+        {dias.map((d) => (
+          <div key={d.dia} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, width: '100%', height: '100%', justifyContent: 'center' }}>
+              <div title={`${d.abertos} aberto(s)`} style={{ width: '38%', maxWidth: 18, height: `${(d.abertos / max) * 100}%`, minHeight: 4, borderRadius: '5px 5px 2px 2px', background: t.hover, transition: 'height .4s cubic-bezier(.2,.8,.2,1)' }} />
+              <div title={`${d.concluidos} concluído(s)`} style={{ width: '38%', maxWidth: 18, height: `${(d.concluidos / max) * 100}%`, minHeight: 4, borderRadius: '5px 5px 2px 2px', background: `linear-gradient(180deg, ${t.accent}, ${frHexToRgba(t.accent, 0.55)})`, transition: 'height .4s cubic-bezier(.2,.8,.2,1)' }} />
+            </div>
+            <div style={{ fontSize: 10.5, color: t.faint, fontWeight: 700 }}>{dpDiaLabel(d.dia)}</div>
+          </div>
+        ))}
       </div>
-      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'stretch' }}>
-        <Card t={t} style={{ padding: 22, flex: 2, minWidth: 320 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Chamados resolvidos (semana)</div>
-            <Badge t={t} kind="green" dot>+15% vs. anterior</Badge>
-          </div>
-          <BarChart t={t} data={meses} />
-        </Card>
-        <Card t={t} style={{ padding: 22, flex: 1, minWidth: 260 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 16 }}>Trabalhando agora</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {fila.length === 0 && <div style={{ fontSize: 13, color: t.muted }}>Nada em andamento.</div>}
-            {fila.map((c) => (
-              <div key={c.id}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}><span style={{ fontSize: 12.5, fontWeight: 600, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.titulo}</span><span style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>{c.prog}%</span></div>
-                <div style={{ height: 6, borderRadius: 5, background: t.hover, overflow: 'hidden' }}><div style={{ height: '100%', width: `${c.prog}%`, borderRadius: 5, background: t.accent }} /></div>
-              </div>
-            ))}
-          </div>
-        </Card>
+      <div style={{ display: 'flex', gap: 16, marginTop: 14, fontSize: 11.5, color: t.muted }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: t.hover }} /> Abertos</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: t.accent }} /> Concluídos</span>
       </div>
     </div>
   );
+}
+
+function DevPainelReal({ t }) {
+  const R = window.React;
+  const [d, setD] = useStateDV(null);
+  const [loading, setLoading] = useStateDV(true);
+  const [error, setError] = useStateDV(null);
+  const [atualizando, setAtualizando] = useStateDV(false);
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true); else setAtualizando(true);
+    setError(null);
+    return window.FRApi.get('/dev-dashboard', { skipLoading: true })
+      .then(function (r) { setD(r.data || null); })
+      .catch(function (e) { setError(pjErr(e)); })
+      .then(function () { if (inicial) setLoading(false); else setAtualizando(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  const cabecalho = (
+    <PageHeader t={t} title="Painel do Desenvolvedor"
+      subtitle="Fila, resolução e projetos — cada número sai de uma query, nada é estimado."
+      actions={<Btn t={t} icon="refresh" kind="ghost" onClick={function () { if (!atualizando) carregar(false); }}>{atualizando ? 'Atualizando…' : 'Atualizar'}</Btn>} />
+  );
+
+  if (loading) {
+    return <div>{cabecalho}<Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando o painel…</Card></div>;
+  }
+  if (error || !d) {
+    return (
+      <div>{cabecalho}
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error || 'Não foi possível montar o painel.'}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={function () { carregar(true); }}>Tentar novamente</Btn>
+        </Card>
+      </div>
+    );
+  }
+
+  const fila = d.fila || {};
+  const prio = d.prioridade_fila || {};
+  const res = d.resolucao_30d || {};
+  const dias = Array.isArray(d.sete_dias) ? d.sete_dias : [];
+  const proj = d.projetos || {};
+  const recentes = Array.isArray(proj.recentes) ? proj.recentes : [];
+  const prioTotal = (prio.alta || 0) + (prio.media || 0) + (prio.baixa || 0);
+  // null = fila vazia (não existe "mais antigo"); 0 = existe e entrou hoje. Coisas diferentes.
+  const antigo = fila.mais_antigo_dias === null || fila.mais_antigo_dias === undefined
+    ? '—' : (fila.mais_antigo_dias === 0 ? 'hoje' : `${fila.mais_antigo_dias} d`);
+
+  return (
+    <div>
+      {cabecalho}
+
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
+        <KPI t={t} icon="file" label="Na fila" value={fila.fila_total || 0} kind="accent"
+          sub={`${fila.abertos || 0} aberto(s) · ${fila.em_analise || 0} em análise · ${fila.em_desenvolvimento || 0} em dev`} />
+        <KPI t={t} icon="bell" label="Sem atendente" value={fila.sem_atendente || 0} kind={fila.sem_atendente > 0 ? 'red' : 'green'}
+          sub={fila.sem_atendente > 0 ? 'ninguém pegou ainda' : 'todos com atendente'} />
+        <KPI t={t} icon="clock" label="Mais antigo na fila" value={antigo} kind={fila.mais_antigo_dias >= 3 ? 'amber' : 'blue'}
+          sub={fila.fila_total ? 'chamado vivo há mais tempo' : 'fila vazia'} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 20 }}>
+        <Card t={t} style={{ padding: 22, flex: 2, minWidth: 340 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 4 }}>Últimos 7 dias</div>
+          <div style={{ fontSize: 12, color: t.muted, marginBottom: 18 }}>Chamados abertos e concluídos por dia (fuso de São Paulo).</div>
+          <DpBarras7 t={t} dias={dias} />
+        </Card>
+
+        <Card t={t} style={{ padding: 22, flex: 1, minWidth: 260, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 4 }}>Resolução (30 dias)</div>
+          <div style={{ fontSize: 12, color: t.muted, marginBottom: 18 }}>Só chamados concluídos — cancelado não é resolução.</div>
+          {res.n === 0 ? (
+            <div style={{ flex: 1, display: 'grid', placeItems: 'center', textAlign: 'center' }}>
+              <div>
+                <div style={{ fontSize: 40, fontWeight: 850, color: t.faint, lineHeight: 1 }}>—</div>
+                <div style={{ fontSize: 12.5, color: t.muted, marginTop: 10 }}>sem chamado concluído nos últimos 30 dias</div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase' }}>Resolvidos em 30d</div>
+                <div style={{ fontSize: 28, fontWeight: 850, color: t.text, letterSpacing: '-.02em' }}>{res.n}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase' }}>Tempo médio</div>
+                <div style={{ fontSize: 28, fontWeight: 850, color: t.accentText, letterSpacing: '-.02em' }}>{res.media_horas === null || res.media_horas === undefined ? '—' : dpDuracao(res.media_horas)}</div>
+                <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>da abertura até concluir</div>
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        <Card t={t} style={{ padding: 22, flex: 1, minWidth: 260 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 18 }}>Prioridade na fila</div>
+          {prioTotal === 0 ? (
+            <div style={{ fontSize: 13, color: t.muted }}>Fila vazia — nada para priorizar.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {[['alta', 'Alta', 'red'], ['media', 'Média', 'amber'], ['baixa', 'Baixa', 'blue']].map(function ([k, label, kind]) {
+                const n = prio[k] || 0;
+                return (
+                  <div key={k}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{label}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: t.muted }}>{n}</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 5, background: t.hover, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${prioTotal ? (n / prioTotal) * 100 : 0}%`, borderRadius: 5, background: uiTone(t, kind).fg, transition: 'width .4s cubic-bezier(.2,.8,.2,1)' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card t={t} style={{ padding: 22, flex: 2, minWidth: 340 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Projetos</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Badge t={t} kind="accent">{proj.ativos || 0} ativo(s)</Badge>
+              <Badge t={t} kind="gray">{proj.arquivados || 0} arquivado(s)</Badge>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: t.muted, marginBottom: 18 }}>Mexidos mais recentemente — progresso derivado dos checklists.</div>
+          {recentes.length === 0 ? (
+            <div style={{ fontSize: 13, color: t.muted }}>Nenhum projeto ativo. A tela Projetos cria o primeiro.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {recentes.map(function (p) {
+                const total = Number(p.itens_total) || 0;
+                const done = Number(p.itens_done) || 0;
+                const pct = total ? Math.round((done / total) * 100) : 0;
+                const hex = PJ_COR_HEX[p.color] || PJ_COR_HEX.blue;
+                const pr = PJ_PRIO[p.priority] || [p.priority, 'gray'];
+                return (
+                  <div key={p.id}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span style={{ width: 4, height: 16, borderRadius: 2, background: hex, flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+                      <Badge t={t} kind={pr[1]}>{pr[0]}</Badge>
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: t.muted, minWidth: 62, textAlign: 'right' }}>
+                        {total ? `${done}/${total} · ${pct}%` : 'sem checklist'}
+                      </span>
+                    </div>
+                    {total > 0 && (
+                      <div style={{ height: 6, borderRadius: 5, background: t.hover, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, borderRadius: 5, background: t.accent, transition: 'width .4s cubic-bezier(.2,.8,.2,1)' }} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div style={{ marginTop: 18, fontSize: 11.5, color: t.faint, textAlign: 'right' }}>
+        Gerado em {dpHora(d.gerado_em)} · leitura direta do banco
+      </div>
+    </div>
+  );
+}
+
+// Gate padrão da casa: sem a page_key 'dev_dashboard' a tela interna NEM MONTA (zero rede).
+// Admin passa pelo bypass; a chave existe no universo (migration 015) e é concedível pela
+// tela Permissões.
+function DevPainel({ t }) {
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('dev_dashboard')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Painel do Desenvolvedor" subtitle="Visão geral da fila, da resolução e dos projetos." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (dev_dashboard) para ver o painel.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return <DevPainelReal t={t} />;
 }
 
 // ---------- Chamados (fila REAL do atendente — helpdesk v1) ----------
@@ -686,8 +901,9 @@ function DevProjetos({ t }) {
 
 function DevModule(props) {
   const t = frTokens(props.theme, DV_ACCENT, DV_ACCENT_T);
-  // O seed de chamados MORREU com a fila real. Os mocks restantes (Painel/Chat, ambos
-  // inalcançáveis pelo cadeado de prefixo) recebem lista vazia até cada um ser ligado.
+  // O seed de chamados MORREU com a fila real. Sobrou o dev-chat (mock, inalcançável pelo
+  // cadeado de prefixo), que recebe lista vazia até o tempo real nascer. O Painel NÃO usa
+  // mais este estado — ele lê GET /dev-dashboard direto do banco.
   const [chamados, setChamados] = useStateDV([]);
   const p = { ...props, t, chamados, setChamados };
   if (props.active === 'dev-chamados') return <DevChamados {...p} />;
