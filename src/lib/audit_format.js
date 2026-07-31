@@ -183,6 +183,30 @@ export const AUDIT_ACTIONS = {
     alvo: (d) => `Projeto · ${ou(d.name)}`,
     frase: () => 'Projeto e checklists apagados definitivamente' },
 
+  // ── Dev-repos (migration 018 — espelho do GitHub) ──
+  // details: {repo, repo_id} no CRIAR/EXCLUIR; + `alterados` (NOMES dos campos) no EDITAR;
+  // {repo, novos, total} no SINCRONIZAR — `novos` é o que ENTROU nesta sync, `total` é o
+  // tamanho do espelho depois dela. Os dois juntos contam a história: "0 de 60" é sync que
+  // não achou nada novo, e não sync que falhou.
+  CRIAR_REPO: { verbo: 'Cadastrou', kind: 'green', icon: 'terminal',
+    alvo: (d) => `Repositório · ${ou(d.repo)}`,
+    frase: () => 'Repositório entrou no espelho de commits' },
+  EDITAR_REPO: { verbo: 'Editou', kind: 'blue', icon: 'pencil',
+    alvo: (d) => `Repositório · ${ou(d.repo)}`,
+    frase: (d) => `Campos alterados: ${Array.isArray(d.alterados) ? d.alterados.join(', ') : '—'}` },
+  EXCLUIR_REPO: { verbo: 'Excluiu', kind: 'red', icon: 'trash',
+    alvo: (d) => `Repositório · ${ou(d.repo)}`,
+    frase: () => 'Repositório saiu do cadastro (só é possível sem histórico espelhado)' },
+  SINCRONIZAR_REPO: { verbo: 'Sincronizou', kind: 'accent', icon: 'refresh',
+    alvo: (d) => `Repositório · ${ou(d.repo)}`,
+    frase: (d) => {
+      const n = Number(d.novos);
+      const tot = ou(d.total);
+      if (!Number.isFinite(n)) return `Espelho sincronizado (total ${tot})`;
+      if (n === 0) return `Nenhum commit novo — espelho segue com ${tot}`;
+      return `${n} commit${n === 1 ? '' : 's'} novo${n === 1 ? '' : 's'} no espelho (total ${tot})`;
+    } },
+
   // ── Montagem de Máquinas (migration 016 — caminho B) ──
   // details: {id, display_no, name, op_code} no CRIAR; {id, display_no, alterados} no EDITAR
   // (NOMES dos campos, nunca valores); {id, display_no, reason, sector} no PARAR.

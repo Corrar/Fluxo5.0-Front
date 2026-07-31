@@ -132,6 +132,9 @@ const NAV_DEV = [
       { id: 'dev-chamados',  name: 'Chamados', icon: 'file' },
       { id: 'dev-chat',      name: 'Chat', icon: 'bell' },
       { id: 'dev-projetos',  name: 'Projetos', icon: 'kanban' },
+      // dev-repos v1 (migration 018): espelho dos commits do GitHub + relatório por período.
+      // Gate na própria tela por canAccess('dev_repos'), padrão das irmãs.
+      { id: 'dev-repos',     name: 'Repositórios', icon: 'terminal' },
       // dev-agenda MORREU (decisão C do Bruno, 30/07/2026): zero dado futuro no universo do
       // Dev — agenda manual competia com o calendário pessoal e nasceria vazia. A faixa
       // temporal honesta (últimos 7 dias, em andamento) vive no dev-painel. Reabre SE
@@ -324,7 +327,8 @@ const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
 // exceção mesmo sendo a rota DEFAULT do módulo: o renderPage (pages_admin.jsx) consulta o
 // frIsLocked ANTES de despachar pro renderPageDev, então sem a exceção o padrão do módulo
 // cairia no <EmDesenvolvimento> e o DevPainel real nunca montaria.
-const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos', 'dev-painel']);
+// dev-repos: tela real desde a migration 018 (gate por canAccess('dev_repos') na própria tela).
+const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos', 'dev-painel', 'dev-repos']);
 function frIsLocked(id) {
   if (!id) return false;
   if (FR_LOCKED_PREFIX_EXCECOES.has(id)) return false;

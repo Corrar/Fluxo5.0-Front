@@ -910,6 +910,591 @@ function DevProjetos({ t }) {
   return <DevProjetosReal t={t} />;
 }
 
+// ---------- Repositórios + Relatório de código (REAL — dev-repos v1, migration 018) ----------
+// LIGAÇÃO REAL: /dev-repos (router inteiro atrás de requirePermission('dev_repos')).
+//
+// O CONTRATO QUE A TELA PRECISA HONRAR: o backend serve um ESPELHO local dos commits, não o
+// GitHub ao vivo. Por isso o carimbo "sincronizado em X" fica SEMPRE visível — sem ele o
+// usuário leria dado de ontem achando que é de agora, que é o único jeito de este relatório
+// mentir. A tela nunca esconde a idade do dado.
+const DR_PAGE = 25;
+
+// Presets = AÇÚCAR: viram from/to antes de sair da tela. O backend só conhece intervalo.
+const DR_PRESETS = [['7', '7 dias'], ['30', '30 dias'], ['60', '60 dias']];
+
+function drYmd(d) { return d.toISOString().slice(0, 10); }
+function drHojeYmd() { return drYmd(new Date()); }
+function drDesdeYmd(dias) { const d = new Date(); d.setDate(d.getDate() - Number(dias)); return drYmd(d); }
+
+// Data+hora do commit em PT-BR. O relatório é sobre trabalho — o dia importa e a hora ajuda a
+// entender a sequência do que foi feito.
+function drDataHora(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+// "há 3 minutos" — o carimbo do espelho é sobre RECÊNCIA; a data absoluta vai no title.
+function drRelativo(iso) {
+  if (!iso) return 'nunca';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return 'agora mesmo';
+  if (s < 3600) { const m = Math.floor(s / 60); return `há ${m} ${m === 1 ? 'minuto' : 'minutos'}`; }
+  if (s < 86400) { const h = Math.floor(s / 3600); return `há ${h} ${h === 1 ? 'hora' : 'horas'}`; }
+  const dd = Math.floor(s / 86400);
+  if (dd < 30) return `há ${dd} ${dd === 1 ? 'dia' : 'dias'}`;
+  return drDataHora(iso);
+}
+// O interceptor do FRApi NORMALIZA o erro para { status, message, raw } — não existe
+// `e.response` do lado de cá. Ler `e.response.data.error` (reflexo de axios cru) faz TODA
+// mensagem do backend virar o fallback genérico: foi assim que o 409 do DELETE, que já vem
+// com a saída escrita ("desative-o"), aparecia como "não foi possível falar com o servidor"
+// — o pior tipo de erro, o que troca uma instrução por um beco. Mesmo helper das telas
+// irmãs (tkFilaErr/pjErr).
+function drErro(e) {
+  const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+  return g ? g(e) : (e && e.message) || 'Erro inesperado.';
+}
+// Status normalizado — é `e.status`, não `e.response.status`.
+function drStatus(e) { return e && e.status; }
+
+// Badge de status do repo. Três estados, três FRASES — 'nunca' não é erro, e tratar os dois
+// igual (um "!" vermelho pra ambos) faria o usuário procurar defeito onde só falta apertar.
+function DrStatusRepo({ t, repo }) {
+  const st = repo.last_sync_status;
+  if (st === 'erro') {
+    return (
+      <span title={repo.last_sync_error || 'Falha na última sincronização'}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'help', fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg }}>
+        <Icon name="alert" size={12} /> Falhou
+      </span>
+    );
+  }
+  if (st === 'ok') {
+    return (
+      <span title={drDataHora(repo.last_synced_at)}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: uiTone(t, 'green').bg, color: uiTone(t, 'green').fg }}>
+        <Icon name="check" size={12} /> {drRelativo(repo.last_synced_at)}
+      </span>
+    );
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, padding: '3px 9px', borderRadius: 999, background: t.elevated, color: t.muted, border: `1px solid ${t.border}` }}>
+      <Icon name="clock" size={12} /> Sincronize primeiro
+    </span>
+  );
+}
+
+function DevReposReal({ t }) {
+  const R = React;
+  const [aba, setAba] = useStateDV('relatorio');
+
+  // ── Repositórios ──
+  const [repos, setRepos] = useStateDV([]);
+  const [loadingRepos, setLoadingRepos] = useStateDV(true);
+  const [erroRepos, setErroRepos] = useStateDV(null);
+  const [novo, setNovo] = useStateDV(null);
+  const [confirmando, setConfirmando] = useStateDV(null);
+  const [agindo, setAgindo] = useStateDV(false);
+  // Progresso da sincronização: qual repo está rodando AGORA e o que já terminou. As syncs são
+  // sequenciais no backend e podem demorar — sem isso a tela pareceria congelada e o usuário
+  // apertaria o botão de novo, dobrando a chamada numa API com rate limit.
+  const [sincronizando, setSincronizando] = useStateDV(null);   // id do repo em andamento
+  const [progresso, setProgresso] = useStateDV(null);           // {feitos, total, resultados[]}
+  const [feedback, setFeedback] = useStateDV(null);
+
+  const carregarRepos = R.useCallback(function (inicial) {
+    if (inicial) setLoadingRepos(true);
+    return window.FRApi.get('/dev-repos', { skipLoading: true })
+      .then(function (r) { setRepos((r.data && r.data.repos) || []); setErroRepos(null); if (inicial) setLoadingRepos(false); })
+      .catch(function (e) { setErroRepos(drErro(e)); if (inicial) setLoadingRepos(false); });
+  }, []);
+  R.useEffect(function () { carregarRepos(true); }, [carregarRepos]);
+
+  // ── Relatório ──
+  const [preset, setPreset] = useStateDV('7');
+  const [de, setDe] = useStateDV(drDesdeYmd(7));
+  const [ate, setAte] = useStateDV(drHojeYmd());
+  const [repoFiltro, setRepoFiltro] = useStateDV('');
+  const [offset, setOffset] = useStateDV(0);
+  const [rel, setRel] = useStateDV(null);
+  const [loadingRel, setLoadingRel] = useStateDV(true);
+  const [erroRel, setErroRel] = useStateDV(null);
+  const [erroPeriodo, setErroPeriodo] = useStateDV(null);
+
+  const aplicarPreset = function (p) {
+    setPreset(p);
+    setErroPeriodo(null);
+    setOffset(0);
+    if (p !== 'custom') { setDe(drDesdeYmd(p)); setAte(drHojeYmd()); }
+  };
+
+  const carregarRel = R.useCallback(function () {
+    // Validação NA BORDA da tela, espelhando a do backend: from > to é 400 lá, e mandar pra
+    // tomar 400 seria pedir ao servidor que corrija o que a tela já sabe.
+    if (de && ate && de > ate) {
+      setErroPeriodo('A data inicial é posterior à final.');
+      setLoadingRel(false);
+      return Promise.resolve();
+    }
+    setErroPeriodo(null);
+    setLoadingRel(true);
+    const p = new URLSearchParams();
+    if (de) p.set('from', de);
+    if (ate) p.set('to', ate);
+    if (repoFiltro) p.set('repo_id', repoFiltro);
+    p.set('limit', String(DR_PAGE));
+    p.set('offset', String(offset));
+    return window.FRApi.get(`/dev-repos/report?${p.toString()}`, { skipLoading: true })
+      .then(function (r) { setRel(r.data); setErroRel(null); setLoadingRel(false); })
+      .catch(function (e) { setErroRel(drErro(e)); setLoadingRel(false); });
+  }, [de, ate, repoFiltro, offset]);
+  R.useEffect(function () { carregarRel(); }, [carregarRel]);
+
+  // ── Ações ──
+  const sincronizarUm = function (repo) {
+    if (sincronizando) return;
+    setSincronizando(repo.id); setFeedback(null);
+    window.FRApi.post(`/dev-repos/${repo.id}/sync`, {})
+      .then(function (r) {
+        const n = (r.data && r.data.novos) || 0;
+        setFeedback({ tom: 'green', txt: `${repo.owner}/${repo.name}: ${n} commit(s) novo(s) — total ${r.data && r.data.total}.` });
+      })
+      .catch(function (e) { setFeedback({ tom: 'red', txt: `${repo.owner}/${repo.name}: ${drErro(e)}` }); })
+      // O finally recarrega SEMPRE: no erro, o que mudou é o carimbo (status/erro), e o
+      // usuário precisa vê-lo tanto quanto veria o sucesso.
+      .finally(function () { setSincronizando(null); carregarRepos(false); carregarRel(); });
+  };
+
+  const sincronizarTodos = function () {
+    if (sincronizando || progresso) return;
+    const ativos = repos.filter(function (r) { return r.active; });
+    if (ativos.length === 0) return;
+    setFeedback(null);
+    setProgresso({ feitos: 0, total: ativos.length, resultados: [] });
+    // Sequencial NO FRONT também, um POST /:id/sync por repo, em vez do /sync-all: o sync-all
+    // resolve tudo numa requisição só e a tela ficaria muda até o fim. Aqui cada repo que
+    // termina aparece na hora — mesmo custo no servidor, e o usuário vê o trabalho andando.
+    let i = 0;
+    const proximo = function () {
+      if (i >= ativos.length) {
+        setProgresso(null);
+        setSincronizando(null);
+        carregarRepos(false);
+        carregarRel();
+        return;
+      }
+      const repo = ativos[i];
+      setSincronizando(repo.id);
+      window.FRApi.post(`/dev-repos/${repo.id}/sync`, {})
+        .then(function (r) {
+          setProgresso(function (p) { return { feitos: i + 1, total: ativos.length, resultados: (p ? p.resultados : []).concat([{ repo: `${repo.owner}/${repo.name}`, ok: true, novos: (r.data && r.data.novos) || 0 }]) }; });
+        })
+        .catch(function (e) {
+          // A falha de um NÃO interrompe a fila — mesmo contrato do /sync-all no backend.
+          setProgresso(function (p) { return { feitos: i + 1, total: ativos.length, resultados: (p ? p.resultados : []).concat([{ repo: `${repo.owner}/${repo.name}`, ok: false, erro: drErro(e) }]) }; });
+        })
+        .finally(function () { i += 1; carregarRepos(false); proximo(); });
+    };
+    proximo();
+  };
+
+  const criar = function () {
+    const n = novo || {};
+    const owner = String(n.owner || '').trim();
+    const name = String(n.name || '').trim();
+    const RE = /^[A-Za-z0-9_.-]+$/;
+    if (!owner) return setNovo({ ...n, erro: 'Informe o owner (usuário ou organização).' });
+    if (!name) return setNovo({ ...n, erro: 'Informe o nome do repositório.' });
+    if (owner.length > 100 || name.length > 100) return setNovo({ ...n, erro: 'Owner e nome devem ter no máximo 100 caracteres.' });
+    if (!RE.test(owner) || !RE.test(name)) return setNovo({ ...n, erro: 'Use apenas letras, números, ponto, hífen e underscore.' });
+    setAgindo(true);
+    window.FRApi.post('/dev-repos', { owner, name })
+      .then(function () { setNovo(null); setAgindo(false); carregarRepos(false); setFeedback({ tom: 'green', txt: `${owner}/${name} cadastrado. Sincronize para trazer os commits.` }); })
+      .catch(function (e) { setNovo({ ...n, erro: drErro(e) }); setAgindo(false); });
+  };
+
+  const alternarAtivo = function (repo) {
+    window.FRApi.put(`/dev-repos/${repo.id}`, { active: !repo.active })
+      .then(function () { carregarRepos(false); carregarRel(); })
+      .catch(function (e) { setFeedback({ tom: 'red', txt: drErro(e) }); });
+  };
+
+  const excluir = function (repo) {
+    setAgindo(true);
+    window.FRApi.delete(`/dev-repos/${repo.id}`)
+      .then(function () { setConfirmando(null); setAgindo(false); carregarRepos(false); carregarRel(); })
+      .catch(function (e) {
+        // 409 = tem histórico. A mensagem do backend JÁ traz a saída (desativar) — repassar a
+        // frase dele evita duas versões da mesma regra vivendo em lugares diferentes.
+        setConfirmando({ ...confirmando, erro: drErro(e), ofereceDesativar: drStatus(e) === 409 });
+        setAgindo(false);
+      });
+  };
+
+  const commits = (rel && rel.commits) || [];
+  const total = (rel && rel.total) || 0;
+  const porRepo = (rel && rel.por_repo) || [];
+  const temAnterior = offset > 0;
+  const temProxima = offset + commits.length < total;
+  const primeiro = total === 0 ? 0 : offset + 1;
+  const ultimo = offset + commits.length;
+  const nuncaSync = (rel && rel.nunca_sincronizados) || 0;
+  const ativos = (rel && rel.repos_ativos) || 0;
+  const pageBtn = (ativo) => ({
+    all: 'unset', boxSizing: 'border-box', cursor: ativo ? 'pointer' : 'not-allowed',
+    display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px',
+    borderRadius: 10, fontSize: 13, fontWeight: 700,
+    background: ativo ? t.elevated : 'transparent', color: ativo ? t.text : t.faint,
+    border: `1px solid ${ativo ? t.border : 'transparent'}`,
+  });
+
+  return (
+    <div>
+      <PageHeader t={t} title="Repositórios" subtitle="O trabalho em código do time, espelhado do GitHub e consultável por período." />
+
+      {/* Abas */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {[['relatorio', 'Relatório'], ['repos', `Repositórios (${repos.length})`]].map(function ([k, label]) {
+          const on = aba === k;
+          return (
+            <button key={k} onClick={() => setAba(k)} style={{
+              all: 'unset', cursor: 'pointer', fontSize: 13, fontWeight: 700, padding: '8px 16px', borderRadius: 999,
+              background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? 'transparent' : t.border}`,
+            }}>{label}</button>
+          );
+        })}
+      </div>
+
+      {feedback && (
+        <Card t={t} style={{ padding: '10px 14px', marginBottom: 14, background: uiTone(t, feedback.tom).bg, borderColor: uiTone(t, feedback.tom).fg }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: uiTone(t, feedback.tom).fg }}>{feedback.txt}</span>
+        </Card>
+      )}
+
+      {/* ══════════ RELATÓRIO ══════════ */}
+      {aba === 'relatorio' && (
+        <>
+          {/* Controles do período */}
+          <Card t={t} style={{ padding: 16, marginBottom: 14 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              {DR_PRESETS.map(function ([k, label]) {
+                const on = preset === k;
+                return (
+                  <button key={k} onClick={() => aplicarPreset(k)} style={{
+                    all: 'unset', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 999,
+                    background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? 'transparent' : t.border}`,
+                  }}>{label}</button>
+                );
+              })}
+              <button onClick={() => aplicarPreset('custom')} style={{
+                all: 'unset', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, padding: '7px 14px', borderRadius: 999,
+                background: preset === 'custom' ? t.accent : t.elevated, color: preset === 'custom' ? t.onAccent : t.muted,
+                border: `1px solid ${preset === 'custom' ? 'transparent' : t.border}`,
+              }}>Personalizado</button>
+
+              {preset === 'custom' && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input type="date" value={de} max={ate || undefined}
+                    onChange={(e) => { setDe(e.target.value); setOffset(0); }}
+                    style={{ height: 34, padding: '0 10px', borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13, fontFamily: 'inherit' }} />
+                  <span style={{ color: t.faint, fontSize: 13 }}>até</span>
+                  <input type="date" value={ate} min={de || undefined} max={drHojeYmd()}
+                    onChange={(e) => { setAte(e.target.value); setOffset(0); }}
+                    style={{ height: 34, padding: '0 10px', borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13, fontFamily: 'inherit' }} />
+                </div>
+              )}
+
+              <select value={repoFiltro} onChange={(e) => { setRepoFiltro(e.target.value); setOffset(0); }}
+                style={{ height: 34, padding: '0 10px', borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13, fontFamily: 'inherit', marginLeft: 'auto' }}>
+                <option value="">Todos os repositórios</option>
+                {repos.map((r) => <option key={r.id} value={r.id}>{r.owner}/{r.name}</option>)}
+              </select>
+            </div>
+
+            {erroPeriodo && (
+              <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erroPeriodo}</div>
+            )}
+
+            {/* O CARIMBO — sempre visível, mesmo carregando. É a honestidade do espelho: sem
+                ele o usuário leria dado velho como se fosse de agora. */}
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.border}`, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', fontSize: 12, color: t.muted }}>
+              <Icon name="refresh" size={13} />
+              <span>
+                Espelho sincronizado <strong style={{ color: t.text }} title={drDataHora(rel && rel.ultima_sync)}>{drRelativo(rel && rel.ultima_sync)}</strong>
+                {ativos > 0 && ` · ${ativos} ${ativos === 1 ? 'repositório ativo' : 'repositórios ativos'}`}
+              </span>
+              {nuncaSync > 0 && (
+                <span style={{ color: uiTone(t, 'amber').fg, fontWeight: 700 }}>
+                  · {nuncaSync} nunca {nuncaSync === 1 ? 'sincronizado' : 'sincronizados'}
+                </span>
+              )}
+            </div>
+          </Card>
+
+          {loadingRel && <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13 }}>Carregando…</Card>}
+
+          {!loadingRel && erroRel && (
+            <Card t={t} style={{ padding: 30, textAlign: 'center' }}>
+              <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{erroRel}</div>
+              <Btn t={t} kind="ghost" onClick={() => carregarRel()}>Tentar novamente</Btn>
+            </Card>
+          )}
+
+          {!loadingRel && !erroRel && (
+            <>
+              {/* Resumo por repo do PERÍODO (não da página) */}
+              {porRepo.length > 0 && (
+                <Card t={t} style={{ padding: 16, marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>
+                    {total} {total === 1 ? 'commit' : 'commits'} no período
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {porRepo.map((p) => (
+                      <span key={p.repo_id} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, padding: '5px 11px', borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, color: t.text }}>
+                        <strong>{p.count}</strong> <span style={{ color: t.muted }}>{p.repo}</span>
+                      </span>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
+              {/* Vazios HONESTOS por caso — são dois fatos diferentes e merecem dois textos. */}
+              {commits.length === 0 && (
+                <Card t={t} style={{ padding: 44, textAlign: 'center' }}>
+                  {nuncaSync > 0 && total === 0 && ativos === nuncaSync ? (
+                    <>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 6 }}>Nenhum repositório sincronizado ainda</div>
+                      <div style={{ fontSize: 13, color: t.muted, marginBottom: 16 }}>O espelho está vazio porque a sincronização nunca rodou — não porque não houve trabalho.</div>
+                      <Btn t={t} icon="refresh" onClick={() => setAba('repos')}>Ir para Repositórios e sincronizar</Btn>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 6 }}>Nenhum commit no período</div>
+                      <div style={{ fontSize: 13, color: t.muted }}>
+                        Nada foi commitado entre {de ? drDataHora(`${de}T12:00:00Z`).slice(0, 10) : '—'} e {ate ? drDataHora(`${ate}T12:00:00Z`).slice(0, 10) : '—'}
+                        {repoFiltro ? ' neste repositório' : ''}. Experimente um período maior.
+                      </div>
+                    </>
+                  )}
+                </Card>
+              )}
+
+              {/* A LISTA. A mensagem vem ÍNTEGRA (inclusive multilinha) — é o dado central do
+                  relatório: truncar a mensagem seria jogar fora exatamente o que se veio ler. */}
+              {commits.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {commits.map((c) => (
+                    <Card key={`${c.repo_id}-${c.sha_curto}`} t={t} style={{ padding: 14 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: t.accentSoft, color: t.accentText }}>{c.sha_curto}</span>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: t.text }}>{c.repo}</span>
+                        <span style={{ fontSize: 12, color: t.muted }}>· {c.author_name || 'autor não identificado'}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 12, color: t.faint }} title={c.author_date}>{drDataHora(c.author_date)}</span>
+                      </div>
+                      {/* A mensagem vem ÍNTEGRA — nada é escondido. O que muda é só o PESO da
+                          primeira linha (o assunto do commit): as mensagens desta casa têm corpo
+                          longo, e sem esse destaque a lista vira um paredão onde não se acha o
+                          que se veio ler. Truncar resolveria a altura jogando fora o dado
+                          central; destacar resolve sem perder uma letra. */}
+                      {(function () {
+                        const txt = String(c.message || '');
+                        const quebra = txt.indexOf('\n');
+                        const assunto = quebra === -1 ? txt : txt.slice(0, quebra);
+                        const corpo = quebra === -1 ? '' : txt.slice(quebra + 1).replace(/^\n+/, '');
+                        return (
+                          <>
+                            <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, lineHeight: 1.45, wordBreak: 'break-word' }}>{assunto}</div>
+                            {corpo && (
+                              <div style={{ fontSize: 12.5, color: t.muted, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 6 }}>{corpo}</div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {/* Controles SÓ com mais de uma página (padrão Precificação) */}
+              {(temAnterior || temProxima) && (
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'center', marginTop: 16 }}>
+                  <button disabled={!temAnterior} onClick={() => temAnterior && setOffset(Math.max(0, offset - DR_PAGE))} style={pageBtn(temAnterior)}>
+                    <Icon name="chevronLeft" size={15} /> Anterior
+                  </button>
+                  <span style={{ fontSize: 12.5, color: t.muted }}>{primeiro}–{ultimo} de {total}</span>
+                  <button disabled={!temProxima} onClick={() => temProxima && setOffset(offset + DR_PAGE)} style={pageBtn(temProxima)}>
+                    Próxima <Icon name="chevronRight" size={15} />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/* ══════════ REPOSITÓRIOS ══════════ */}
+      {aba === 'repos' && (
+        <>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            <Btn t={t} icon="plus" onClick={() => setNovo({})}>Cadastrar repositório</Btn>
+            <Btn t={t} kind="ghost" icon="refresh" onClick={sincronizarTodos}>
+              {progresso ? `Sincronizando ${progresso.feitos}/${progresso.total}…` : 'Sincronizar todos'}
+            </Btn>
+          </div>
+
+          {/* Progresso POR REPO — a sync é sequencial e demora; a tela mostra o que já
+              terminou em vez de um spinner mudo. */}
+          {progresso && (
+            <Card t={t} style={{ padding: 14, marginBottom: 14 }}>
+              <div style={{ height: 6, borderRadius: 999, background: t.elevated, overflow: 'hidden', marginBottom: 10 }}>
+                <div style={{ height: '100%', width: `${Math.round((progresso.feitos / progresso.total) * 100)}%`, background: t.accent, transition: 'width .25s' }} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {progresso.resultados.map((r, i) => (
+                  <div key={i} style={{ fontSize: 12.5, color: r.ok ? t.muted : uiTone(t, 'red').fg }}>
+                    {r.ok ? `✓ ${r.repo}: ${r.novos} novo(s)` : `✕ ${r.repo}: ${r.erro}`}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {loadingRepos && <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13 }}>Carregando…</Card>}
+
+          {!loadingRepos && erroRepos && (
+            <Card t={t} style={{ padding: 30, textAlign: 'center' }}>
+              <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{erroRepos}</div>
+              <Btn t={t} kind="ghost" onClick={() => carregarRepos(true)}>Tentar novamente</Btn>
+            </Card>
+          )}
+
+          {!loadingRepos && !erroRepos && repos.length === 0 && (
+            <Card t={t} style={{ padding: 44, textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 6 }}>Nenhum repositório cadastrado</div>
+              <div style={{ fontSize: 13, color: t.muted }}>Cadastre um repositório do GitHub para começar a espelhar os commits.</div>
+            </Card>
+          )}
+
+          {!loadingRepos && !erroRepos && repos.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {repos.map((r) => (
+                <Card key={r.id} t={t} style={{ padding: 14, opacity: r.active ? 1 : 0.6 }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{r.owner}/{r.name}</span>
+                        <DrStatusRepo t={t} repo={r} />
+                        {!r.active && (
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: t.elevated, color: t.faint, border: `1px solid ${t.border}` }}>Inativo</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: t.muted, marginTop: 4 }}>
+                        {r.commits} commit(s) no espelho
+                        {r.last_sync_status === 'erro' && r.last_sync_error && (
+                          <span style={{ color: uiTone(t, 'red').fg }}> · {r.last_sync_error}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <button onClick={() => sincronizarUm(r)} disabled={!!sincronizando || !!progresso}
+                        title={r.active ? 'Sincronizar este repositório' : 'Repositório inativo — sincronize mesmo assim'}
+                        style={{ all: 'unset', boxSizing: 'border-box', cursor: (sincronizando || progresso) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, height: 34, padding: '0 12px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: t.elevated, color: t.text, border: `1px solid ${t.border}`, opacity: (sincronizando || progresso) ? 0.5 : 1 }}>
+                        <Icon name="refresh" size={14} /> {sincronizando === r.id ? 'Sincronizando…' : 'Sincronizar'}
+                      </button>
+                      <button onClick={() => alternarAtivo(r)} title={r.active ? 'Desativar (sai do relatório e do sincronizar todos)' : 'Reativar'}
+                        style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, height: 34, padding: '0 12px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: 'transparent', color: t.muted, border: `1px solid ${t.border}` }}>
+                        {r.active ? 'Desativar' : 'Reativar'}
+                      </button>
+                      <button onClick={() => setConfirmando({ repo: r })} title="Excluir"
+                        style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 34, height: 34, borderRadius: 9, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}>
+                        <Icon name="trash" size={15} />
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Modal: cadastrar */}
+      {novo && (
+        <div onClick={() => !agindo && setNovo(null)} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, padding: 22 }}>
+            <div style={{ fontSize: 15, fontWeight: 850, color: t.text, marginBottom: 14 }}>Cadastrar repositório</div>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', color: t.faint, textTransform: 'uppercase', marginBottom: 6 }}>Owner (usuário ou organização)</div>
+            <input autoFocus value={novo.owner || ''} onChange={(e) => setNovo({ ...novo, owner: e.target.value, erro: null })} placeholder="Ex.: Corrar"
+              style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13.5, fontFamily: 'inherit', marginBottom: 12 }} />
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', color: t.faint, textTransform: 'uppercase', marginBottom: 6 }}>Nome do repositório</div>
+            <input value={novo.name || ''} onChange={(e) => setNovo({ ...novo, name: e.target.value, erro: null })} placeholder="Ex.: Fluxo5.0-Front"
+              onKeyDown={(e) => { if (e.key === 'Enter') criar(); }}
+              style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 12px', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
+            <div style={{ fontSize: 12, color: t.faint, marginTop: 8 }}>O repositório precisa ser acessível pelo token configurado no servidor.</div>
+            {novo.erro && <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{novo.erro}</div>}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <Btn t={t} kind="ghost" onClick={() => !agindo && setNovo(null)}>Cancelar</Btn>
+              <Btn t={t} onClick={criar}>{agindo ? 'Salvando…' : 'Cadastrar'}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: excluir (409 vira orientação, não beco sem saída) */}
+      {confirmando && (
+        <div onClick={() => !agindo && setConfirmando(null)} style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(8,10,16,.6)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(470px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, boxShadow: t.shadow, padding: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12 }}>
+              <span style={{ width: 38, height: 38, borderRadius: 10, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'grid', placeItems: 'center' }}><Icon name="alert" size={18} /></span>
+              <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>Excluir repositório</div>
+            </div>
+            <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5 }}>
+              {confirmando.erro
+                ? confirmando.erro
+                : `Excluir ${confirmando.repo.owner}/${confirmando.repo.name} do cadastro? O histórico espelhado dele sai do relatório.`}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <Btn t={t} kind="ghost" onClick={() => !agindo && setConfirmando(null)}>Voltar</Btn>
+              {confirmando.ofereceDesativar ? (
+                <Btn t={t} onClick={() => { alternarAtivo(confirmando.repo); setConfirmando(null); }}>Desativar em vez de excluir</Btn>
+              ) : (
+                <button onClick={() => !agindo && excluir(confirmando.repo)}
+                  style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: uiTone(t, 'red').fg, color: '#fff', opacity: agindo ? 0.6 : 1 }}>
+                  {agindo ? 'Excluindo…' : 'Excluir'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Gate padrão da casa: sem a page_key 'dev_repos' a tela interna NEM MONTA (zero rede).
+// Admin passa pelo bypass; a chave nasceu na migration 018 e é concedível a outros papéis
+// pela tela Permissões.
+function DevRepos({ t }) {
+  const A = window.FRAuth;
+  if (!A || typeof A.canAccess !== 'function' || !A.canAccess('dev_repos')) {
+    return (
+      <div>
+        <PageHeader t={t} title="Repositórios" subtitle="O trabalho em código do time, espelhado do GitHub." />
+        <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
+          <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
+            Acesso bloqueado. Não possui o nível de permissão necessário (dev_repos) para ver o relatório de código.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return <DevReposReal t={t} />;
+}
+
 function DevModule(props) {
   const t = frTokens(props.theme, DV_ACCENT, DV_ACCENT_T);
   // O seed de chamados MORREU com a fila real. Sobrou o dev-chat (mock, inalcançável pelo
@@ -920,6 +1505,7 @@ function DevModule(props) {
   if (props.active === 'dev-chamados') return <DevChamados {...p} />;
   if (props.active === 'dev-chat') return <DevChat {...p} />;
   if (props.active === 'dev-projetos') return <DevProjetos {...p} />;
+  if (props.active === 'dev-repos') return <DevRepos {...p} />;
   return <DevPainel {...p} />;
 }
 
