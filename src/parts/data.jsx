@@ -101,6 +101,15 @@ const NAV_3D = [
       // módulo enxerga que a aba existe e lê o motivo, em vez de o item sumir sem explicação.
       { id: 'p3d-valores',       name: 'Registro de Valores', icon: 'dollar' },
       { id: 'p3d-precificacao',  name: 'Precificação',        icon: 'barChart' },
+      // PREPARAÇÃO DO PILOTO (31/07/2026): abrir chamado é caminho de TODO logado, e o
+      // almoxarife (única role além do admin que enxerga este módulo) podia ficar preso aqui
+      // sem porta pro helpdesk — a rota só existia no Estoque/Requisição, no NAV_DEV e no
+      // NAV_PROD. Fecha o último buraco: agora o item está nos QUATRO módulos navegáveis.
+      // Padrão do precedente 'pedidos': rota SEM PREFIXO, MESMO componente resolvido pelo
+      // renderPage a partir do id, e SEM canAccess de propósito — POST /tickets e
+      // GET /tickets/my são authenticate puro, sem page_key, e a lista já vem filtrada pelo
+      // token. O NAV aqui é navegação, não permissão.
+      { id: 'meuschamados',      name: 'Meus Chamados',       icon: 'clipboard' },
     ],
   },
 ];
