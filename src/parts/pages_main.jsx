@@ -72,6 +72,7 @@ function ProdutoErro({ t, message, onRetry }) {
 }
 
 function HeroPatrimonio({ t, brand, produtos }) {
+  const { mobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
   const lista = produtos || [];
   const totalVal = lista.reduce((a, p) => a + parsePreco(p.preco) * p.estoque, 0);
   const unidades = lista.reduce((a, p) => a + p.estoque, 0);
@@ -86,8 +87,42 @@ function HeroPatrimonio({ t, brand, produtos }) {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [totalVal]);
+
+  // VARIANTE MOBILE (redesign): o hero de 460px com número de 100px não cabe num 390 — a
+  // foto de fundo empurrava o valor pra fora e os chips saíam da tela. Aqui vira um cartão
+  // compacto sem foto, com os MESMOS números — que continuam saindo de `lista` (produtos
+  // REAIS via useFRProducts), nunca do PRODUTOS mock que o design lia.
+  if (mobile) {
+    return (
+      <div style={{ position: 'relative', borderRadius: 22, overflow: 'hidden', padding: '22px 20px 24px', background: `linear-gradient(160deg, ${brand.accent} 0%, #05070d 130%)` }}>
+        <div style={{ position: 'absolute', top: '-40%', right: '-20%', width: 300, height: 300, background: 'radial-gradient(circle, rgba(255,255,255,.14) 0%, transparent 62%)', pointerEvents: 'none' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <Icon name="barChart2" size={13} style={{ color: brand.yellow }} />
+          <span style={{ fontSize: 10.5, letterSpacing: '.2em', fontWeight: 850, color: brand.yellow, textTransform: 'uppercase' }}>Patrimônio em Estoque</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: 'rgba(255,255,255,.6)' }}>R$</span>
+          <span style={{ fontSize: 'clamp(30px, 9.5vw, 44px)', fontWeight: 850, letterSpacing: '-.04em', color: '#fff', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(shown)}</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginTop: 16 }}>
+          <div style={{ padding: '11px 14px', borderRadius: 13, background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.2)' }}>
+            <div style={{ fontSize: 9.5, fontWeight: 850, letterSpacing: '.1em', color: 'rgba(255,255,255,.65)', textTransform: 'uppercase' }}>Itens no catálogo</div>
+            <div style={{ fontSize: 16, fontWeight: 850, color: '#fff', marginTop: 3 }}>{lista.length} itens · {unidades.toLocaleString('pt-BR')} un</div>
+          </div>
+          <div style={{ padding: '11px 14px', borderRadius: 13, background: 'rgba(255,255,255,.1)', border: '1px solid rgba(255,255,255,.2)' }}>
+            <div style={{ fontSize: 9.5, fontWeight: 850, letterSpacing: '.1em', color: 'rgba(255,255,255,.65)', textTransform: 'uppercase' }}>Saúde do estoque</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 16, fontWeight: 850, color: '#fff', marginTop: 3 }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 0 3px rgba(52,211,153,.3)' }} /> {saude}%</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,.75)', marginTop: 14 }}>Controle absoluto sobre {unidades.toLocaleString('pt-BR')} unidades.</div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ position: 'relative', borderRadius: 22, overflow: 'hidden', minHeight: 460, display: 'flex', alignItems: 'flex-end', background: '#05070d' }}>
+    // containerType: 'inline-size' habilita a unidade `cqw` usada no tamanho do número —
+    // ele passa a escalar pela largura do PRÓPRIO hero, não da janela.
+    <div style={{ position: 'relative', borderRadius: 22, overflow: 'hidden', minHeight: 'clamp(320px, 55vw, 460px)', display: 'flex', alignItems: 'flex-end', background: '#05070d', containerType: 'inline-size' }}>
       <style>{`@keyframes frHeroZoom{from{transform:scale(1.1)}to{transform:scale(1)}}@keyframes frHeroRise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}@keyframes frGlow{0%,100%{opacity:.5}50%{opacity:.85}}@keyframes frSheen{0%{background-position:-160% 0}55%,100%{background-position:260% 0}}`}</style>
       <div style={{ position: 'absolute', inset: 0, animation: 'frHeroZoom 18s ease-out both' }}>
         <img src={window.__asset('assets/mascote.png')} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'right center' }} />
@@ -98,19 +133,19 @@ function HeroPatrimonio({ t, brand, produtos }) {
       <div style={{ position: 'absolute', top: '-30%', right: '8%', width: 520, height: 520, background: 'radial-gradient(circle, rgba(255,255,255,.1) 0%, transparent 62%)', pointerEvents: 'none' }} />
       <div style={{ position: 'absolute', left: -40, bottom: 30, width: 380, height: 220, borderRadius: '50%', background: frHexToRgba(brand.accent, 0.45), filter: 'blur(110px)', animation: 'frGlow 7s ease-in-out infinite', pointerEvents: 'none' }} />
 
-      <div style={{ position: 'absolute', left: 48, top: 36, display: 'flex', alignItems: 'center', gap: 10, animation: 'frHeroRise .7s ease-out both' }}>
+      <div style={{ position: 'absolute', left: 'clamp(20px, 5vw, 48px)', top: 'clamp(22px, 4vw, 36px)', display: 'flex', alignItems: 'center', gap: 10, animation: 'frHeroRise .7s ease-out both' }}>
         <span style={{ width: 30, height: 30, borderRadius: 9, background: brand.accent, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 13, boxShadow: `0 4px 14px ${frHexToRgba(brand.accent, 0.5)}` }}>FR</span>
         <span style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: '.04em', color: 'rgba(255,255,255,.85)' }}>Fluxo Royale · Estoque</span>
       </div>
 
-      <div style={{ position: 'relative', width: '100%', padding: '0 48px 46px', animation: 'frHeroRise .8s ease-out both' }}>
+      <div style={{ position: 'relative', width: '100%', boxSizing: 'border-box', padding: '0 clamp(20px, 5vw, 48px) clamp(28px, 5vw, 46px)', animation: 'frHeroRise .8s ease-out both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
           <span style={{ width: 22, height: 3, borderRadius: 3, background: brand.yellow }} />
           <span style={{ fontSize: 11, letterSpacing: '.24em', fontWeight: 800, color: brand.yellow, textTransform: 'uppercase' }}>Patrimônio em Estoque</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-          <span style={{ fontSize: 32, fontWeight: 700, color: 'rgba(255,255,255,.6)', marginTop: 18 }}>R$</span>
-          <span style={{ position: 'relative', fontSize: 100, fontWeight: 850, letterSpacing: '-.05em', lineHeight: .78, fontVariantNumeric: 'tabular-nums', color: '#fff',
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'clamp(6px, 1.5vw, 12px)' }}>
+          <span style={{ fontSize: 'clamp(18px, 4vw, 32px)', fontWeight: 700, color: 'rgba(255,255,255,.6)', marginTop: 'clamp(8px, 2vw, 18px)' }}>R$</span>
+          <span style={{ position: 'relative', fontSize: 'clamp(34px, 15cqw, 100px)', fontWeight: 850, letterSpacing: '-.05em', lineHeight: .78, fontVariantNumeric: 'tabular-nums', color: '#fff', whiteSpace: 'nowrap',
             background: 'linear-gradient(100deg, #fff 0%, #fff 38%, rgba(255,255,255,.55) 50%, #fff 62%, #fff 100%)', backgroundSize: '300% 100%', WebkitBackgroundClip: 'text', backgroundClip: 'text', animation: 'frSheen 5.5s ease-in-out 1.1s infinite', textShadow: '0 8px 50px rgba(0,0,0,.65)' }}>{fmt(shown)}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 26, flexWrap: 'wrap' }}>
@@ -132,7 +167,7 @@ const maskSku = (raw) => {
   return d[0] + '.' + d.slice(1, 3) + '.' + d.slice(3);     // "3.08.0114"
 };
 
-function NovoProdutoForm({ t, brand, onCreated, produtos = [] }) {
+function NovoProdutoForm({ t, brand, onCreated, produtos = [], flat }) {
   const field = { width: '100%', boxSizing: 'border-box', height: 42, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
   const lab = { fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7, display: 'block' };
   const [nome, setNome] = useStateM('');
@@ -198,7 +233,11 @@ function NovoProdutoForm({ t, brand, onCreated, produtos = [] }) {
   const fb = feedback ? uiTone(t, feedback.type === 'ok' ? 'green' : 'red') : null;
 
   return (
-    <Card t={t} style={{ padding: 22, width: 340, flexShrink: 0, alignSelf: 'flex-start', position: 'sticky', top: 8 }}>
+    // `flat` (redesign): dentro da folha do celular o formulário perde moldura, sombra e
+    // largura fixa — quem faz o papel de cartão ali é a própria folha. No desktop nada muda.
+    <Card t={t} style={flat
+      ? { padding: '14px 20px calc(20px + env(safe-area-inset-bottom))', width: '100%', boxSizing: 'border-box', border: 'none', borderRadius: 0, boxShadow: 'none', background: 'transparent' }
+      : { padding: 22, width: 340, flexShrink: 0, alignSelf: 'flex-start', position: 'sticky', top: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 18 }}>
         <span style={{ width: 38, height: 38, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center' }}><Icon name="plus" size={20} /></span>
         <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>Novo Produto</div>
@@ -304,11 +343,43 @@ function EditProdutoModal({ t, prod, onClose, onSave }) {
   );
 }
 
-function ProdutoCard({ t, p, onEdit, onDelete }) {
+function ProdutoCard({ t, p, onEdit, onDelete, mobile }) {
   const [editing, setEditing] = useStateM(false);
   const [hover, setHover] = useStateM(false);
   const [menu, setMenu] = useStateM(false);
   const [confirm, setConfirm] = useStateM(false);
+
+  // CARTÃO COMPACTO (redesign, variante mobile). É SÓ LAYOUT: os dois blocos de estoque
+  // lado a lado viram uma coluna com disponível/físico/unitário, e a tipografia encolhe.
+  //
+  // O QUE NÃO VEIO DO DESIGN, por decisão do Bruno: ele punha editar e EXCLUIR como botões
+  // diretos no topo do cartão. No nosso repo esses dois são inertes (a escrita de produto é a
+  // "próxima leva" — ver PageCatalogo), e promover controle morto de escondido no menu para
+  // primário no cartão é piorar a tela: o usuário clicaria esperando efeito. O menu de três
+  // pontinhos segue exatamente como está, com o mesmo comportamento de hoje.
+  if (mobile) {
+    return (
+      <Card t={t} style={{ padding: '18px 18px 16px', position: 'relative' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <Badge t={t} kind="gray">{p.sku}</Badge>
+          {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
+        </div>
+        <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text, margin: '10px 0 14px', letterSpacing: '-.01em', lineHeight: 1.3 }}>{p.nome}</div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
+          <div>
+            <div style={{ fontSize: 9.5, letterSpacing: '.08em', fontWeight: 800, color: t.faint }}>DISPONÍVEL</div>
+            <div style={{ fontSize: 20, fontWeight: 850, color: t.accentText, lineHeight: 1.15 }}>{p.disp} <span style={{ fontSize: 11, color: t.muted, fontWeight: 700 }}>{p.un}</span></div>
+            <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.04em', color: t.faint, marginTop: 3 }}>FÍSICA: <span style={{ color: t.muted }}>{p.estoque} {p.un}</span></div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 9.5, letterSpacing: '.08em', fontWeight: 800, color: t.faint, marginBottom: 4 }}>UNITÁRIO</div>
+            <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{p.preco}</div>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card t={t} hover style={{ padding: 22, position: 'relative' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
@@ -468,7 +539,9 @@ function PageCatalogo({ t, brand }) {
   const [edit, setEdit] = useStateM(null);
   const [page, setPage] = useStateM(1);
   const [q, setQ] = useStateM('');
+  const [novoOpen, setNovoOpen] = useStateM(false);   // folha de novo produto (celular)
   const topRef = useRefM(null);
+  const { mobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
   // Fonte REAL: GET /products adaptado. Escrita (novo/editar/excluir/inventário) fica para a próxima leva.
   const { items, loading, error, reload } = window.useFRProducts();
   // Busca funcional (portada da PageProdutos): filtra sobre a lista COMPLETA por nome/SKU/tag; só então pagina a fatia visível.
@@ -497,7 +570,9 @@ function PageCatalogo({ t, brand }) {
       </div>
       <HeroPatrimonio t={t} brand={brand} produtos={items} />
       <div style={{ display: 'flex', gap: 20, marginTop: 22, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <NovoProdutoForm t={t} brand={brand} onCreated={reload} produtos={items} />
+        {/* No celular o formulário sai do fluxo e vira folha, chamada pelo FAB — ocupando a
+            largura inteira ele empurraria a lista pra baixo da dobra. */}
+        {!mobile && <NovoProdutoForm t={t} brand={brand} onCreated={reload} produtos={items} />}
         <div style={{ flex: 1, minWidth: 280 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderRadius: 13, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, marginBottom: 16 }}>
             <Icon name="search" size={17} />
@@ -507,18 +582,40 @@ function PageCatalogo({ t, brand }) {
             <ProdutoErro t={t} message={error} onRetry={reload} />
           ) : (
             <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: mobile ? 14 : 18 }}>
               {loading
                 ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
                 : total === 0
                 ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql ? `Nada encontrado para "${q.trim()}".` : 'Nenhum produto ativo no catálogo.'} /></Card></div>
-                : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} onEdit={(np) => setEdit(np)} onDelete={() => {}} />)}
+                : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onDelete={() => {}} />)}
             </div>
             {!loading && total > 0 && <Paginacao t={t} page={safePage} totalPages={totalPages} total={total} start={start} end={end} onPage={goToPage} unidade="produtos" />}
             </>
           )}
         </div>
       </div>
+      {/* FAB + folha de criação (redesign) — VIVOS: o form já bate no POST /products real, com
+          as validações atuais (SKU C.SS.NNNN, duplicata, guard anti-duplo-clique). Ao criar,
+          `reload` recarrega a lista e a folha fecha, então o produto novo aparece atrás dela.
+          A paginação segue valendo no celular: a lista é real e cresce. */}
+      {mobile && (
+        <button onClick={() => setNovoOpen(true)} title="Novo produto"
+          style={{ all: 'unset', cursor: 'pointer', position: 'fixed', right: 18, bottom: 20, zIndex: 40, width: 58, height: 58, borderRadius: '50%', display: 'grid', placeItems: 'center', background: t.accent, color: t.onAccent, boxShadow: `0 10px 26px ${frHexToRgba(t.accent, 0.5)}` }}>
+          <Icon name="plus" size={24} />
+        </button>
+      )}
+      {mobile && novoOpen && (
+        <div onClick={() => setNovoOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 66, background: 'rgba(8,10,16,.55)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'flex-end', animation: 'frFadeIn .2s ease-out' }}>
+          <div onClick={(e) => e.stopPropagation()} className="fr-scroll" style={{ width: '100%', maxHeight: '92vh', overflowY: 'auto', background: t.panel, borderRadius: '24px 24px 0 0', boxSizing: 'border-box', animation: 'frSheetUp .34s cubic-bezier(.22,1,.36,1)' }}>
+            <style>{`@keyframes frSheetUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frFadeIn{from{opacity:0}to{opacity:1}}`}</style>
+            <div style={{ position: 'sticky', top: 0, zIndex: 2, background: t.panel, padding: '12px 0 8px', display: 'grid', placeItems: 'center' }}>
+              <span style={{ width: 40, height: 4, borderRadius: 3, background: t.border }} />
+            </div>
+            <NovoProdutoForm t={t} brand={brand} produtos={items} flat
+              onCreated={() => { reload(); setNovoOpen(false); }} />
+          </div>
+        </div>
+      )}
       {inv && <InventarioModal t={t} onClose={() => setInv(false)} />}
       {edit && <EditProdutoModal t={t} prod={edit} onClose={() => setEdit(null)} onSave={() => setEdit(null)} />}
     </div>
