@@ -102,6 +102,9 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const [rows, setRows] = useStateA([{ sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }]);
   const [drag, setDrag] = useStateA(false);
   const [done, setDone] = useStateA(false);
+  // ≥980px: formulário + dropzone à esquerda (sticky) e itens à direita; abaixo disso empilha (mobile).
+  const { w: vpw } = (window.useFRViewport ? window.useFRViewport() : { w: 1200 });
+  const wide = vpw >= 980;
   // Catálogo REAL (GET /products adaptado) — mesmo hook/pattern do pedidos.jsx. Substitui o mock MATERIAIS.
   const { items: frProdutos, loading: catLoading, error: catError } = window.useFRProducts();
   const prodBySku = (sku) => frProdutos.find((p) => p.sku === sku);
@@ -337,13 +340,15 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
 
   return (
-    <div style={{ maxWidth: 860, margin: '0 auto' }}>
+    <div style={{ width: '100%' }}>
       <PageHeader t={t} title={L.title} subtitle={L.sub}
         actions={<Btn t={t} icon="download" kind="ghost" onClick={baixarModelo}>Baixar modelo</Btn>} />
 
+      <div style={{ display: 'grid', gridTemplateColumns: wide ? 'minmax(320px, 400px) 1fr' : '1fr', gap: 20, alignItems: 'start' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, position: wide ? 'sticky' : 'static', top: 0 }}>
       {saida && (
-        <Card t={t} style={{ padding: 18, marginBottom: 20 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <Card t={t} style={{ padding: 18, margin: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
             <div>
               <label style={lab}>Ordem de Produção (OP)</label>
               <input value={op} onChange={(e) => setOp(e.target.value)} placeholder="Ex: 12010" style={inp} />
@@ -363,8 +368,8 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       )}
 
       {isNF && (
-        <Card t={t} style={{ padding: 18, marginBottom: 20 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <Card t={t} style={{ padding: 18, margin: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
             <div>
               <label style={lab}>Nota Fiscal (NF)</label>
               <input value={nf} onChange={(e) => setNf(e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="Número da NF (ex.: 004471)" inputMode="numeric" style={inp} />
@@ -383,7 +388,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       )}
 
       {reuse && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 15, padding: '15px 20px', borderRadius: 16, marginBottom: 22,
+        <div style={{ display: 'flex', flexDirection: wide ? 'column' : 'row', alignItems: wide ? 'flex-start' : 'center', gap: wide ? 11 : 15, padding: '15px 20px', borderRadius: 16, margin: 0,
           background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.32)}` }}>
           <span style={{ width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: frHexToRgba('#f59e0b', 0.22), color: uiTone(t, 'amber').fg, flexShrink: 0 }}>
             <Icon name="refresh" size={22} />
@@ -411,12 +416,17 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           <Badge t={t} kind="accent">SKU</Badge><Badge t={t} kind={accentKind}>Quantidade</Badge>
         </div>
       </div>
+      </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, margin: '24px 0' }}>
+      <div>
+      {!wide && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, margin: '4px 0 20px' }}>
         <div style={{ flex: 1, height: 1, background: t.border }} />
         <span style={{ fontSize: 12, fontWeight: 700, color: t.faint }}>ou adicione manualmente</span>
         <div style={{ flex: 1, height: 1, background: t.border }} />
       </div>
+      )}
+      {wide && <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', margin: '0 0 12px 2px' }}>Itens da entrada</div>}
 
       <Card t={t} style={{ padding: 8 }}>
         <div style={{ position: 'relative', padding: '6px 6px 8px' }}>
@@ -484,6 +494,8 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           <Icon name="plus" size={16} /> Adicionar linha
         </button>
       </Card>
+      </div>
+      </div>
 
       <div style={{ position: 'sticky', bottom: 0, marginTop: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
         padding: '14px 18px', borderRadius: 14, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadow }}>
@@ -1346,7 +1358,6 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
   const m = SOL_STATUS[s.status];
   const [h1, h2] = SOL_HEAD[m.kind];
   const pending = s.status === 'em-analise';
-  const av = s.sol.split(' ').map((x) => x[0]).slice(0, 2).join('');
   // qtd pedida robusta: dados reais usam qtdPedida; mock/'mine' ainda usam qtd.
   const pedidaOf = (it) => (it.qtdPedida != null ? it.qtdPedida : it.qtd) || 0;
   const canConfer = !mine && pending;   // fluxo do almoxarife: confere qtd por item + recusa com motivo
@@ -1374,103 +1385,109 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
     catch (e) { const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage; setErro(gm ? gm(e) : 'Não foi possível recusar.'); setEnviando(false); }
   };
   const totalUn = s.itens.reduce((a, it) => a + pedidaOf(it), 0);
-  const pct = { 'em-analise': 25, 'a-separar': 55, 'em-transito': 80, 'concluido': 100, 'recusado': 30 }[s.status];
+  const light = t.panel === '#ffffff';
+  const titleCor = light ? h1 : h2;
+  const steps = (s.status === 'recusado'
+    ? [{ ...STEP_DEFS[0], state: 'done', when: stepWhen(s, 0) }, { t: 'Recusada', icon: 'x', when: (s.recusa && s.recusa.em) || '', d: 'A solicitação foi recusada pelo almoxarifado.', state: 'rejected' }]
+    : STEP_DEFS.map((d, i) => {
+        let dd = d.d;
+        if (i === 1 && s.aprovacao) dd = `Aprovada por ${s.aprovacao.por}.`;
+        if (i === 2 && s.envio) dd = `Itens bipados por ${s.bipagem ? s.bipagem.por : s.envio.por} e enviados ao setor.`;
+        if (i === 3 && s.recebimento) dd = `Recebida por ${s.recebimento.por}${s.recebimento.divergencia ? ' · com divergência' : ' · sem divergência'}.`;
+        return { ...d, d: dd, state: STEP_STATES[s.status][i], when: stepWhen(s, i) };
+      }));
+  const chipDark = { display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 850, letterSpacing: '.04em', padding: '5px 11px', borderRadius: 8, background: t.text, color: t.panel, fontFamily: 'ui-monospace, monospace' };
+  const temOp = !!s.op && s.op !== '—';   // pedido isento (EPI/ferramenta/insumo) não tem OP: o chip some, nada de "OP-—"
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(900px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-        <div style={{ position: 'relative', flexShrink: 0, padding: '24px 26px', background: `linear-gradient(135deg, ${h1}, ${h2})`, color: '#fff', overflow: 'hidden' }}>
-          <Icon name="box" size={160} style={{ position: 'absolute', right: -26, top: -26, opacity: 0.12 }} />
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 16, right: 18, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.18)', color: '#fff' }}><Icon name="x" size={16} /></button>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.5)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px,100%)', height: '100%', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: t.shadow, animation: 'solDrawerIn .28s cubic-bezier(.22,1,.36,1)' }}>
+        <style>{`@keyframes solDrawerIn{from{transform:translateX(70px);opacity:0}to{transform:none;opacity:1}}`}</style>
+
+        {/* header degradê quente */}
+        <div style={{ position: 'relative', flexShrink: 0, padding: '20px 24px 18px', background: `linear-gradient(115deg, ${frHexToRgba(h2, light ? 0.07 : 0.1)} 0%, ${frHexToRgba(h2, light ? 0.32 : 0.3)} 100%)`, overflow: 'hidden' }}>
+          <Icon name="box" size={140} style={{ position: 'absolute', right: -18, top: -22, color: h2, opacity: 0.16, pointerEvents: 'none' }} />
           <div style={{ position: 'relative' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16, paddingRight: 44 }}>
-              <span style={{ width: 42, height: 42, borderRadius: '50%', background: 'rgba(255,255,255,.2)', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{av}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.1em', color: 'rgba(255,255,255,.7)', textTransform: 'uppercase' }}>Solicitante</div>
-                <div style={{ fontSize: 15, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.sol} <span style={{ fontWeight: 600, color: 'rgba(255,255,255,.8)' }}>· {s.setor}</span></div>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={chipDark}>{s.req}</span>
+              {temOp && <span style={chipDark}>OP-{s.op}</span>}
+              <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', marginLeft: 'auto', width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', background: t.panel, color: t.text, border: `1px solid ${t.border}`, boxShadow: '0 2px 8px rgba(0,0,0,.1)' }}><Icon name="x" size={15} /></button>
             </div>
-            <div style={{ fontSize: 23, fontWeight: 850, letterSpacing: '-.02em' }}>{m.title}</div>
-            <div style={{ fontSize: 13.5, color: 'rgba(255,255,255,.92)', marginTop: 5 }}>{m.sub}</div>
-            <div style={{ marginTop: 16 }}>
-              <div style={{ height: 6, borderRadius: 6, background: 'rgba(255,255,255,.22)', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${pct}%`, borderRadius: 6, background: '#fff', transition: 'width .5s ease' }} />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: 'rgba(255,255,255,.85)' }}>
-                <span>{s.req} · OP-{s.op}</span><span>{s.status === 'recusado' ? 'Recusado' : `${pct}% concluído`}</span>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 13, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 24, fontWeight: 850, letterSpacing: '-.02em', color: titleCor }}>{m.title}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, padding: '4px 12px', borderRadius: 999, background: t.panel, color: t.text, border: `1px solid ${t.border}` }}><span style={{ width: 7, height: 7, borderRadius: '50%', background: h2 }} /> {m.label.toLowerCase()}</span>
             </div>
+            <div style={{ fontSize: 13, color: t.muted, marginTop: 6, maxWidth: 420 }}>{m.sub}</div>
           </div>
         </div>
-        <div className="fr-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '22px 26px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '2px 0 16px' }}>
-            <Icon name="clock" size={15} style={{ color: t.accentText }} />
-            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>Acompanhamento do pedido</span>
+
+        <div className="fr-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 24px', borderTop: `1px solid ${t.border}` }}>
+          {/* acompanhamento */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 16px' }}>
+            <Icon name="clock" size={14} style={{ color: t.accentText }} />
+            <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint }}>Acompanhamento do pedido</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {(s.status === 'recusado'
-              ? [{ ...STEP_DEFS[0], state: 'done', when: stepWhen(s, 0) }, { t: 'Recusada', icon: 'x', when: (s.recusa && s.recusa.em) || '', d: 'A solicitação foi recusada pelo almoxarifado.', state: 'rejected' }]
-              : STEP_DEFS.map((d, i) => {
-                  let dd = d.d;
-                  if (i === 1 && s.aprovacao) dd = `Aprovada por ${s.aprovacao.por}.`;
-                  if (i === 2 && s.envio) dd = `Itens bipados por ${s.bipagem ? s.bipagem.por : s.envio.por} e enviados ao setor.`;
-                  if (i === 3 && s.recebimento) dd = `Recebida por ${s.recebimento.por}${s.recebimento.divergencia ? ' · com divergência' : ' · sem divergência'}.`;
-                  return { ...d, d: dd, state: STEP_STATES[s.status][i], when: stepWhen(s, i) };
-                })
-            ).map((step, i, arr) => {
+            {steps.map((step, i, arr) => {
               const last = i === arr.length - 1;
               const done = step.state === 'done', current = step.state === 'current', rej = step.state === 'rejected';
               const filled = done || current || rej;
-              const nodeBg = rej ? uiTone(t, 'red').fg : done ? uiTone(t, 'green').fg : current ? t.accent : t.elevated;
+              const nodeBg = rej ? uiTone(t, 'red').fg : done ? uiTone(t, 'green').fg : 'transparent';
+              const nodeBorder = current ? h2 : filled ? 'transparent' : t.border;
               return (
-                <div key={i} style={{ display: 'flex', gap: 16 }}>
+                <div key={i} style={{ display: 'flex', gap: 14 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <span style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0,
-                      background: nodeBg, color: filled ? '#fff' : t.faint, border: filled ? 'none' : `2px solid ${t.border}`,
-                      boxShadow: 'none' }}>
-                      <Icon name={done ? 'check' : rej ? 'x' : step.icon} size={done || rej ? 16 : 17} />
+                    <span style={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: nodeBg, color: done || rej ? '#fff' : current ? h2 : t.faint, border: `2px solid ${nodeBorder}` }}>
+                      <Icon name={done ? 'check' : rej ? 'x' : step.icon} size={15} />
                     </span>
-                    {!last && <span style={{ width: 3, flex: 1, minHeight: 42, borderRadius: 3, background: done ? uiTone(t, 'green').fg : t.border, margin: '4px 0' }} />}
+                    {!last && <span style={{ width: 2.5, flex: 1, minHeight: 34, borderRadius: 3, background: done ? uiTone(t, 'green').fg : t.border, margin: '4px 0' }} />}
                   </div>
-                  <div style={{ flex: 1, minWidth: 0, paddingBottom: last ? 0 : 22 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 15, fontWeight: 800, color: filled ? t.text : t.muted }}>{step.t}</span>
-                      {current && <Badge t={t} kind="accent" dot>Em andamento</Badge>}
+                  <div style={{ flex: 1, minWidth: 0, paddingBottom: last ? 0 : 18 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 14.5, fontWeight: 800, color: filled ? t.text : t.muted }}>{step.t}</span>
+                      {current && <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 10px', borderRadius: 999, background: frHexToRgba(h2, .16), color: titleCor }}>em andamento</span>}
                       {rej && <Badge t={t} kind="red" dot>Recusado</Badge>}
-                      {step.state !== 'future' && step.when && <span style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 600, color: t.muted, display: 'inline-flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}><Icon name="clock" size={12} /> {step.when}</span>}
                     </div>
-                    <div style={{ fontSize: 12.5, color: t.muted, marginTop: 5, lineHeight: 1.5 }}>{step.d}</div>
+                    <div style={{ fontSize: 12.5, color: filled ? t.muted : t.faint, marginTop: 4, lineHeight: 1.5 }}>{step.d}</div>
+                    {step.state !== 'future' && step.when && <div style={{ fontSize: 11, fontWeight: 700, color: t.faint, marginTop: 4, fontFamily: 'ui-monospace, monospace' }}>{step.when}</div>}
                   </div>
                 </div>
               );
             })}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '16px 0', marginTop: 6, borderTop: `1px solid ${t.border}` }}>
-            <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="mapPin" size={19} /></span>
+
+          {/* local de entrega */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 17px', margin: '20px 0', borderRadius: 14, background: frHexToRgba(t.accent, 0.08), border: `1px solid ${frHexToRgba(t.accent, 0.25)}` }}>
+            <span style={{ width: 42, height: 42, borderRadius: 12, background: t.panel, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(0,0,0,.08)' }}><Icon name="mapPin" size={19} /></span>
             <div>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: t.faint, textTransform: 'uppercase' }}>Local de entrega</div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 2 }}>{s.sol}</div>
+              <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: '.1em', color: t.accentText, textTransform: 'uppercase' }}>Local de entrega</div>
+              <div style={{ fontSize: 15, fontWeight: 850, color: t.text, marginTop: 2 }}>{s.sol}</div>
               <div style={{ fontSize: 12.5, color: t.muted }}>{s.setor}</div>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 14px' }}>
-            <Icon name="box" size={15} style={{ color: t.accentText }} />
-            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>Produtos solicitados</span>
-            <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 800, color: t.text }}>{s.itens.length}</span>
+
+          {/* produtos */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px' }}>
+            <Icon name="box" size={14} style={{ color: t.accentText }} />
+            <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint }}>Produtos solicitados</span>
+            <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 850, padding: '4px 10px', borderRadius: 7, background: t.text, color: t.panel }}>{s.itens.length} {s.itens.length === 1 ? 'ITEM' : 'ITENS'}</span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, overflow: 'hidden' }}>
             {s.itens.map((it, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderBottom: `1px solid ${t.border}` }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text, textTransform: 'uppercase' }}>{it.nome}</div>
-                  <div style={{ display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' }}><Badge t={t} kind="gray">SKU {it.sku}</Badge><Badge t={t} kind="accent">OP {s.op}</Badge></div>
+                  <div style={{ fontSize: 13.5, fontWeight: 850, color: t.text, textTransform: 'uppercase' }}>{it.nome}</div>
+                  <div style={{ display: 'flex', gap: 7, marginTop: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10, fontWeight: 850, padding: '3px 9px', borderRadius: 7, background: t.text, color: t.panel, fontFamily: 'ui-monospace, monospace' }}>SKU {it.sku}</span>
+                    {temOp && <span style={{ fontSize: 10, fontWeight: 850, padding: '3px 9px', borderRadius: 7, background: t.accentSoft, color: t.accentText, fontFamily: 'ui-monospace, monospace' }}>OP {s.op}</span>}
+                  </div>
                 </div>
                 {canConfer ? (
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>PEDIDO: {pedidaOf(it)} {it.un || 'un'}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7, marginTop: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>Conferido</span>
+                    <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: t.faint }}>PEDIDO: {pedidaOf(it)} {(it.un || 'un').toUpperCase()}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7, marginTop: 7 }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.06em', textTransform: 'uppercase', color: t.accentText }}>Conferido</span>
                       <input value={confRaw(it, i)} onChange={(e) => setConfVal(it, i)(e.target.value)} inputMode="numeric" disabled={enviando}
-                        style={{ width: 62, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 15, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+                        style={{ width: 64, height: 36, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 16, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
                       <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span>
                     </div>
                   </div>
@@ -1482,11 +1499,11 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                   const amber = uiTone(t, 'amber');
                   return (
                     <div style={{ textAlign: 'right', flexShrink: 0, maxWidth: 260 }}>
-                      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>QTD PEDIDA</div>
-                      <div style={{ fontSize: 19, fontWeight: 850, color: t.text }}>{pedidaOf(it)} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
+                      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: t.faint }}>QTD PEDIDA</div>
+                      <div style={{ fontSize: 20, fontWeight: 850, color: t.text }}>{pedidaOf(it)} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
                       {showEnviado && (
                         <React.Fragment>
-                          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: falta ? amber.fg : t.faint, marginTop: 7 }}>ENVIADO</div>
+                          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: falta ? amber.fg : t.faint, marginTop: 7 }}>ENVIADO</div>
                           <div style={{ fontSize: 16, fontWeight: 850, color: falta ? amber.fg : t.text }}>{enviada} <span style={{ fontSize: 11, fontWeight: 600, color: falta ? amber.fg : t.muted }}>{it.un || 'un'}</span></div>
                           {falta && (
                             <div style={{ marginTop: 7, display: 'inline-flex', alignItems: 'flex-start', gap: 5, textAlign: 'left', background: amber.bg, color: amber.fg, borderRadius: 8, padding: '6px 9px', maxWidth: 240 }}>
@@ -1501,17 +1518,17 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                 })()}
               </div>
             ))}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, padding: '13px 16px', borderRadius: 12, background: t.accentSoft }}>
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: t.accentText }}>Total do pedido</span>
-            <span style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>{s.itens.length} itens · {totalUn} un</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 16px', background: t.elevated }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: t.muted }}>Total do pedido</span>
+              <span style={{ fontSize: 13.5, fontWeight: 850, color: t.text }}>{s.itens.length} itens · {totalUn} un</span>
+            </div>
           </div>
         </div>
         {pending && (
-          <div style={{ flexShrink: 0, padding: '16px 26px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ flexShrink: 0, padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {mine ? (
-              <button onClick={onCancel} style={{ all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={17} /> Cancelar pedido</button>
+              <button onClick={onCancel} style={{ all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: uiTone(t, 'red').fg, border: `1.5px solid ${frHexToRgba('#ef4444', .4)}` }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /> Cancelar pedido</button>
             ) : (
               <React.Fragment>
                 {rejectOpen && (
@@ -1525,14 +1542,14 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                 <div style={{ display: 'flex', gap: 12 }}>
                   {rejectOpen ? (
                     <React.Fragment>
-                      <button onClick={() => { if (!enviando) { setRejectOpen(false); setErro(''); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: t.muted, border: `1px solid ${t.border}`, opacity: enviando ? 0.6 : 1 }}>Voltar</button>
-                      <button onClick={handleReject} disabled={enviando || !motivo.trim()} style={{ all: 'unset', cursor: (enviando || !motivo.trim()) ? 'not-allowed' : 'pointer', flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 800, background: (enviando || !motivo.trim()) ? t.elevated : uiTone(t, 'red').fg, color: (enviando || !motivo.trim()) ? t.faint : '#fff' }}><Icon name="x" size={17} /> {enviando ? 'Recusando…' : 'Confirmar recusa'}</button>
+                      <button onClick={() => { if (!enviando) { setRejectOpen(false); setErro(''); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: t.text, border: `1.5px solid ${t.borderStrong}`, opacity: enviando ? 0.6 : 1 }}>Voltar</button>
+                      <button onClick={handleReject} disabled={enviando || !motivo.trim()} style={{ all: 'unset', cursor: (enviando || !motivo.trim()) ? 'not-allowed' : 'pointer', flex: 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, background: (enviando || !motivo.trim()) ? t.elevated : uiTone(t, 'red').fg, color: (enviando || !motivo.trim()) ? t.faint : '#fff' }}><Icon name="x" size={16} /> {enviando ? 'Recusando…' : 'Confirmar recusa'}</button>
                     </React.Fragment>
                   ) : (
                     <React.Fragment>
-                      <button onClick={() => { if (!enviando) { setErro(''); setRejectOpen(true); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 700, color: uiTone(t, 'red').fg, border: `1px solid ${t.border}`, opacity: enviando ? 0.6 : 1 }}
-                        onMouseEnter={(e) => { if (!enviando) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={17} /> Recusar</button>
-                      <button onClick={handleApprove} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 46, borderRadius: 13, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}`, opacity: enviando ? 0.7 : 1 }}><Icon name="check" size={18} /> {enviando ? 'Aprovando…' : 'Conferir & Aprovar'}</button>
+                      <button onClick={() => { if (!enviando) { setErro(''); setRejectOpen(true); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: uiTone(t, 'red').fg, border: `1.5px solid ${frHexToRgba('#ef4444', .4)}`, opacity: enviando ? 0.6 : 1 }}
+                        onMouseEnter={(e) => { if (!enviando) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /> Recusar</button>
+                      <button onClick={handleApprove} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1.6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 8px 20px ${frHexToRgba(t.accent, 0.35)}`, opacity: enviando ? 0.7 : 1 }}><Icon name="check" size={17} /> {enviando ? 'Aprovando…' : 'Conferir & aprovar'}</button>
                     </React.Fragment>
                   )}
                 </div>
@@ -1810,12 +1827,14 @@ function PageSolicitacoes({ t }) {
           <span style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>Solicitações de material</span>
         </div>
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: 16 }}>
         {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Não há solicitações neste filtro." /></Card></div>}
         {view.filter((s) => s.tipo !== 'devolucao').map((s) => {
           const av = s.sol.split(' ').map((x) => x[0]).slice(0, 2).join('');
+          const cor = uiTone(t, SOL_STATUS[s.status].kind).fg;   // faixa/gradiente na cor do status
+          const forte = s.status === 'concluido';
           return (
-            <Card t={t} key={s.id} hover style={{ padding: 16, cursor: 'pointer' }}>
+            <Card t={t} key={s.id} hover style={{ padding: 16, cursor: 'pointer', borderLeft: `5px solid ${cor}`, background: `linear-gradient(90deg, ${frHexToRgba(cor, forte ? 0.2 : 0.07)} 0%, ${frHexToRgba(cor, forte ? 0.08 : 0)} 55%, ${t.panel} 100%)`, borderColor: frHexToRgba(cor, forte ? 0.6 : 0.3) }}>
               <div onClick={() => setOpenId(s.id)}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <Pill status={s.status} />
