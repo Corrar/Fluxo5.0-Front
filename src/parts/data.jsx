@@ -109,6 +109,12 @@ const NAV_3D = [
       // renderPage a partir do id, e SEM canAccess de propósito — POST /tickets e
       // GET /tickets/my são authenticate puro, sem page_key, e a lista já vem filtrada pelo
       // token. O NAV aqui é navegação, não permissão.
+      //
+      // 'pedidos' entra junto (31/07/2026): tinha EXATAMENTE o mesmo buraco — estava no
+      // Estoque/Requisição, no NAV_DEV e no NAV_PROD, e faltava só aqui. Ficou de fora do
+      // c128366 porque aquele commit era de chamados; a dívida foi anotada e agora fecha.
+      // Mesma natureza de rota (sem prefixo, mesmo componente pelo renderPage).
+      { id: 'pedidos',           name: 'Meus Pedidos',        icon: 'cart' },
       { id: 'meuschamados',      name: 'Meus Chamados',       icon: 'clipboard' },
     ],
   },

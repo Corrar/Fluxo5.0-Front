@@ -20,6 +20,11 @@ function syncGlobalUser(u) {
 const FR_ACTIVE_MODULE_KEY = 'fr_active_module';
 function saveActiveModule(id) { try { localStorage.setItem(FR_ACTIVE_MODULE_KEY, id); } catch (e) {} }
 function clearActiveModule() { try { localStorage.removeItem(FR_ACTIVE_MODULE_KEY); } catch (e) {} }
+// A chave mora AQUI e em nenhum outro lugar; o ERPFrame precisa escrever nela quando o
+// usuário troca de módulo POR DENTRO do app (o seletor não é o único caminho — ver o
+// pickMod em erpframe.jsx). Exposto no window em vez de duplicar a string nos dois arquivos:
+// duas cópias da mesma chave é como um lado passa a gravar no que o outro não lê.
+if (typeof window !== 'undefined') window.frSaveActiveModule = saveActiveModule;
 // No boot logado: objeto do módulo salvo SE ainda for permitido (canAccessModule); senão null.
 // Protege contra um módulo cujo acesso o usuário perdeu.
 function bootActiveModule() {

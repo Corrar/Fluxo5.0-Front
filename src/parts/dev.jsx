@@ -298,11 +298,22 @@ function DevChamadosReal({ t }) {
   }, []);
   R.useEffect(function () { carregar(true); }, [carregar]);
 
-  // Cortesia do socket (sala 'admin' recebe comentário de requester): recarrega a fila.
+  // Cortesia do socket, DOIS eventos, mesma reação — recarrega a fila em silêncio:
+  //   'fr:ticket_updated' → a sala 'admin' recebe comentário de requester;
+  //   'fr:ticket_created' → chamado NOVO aberto por qualquer pessoa (31/07/2026). Sem isto a
+  //     fila só acordava no F5 — medido no ar em 31/07 com a tela aberta e "Novos (0)" parado.
+  // SEM toast global, coerente com o resto do helpdesk: a tela montada se atualiza sozinha e
+  // quem não está nela refaz o GET quando abrir. O payload do evento traz título e solicitante,
+  // mas a fila NÃO monta card com ele — recarrega e deixa o GET ser a verdade (o evento diz
+  // "mudou alguma coisa", não "confie neste dado").
   R.useEffect(function () {
     const h = function () { carregar(false); };
     window.addEventListener('fr:ticket_updated', h);
-    return function () { window.removeEventListener('fr:ticket_updated', h); };
+    window.addEventListener('fr:ticket_created', h);
+    return function () {
+      window.removeEventListener('fr:ticket_updated', h);
+      window.removeEventListener('fr:ticket_created', h);
+    };
   }, [carregar]);
 
   // Prova do filtro server-side na aba de status único: refetch com ?status= e usa o

@@ -67,11 +67,21 @@ function NotifMenu({ t, items, onRead, onReadAll, onClose }) {
   );
 }
 
+// Achata a nav em lista de páginas. Consumido por DUAS coisas: a busca do topbar e o
+// frBootActivePage (restauração no F5).
+//
+// CORREÇÃO 31/07/2026: a linha do sub-item lia SÓ `it.items`, mas NENHUMA nav do data.jsx
+// usa esse nome — o campo de filho é `children` (Requisição no Estoque, Configurações no
+// NAV_DEV). Resultado: todo item aninhado era invisível pras duas funções, e isso aparecia
+// como dois sintomas que pareciam sem relação — a busca do topbar não achava "Meus Chamados"
+// e o F5 em cima dele caía na home do módulo (o id "não existia" na nav, então o boot
+// descartava a página salva). Aceita os dois nomes: `items` fica como tolerância pra qualquer
+// nav que venha nesse formato, `children` é o que existe hoje.
 function frFlattenNav(nav) {
   const out = [];
   (nav || []).forEach((sec) => (sec.items || []).forEach((it) => {
     out.push({ id: it.id, name: it.name, icon: it.icon, group: sec.label });
-    (it.items || []).forEach((sub) => out.push({ id: sub.id, name: sub.name, icon: sub.icon || it.icon, group: it.name }));
+    (it.items || it.children || []).forEach((sub) => out.push({ id: sub.id, name: sub.name, icon: sub.icon || it.icon, group: it.name }));
   }));
   return out;
 }
@@ -188,7 +198,19 @@ function ERPFrame({ user, initialMod, allowedModules, onLogout, onSwitchModule }
     return () => { mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on); };
   }, []);
 
-  const pickMod = (m) => { setMod(m); setActive(homeOf(m)); frSaveActivePage(m.id, homeOf(m)); setExpanded([]); setDrawer(false); };   // troca de módulo: salva {novo mod, home dele} (não vaza a página do módulo antigo)
+  // Troca de módulo POR DENTRO do app: salva {novo mod, home dele} (não vaza a página do
+  // módulo antigo) E o módulo ativo.
+  // CORREÇÃO 31/07/2026: o fr_active_module NÃO era gravado aqui — só o handleEnter (app.jsx),
+  // que roda no seletor. Quem trocava de módulo pelo switcher da sidebar deixava o par
+  // inconsistente no localStorage (ex.: mod='producaoger' com page={mod:'dev'}), e no F5 o boot
+  // entrava no módulo VELHO e, como o `mod` salvo não batia, ainda descartava a página e ia pra
+  // home — o usuário perdia o lugar duas vezes. As duas chaves passam a ser escritas juntas.
+  const pickMod = (m) => {
+    setMod(m); setActive(homeOf(m));
+    if (window.frSaveActiveModule) window.frSaveActiveModule(m.id);
+    frSaveActivePage(m.id, homeOf(m));
+    setExpanded([]); setDrawer(false);
+  };
   const goActive = (id) => { setActive(id); frSaveActivePage(mod.id, id); if (mobile) setDrawer(false); };   // troca de página: persiste {mod atual, página}
 
   const b = BRANDS[brand];

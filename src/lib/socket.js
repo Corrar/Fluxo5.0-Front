@@ -105,6 +105,16 @@ function connect() {
   s.on('ticket_updated', (data) => {
     try { window.dispatchEvent(new CustomEvent('fr:ticket_updated', { detail: data })); } catch (e) { /* ignora */ }
   });
+
+  // Chamado NOVO (31/07/2026): o backend emite 'ticket_created' pra sala 'admin' — quem
+  // escuta é a FILA do atendente, não o dono. Repasse no MESMO padrão do ticket_updated:
+  // evento de janela, SEM toast global. Quem estiver com a fila montada recarrega; quem não
+  // estiver refaz o GET ao abrir a tela (o dado autoritativo continua sendo o GET).
+  // Evento SEPARADO de propósito — se caísse em 'fr:ticket_updated', a tela Meus Chamados do
+  // dono recarregaria a cada chamado aberto por qualquer pessoa da empresa.
+  s.on('ticket_created', (data) => {
+    try { window.dispatchEvent(new CustomEvent('fr:ticket_created', { detail: data })); } catch (e) { /* ignora */ }
+  });
 }
 
 function disconnect() {
