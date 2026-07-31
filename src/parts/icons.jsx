@@ -1,5 +1,14 @@
 // icons.jsx — simple feather-style stroke icons. currentColor, configurable size.
 const ICON_PATHS = {
+  // ── Redesign (handoff) — ADIÇÃO PURA: nenhum ícone existente foi tocado. ──
+  // checkDouble: leitura/entrega confirmada. wifi/wifiOff: estado de rede do FrNetBanner.
+  // mail/message: canais no redesign do detalhe de chamado. filter: filtros das listas.
+  checkDouble: '<path d="m1.5 12.5 4 4L13 9"/><path d="m11 16.5 1.5 1.5L22 8.5"/>',
+  wifi: '<path d="M2 8.8a16 16 0 0 1 20 0M5 12.5a11 11 0 0 1 14 0M8.5 16a6 6 0 0 1 7 0"/><path d="M12 20h.01"/>',
+  wifiOff: '<path d="m2 2 20 20"/><path d="M8.5 16a6 6 0 0 1 7 0M5 12.5a11 11 0 0 1 4-2.6M2 8.8a16 16 0 0 1 5-3.2M12.5 5a16 16 0 0 1 9.5 3.8M15 10a11 11 0 0 1 4 2.5"/><path d="M12 20h.01"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/>',
+  message: '<path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 4 11.5 8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5Z"/>',
+  filter: '<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>',
   minus: '<path d="M5 12h14"/>',
   kanban: '<rect x="3" y="3" width="7" height="11" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><path d="M14 14h7v7h-7z" opacity=".55"/>',
   zap: '<path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z"/>',

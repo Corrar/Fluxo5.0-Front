@@ -255,7 +255,9 @@ function Sidebar({ theme, setTheme, collapsed, setCollapsed, accent, accentText,
       </div>
 
       {/* Nav */}
-      <div className="fr-scroll" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: collapsed ? '12px 16px' : '12px 16px' }}>
+      {/* fr-noscroll (redesign): a nav rola sem barra visível — no celular a barra cortava a
+          largura útil do drawer e aparecia por cima dos rótulos. */}
+      <div className="fr-noscroll" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: collapsed ? '12px 16px' : '12px 16px' }}>
         {(mod.nav || NAV).map((sec, i) => (
           <div key={sec.label} style={{ marginTop: i === 0 ? 0 : 20 }}>
             {!collapsed

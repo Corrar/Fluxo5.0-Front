@@ -32,38 +32,140 @@ const FR_NOTIFS = [
   { id: 4, icon: 'box', tone: 'gray', titulo: 'Recebimento confirmado', txt: 'Setor Esteira confirmou o recebimento da OP 12010.', time: 'há 3 h' },
 ];
 
-function NotifMenu({ t, items, onRead, onReadAll, onClose }) {
-  const toneFg = { blue: t.accent, amber: '#d97706', green: '#10b981', gray: t.muted };
-  const toneBg = { blue: t.accentSoft, amber: 'rgba(245,158,11,.16)', green: 'rgba(16,185,129,.14)', gray: t.hover };
+// NotifMenu — VISUAL do redesign (handoff), LÓGICA a do repo.
+//
+// Do design entrou o traje: painel largo com sombra funda, cartões arredondados com faixa de
+// cor na borda esquerda, chip do ícone preenchido, vazio ilustrado, e — no celular — folha
+// que sobe pelo rodapé em vez de menu ancorado (o menu de 360px ancorado à direita ficava
+// espremido contra a borda num 390).
+//
+// NÃO entrou o que o design trazia de COMPORTAMENTO NOVO: abas Todas/Não lidas, dispensar
+// item, limpar todas e agrupamento por recência (que o design derivava com regex em cima do
+// texto de `time`). São FEATURES, não pintura — e o contrato desta missão é visual. O painel
+// segue com os mesmos props de antes: { t, items, onRead, onReadAll, onClose } (+ `mobile`,
+// que é responsividade, não comportamento).
+function NotifMenu({ t, items, onRead, onReadAll, onClose, mobile }) {
+  const toneFg = { blue: t.accent, amber: '#d97706', green: '#10b981', red: '#ef4444', gray: t.muted };
+  const unread = items.filter((n) => !n.read).length;
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-      <div style={{ position: 'absolute', top: 52, right: 0, zIndex: 50, width: 360, maxWidth: '92vw', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 16, boxShadow: '0 20px 50px -12px rgba(0,0,0,.32)', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: `1px solid ${t.border}` }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>Notificações</div>
-          <button onClick={onReadAll} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: t.accentText }}>Marcar todas como lidas</button>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40, background: mobile ? 'rgba(6,8,16,.45)' : 'transparent' }} />
+      <div style={{ position: mobile ? 'fixed' : 'absolute', top: mobile ? 'auto' : 52, bottom: mobile ? 0 : 'auto', right: 0, left: mobile ? 0 : 'auto', zIndex: 50,
+        width: mobile ? 'auto' : 460, maxWidth: mobile ? 'none' : '94vw', background: t.panel, border: `1px solid ${t.borderStrong}`,
+        borderRadius: mobile ? '20px 20px 0 0' : 18, boxShadow: '0 24px 60px -14px rgba(0,0,0,.4)', overflow: 'hidden',
+        animation: mobile ? 'frSheetUp .3s cubic-bezier(.22,1.2,.36,1)' : 'frMenuIn .18s ease-out' }}>
+        <style>{`@keyframes frMenuIn{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:none}}@keyframes frSheetUp{from{transform:translateY(100%)}to{transform:none}}`}</style>
+
+        {mobile && <div style={{ display: 'grid', placeItems: 'center', padding: '8px 0 2px' }}><span style={{ width: 40, height: 4, borderRadius: 3, background: t.border }} /></div>}
+
+        <div style={{ padding: mobile ? '10px 18px 12px' : '15px 18px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16, fontWeight: 850, color: t.text, letterSpacing: '-.01em' }}>Notificações</span>
+              {unread > 0 && <span style={{ fontSize: 11, fontWeight: 800, padding: '2px 8px', borderRadius: 999, background: '#ef4444', color: '#fff' }}>{unread}</span>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {unread > 0 && (
+                <button title="Marcar todas como lidas" onClick={onReadAll} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = t.accentText; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="checkDouble" size={17} /></button>
+              )}
+              {mobile && <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={17} /></button>}
+            </div>
+          </div>
         </div>
-        <div className="fr-scroll" style={{ maxHeight: 380, overflowY: 'auto' }}>
-          {items.length === 0
-            ? <div style={{ padding: '40px 20px', textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Nenhuma notificação.</div>
-            : items.map((n, i) => (
-              <button key={n.id} onClick={() => onRead(n.id)} style={{ all: 'unset', cursor: 'pointer', boxSizing: 'border-box', width: '100%', display: 'flex', gap: 12, padding: '13px 16px', borderBottom: i < items.length - 1 ? `1px solid ${t.border}` : 'none', borderLeft: (n.highlight && !n.read) ? '3px solid #ef4444' : '3px solid transparent', background: (n.highlight && !n.read) ? frHexToRgba('#ef4444', 0.07) : n.read ? 'transparent' : frHexToRgba(t.accent, 0.05), transition: 'background .12s' }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = (n.highlight && !n.read) ? frHexToRgba('#ef4444', 0.07) : n.read ? 'transparent' : frHexToRgba(t.accent, 0.05); }}>
-                <span style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'grid', placeItems: 'center', background: toneBg[n.tone], color: toneFg[n.tone] }}><Icon name={n.icon} size={18} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <span style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{n.titulo}</span>
-                    {n.highlight && !n.read && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '.04em', padding: '2px 6px', borderRadius: 6, background: '#ef4444', color: '#fff' }}>NOVA</span>}
-                    {!n.read && !n.highlight && <span style={{ width: 7, height: 7, borderRadius: '50%', background: t.accent, flexShrink: 0 }} />}
-                  </div>
-                  <div style={{ fontSize: 12.5, color: t.muted, marginTop: 2, textWrap: 'pretty' }}>{n.txt}</div>
-                  <div style={{ fontSize: 11, color: t.faint, marginTop: 4 }}>{n.time}</div>
-                </div>
-              </button>
-            ))}
+
+        <div className="fr-scroll" style={{ maxHeight: mobile ? '58vh' : 400, overflowY: 'auto', padding: '0 10px 10px' }}>
+          {items.length === 0 ? (
+            <div style={{ padding: '44px 20px', textAlign: 'center' }}>
+              <span style={{ width: 52, height: 52, borderRadius: 15, margin: '0 auto 14px', display: 'grid', placeItems: 'center', background: t.elevated, color: t.faint }}><Icon name="bell" size={24} /></span>
+              <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>Nenhuma notificação</div>
+              <div style={{ fontSize: 12.5, color: t.muted, marginTop: 4 }}>As novidades do sistema aparecerão aqui.</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {items.map((n) => {
+                const cor = toneFg[n.tone] || t.muted;
+                const base = frHexToRgba(cor, n.read ? 0.05 : 0.1);
+                return (
+                  <button key={n.id} onClick={() => onRead(n.id)} style={{ all: 'unset', cursor: 'pointer', boxSizing: 'border-box', width: '100%', display: 'flex', gap: 12, padding: '13px 14px 13px 15px', borderRadius: 13, background: base, border: `1px solid ${frHexToRgba(cor, n.read ? 0.18 : 0.35)}`, borderLeftWidth: 4, borderLeftColor: cor, opacity: n.read ? 0.75 : 1, transition: 'background .14s' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = frHexToRgba(cor, 0.16); }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = base; }}>
+                    <span style={{ width: 40, height: 40, borderRadius: 11, flexShrink: 0, display: 'grid', placeItems: 'center', background: cor, color: '#fff' }}><Icon name={n.icon} size={19} /></span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        {!n.read && <span style={{ width: 7, height: 7, borderRadius: '50%', background: cor, flexShrink: 0 }} />}
+                        <span style={{ fontSize: 13.5, fontWeight: 800, color: t.text, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.titulo}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: t.faint, flexShrink: 0 }}>{n.time}</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, color: t.muted, marginTop: 3, textWrap: 'pretty', lineHeight: 1.45 }}>{n.txt}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </>
+  );
+}
+
+// FrNotifToast — VISUAL do redesign, SEM USO nesta fase.
+// O componente entra agora porque o traje é da fase de fundação; os GATILHOS são decisão
+// travada da fase 3c (ticket_created pro admin, ticket_updated pro requester — os dois eventos
+// de socket que JÁ existem). Enquanto ninguém o monta, ele não custa nada e não inventa nada.
+function FrNotifToast({ t, item, onOpen }) {
+  const [phase, setPhase] = useStateF('in');   // in → open → out
+  React.useEffect(() => {
+    const a = setTimeout(() => setPhase('open'), 420);
+    const b = setTimeout(() => setPhase('out'), 4200);
+    return () => { clearTimeout(a); clearTimeout(b); };
+  }, [item.id]);
+  const toneFg = { blue: t.accent, amber: '#d97706', green: '#10b981', red: '#ef4444', gray: t.muted };
+  const toneBg = { blue: t.accentSoft, amber: 'rgba(245,158,11,.16)', green: 'rgba(16,185,129,.14)', red: 'rgba(239,68,68,.14)', gray: t.hover };
+  const hidden = phase === 'in' || phase === 'out';
+  return (
+    <div onClick={onOpen} style={{ position: 'fixed', top: 12, left: '50%', zIndex: 200, width: 'min(420px, calc(100vw - 24px))', cursor: 'pointer',
+      transform: `translateX(-50%) translateY(${hidden ? '-130%' : '0'}) scale(${hidden ? 0.94 : 1})`,
+      opacity: hidden ? 0 : 1, transition: 'transform .42s cubic-bezier(.22,1.2,.36,1), opacity .3s ease' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 15px', borderRadius: 18, background: t.panel, border: `1px solid ${t.borderStrong}`, boxShadow: '0 18px 44px -12px rgba(0,0,0,.42)', backdropFilter: 'blur(8px)' }}>
+        <span style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: 'grid', placeItems: 'center', background: toneBg[item.tone] || t.hover, color: toneFg[item.tone] || t.muted }}><Icon name={item.icon} size={19} /></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.titulo}</div>
+          <div style={{ fontSize: 12.5, color: t.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.txt}</div>
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 700, color: t.faint, flexShrink: 0 }}>agora</span>
+      </div>
+    </div>
+  );
+}
+
+// FrNetBanner — faixa de status da conexão. Visual do redesign, TEXTO NOSSO.
+//
+// O TEXTO DO DESIGN FOI RECUSADO, e isso é decisão, não descuido: ele prometia "as alterações
+// serão sincronizadas ao reconectar". O Fluxo NÃO tem outbox — medimos em 31/07 que evento
+// emitido durante a queda é PERDIDO (sem replay, sem fila). Prometer sincronização que não
+// existe faria o usuário confiar num trabalho que o sistema vai jogar fora. O texto honesto
+// diz o que ele pode fazer: verificar a rede.
+//
+// A FONTE também é outra: o design lia navigator.onLine + navigator.connection (rtt/downlink)
+// e inventava um estado "instável". Aqui quem manda é o SOCKET REAL (window.FRSocket) — é ele
+// que carrega o tempo real do helpdesk, e é a queda dele que o usuário precisa saber.
+//
+// 'unstable' fica INALCANÇÁVEL de propósito: nosso socket é binário (conectado/desconectado) e
+// não existe medição de "instável" no sistema. O ramo segue no código porque a decisão travada
+// prevê "Reconectando…" quando houver fonte (as tentativas de reconexão do socket.io) — e essa
+// ligação é da fase 3c, não desta.
+function FrNetBanner({ t, state }) {
+  if (state === 'online') return null;
+  const off = state === 'offline';
+  const bg = off ? '#dc2626' : '#d97706';
+  return (
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '7px 14px', background: bg, color: '#fff', fontSize: 12.5, fontWeight: 700, boxShadow: '0 6px 18px -6px rgba(0,0,0,.4)', animation: 'frNetIn .34s cubic-bezier(.22,1.2,.36,1)' }}>
+      <Icon name={off ? 'wifiOff' : 'wifi'} size={15} style={{ animation: off ? 'none' : 'frNetPulse 1.4s ease-in-out infinite' }} />
+      {off ? 'Sem conexão — verifique a rede' : 'Reconectando…'}
+    </div>
   );
 }
 
@@ -117,6 +219,30 @@ function Topbar({ t, brand, setBrand, mod, setActive, mobile, onMenu }) {
     window.addEventListener('fr-notify', onNotify);
     return () => window.removeEventListener('fr-notify', onNotify);
   }, []);
+
+  // Estado da conexão — FONTE: o socket real (window.FRSocket), não navigator.onLine.
+  // O navegador pode estar "online" com o servidor fora do ar; quem diz se o tempo real está
+  // de pé é o socket, que é justamente o que cai. Binário de propósito (ver FrNetBanner).
+  //
+  // A CARÊNCIA de 2s não é enfeite: logo após o login o socket ainda está subindo, e mostrar
+  // "Sem conexão" nesse instante seria uma afirmação falsa na cara do usuário. O banner só
+  // aparece se a desconexão PERSISTIR — reconexão rápida não pisca aviso nenhum.
+  const [netOff, setNetOff] = useStateF(false);
+  React.useEffect(() => {
+    const S = window.FRSocket;
+    if (!S || typeof S.subscribe !== 'function') return undefined;
+    let timer = null;
+    const aplicar = (conectado) => {
+      clearTimeout(timer);
+      if (conectado) { setNetOff(false); return; }
+      timer = setTimeout(() => setNetOff(true), 2000);
+    };
+    aplicar(!!S.isConnected);
+    const desinscrever = S.subscribe((snap) => aplicar(!!(snap && snap.isConnected)));
+    return () => { clearTimeout(timer); if (typeof desinscrever === 'function') desinscrever(); };
+  }, []);
+  const net = netOff ? 'offline' : 'online';
+
   const unread = notifs.filter((n) => !n.read).length;
   const readOne = (id) => setNotifs((xs) => xs.map((n) => n.id === id ? { ...n, read: true } : n));
   const readAll = () => setNotifs((xs) => xs.map((n) => ({ ...n, read: true })));
@@ -160,7 +286,10 @@ function Topbar({ t, brand, setBrand, mod, setActive, mobile, onMenu }) {
         )}
       </div>
       <div style={{ position: 'relative', flexShrink: 0 }}>
-        <style>{`@keyframes frPing{0%{transform:scale(1);opacity:.55}70%,100%{transform:scale(2.4);opacity:0}}@keyframes frBellShake{0%,100%{transform:rotate(0)}20%{transform:rotate(-16deg)}40%{transform:rotate(12deg)}60%{transform:rotate(-8deg)}80%{transform:rotate(4deg)}}@keyframes frBellPulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}100%{box-shadow:0 0 0 14px rgba(239,68,68,0)}}`}</style>
+        {/* frNetIn/frNetPulse chegam AQUI (e não no index.html) porque é assim que o handoff
+            os entrega: inline, junto do sino. Mantido no lugar de origem pra ninguém procurá-los
+            na folha global e não achar. */}
+        <style>{`@keyframes frPing{0%{transform:scale(1);opacity:.55}70%,100%{transform:scale(2.4);opacity:0}}@keyframes frNetIn{from{transform:translateY(-100%)}to{transform:translateY(0)}}@keyframes frNetPulse{0%,100%{opacity:1}50%{opacity:.35}}@keyframes frBellShake{0%,100%{transform:rotate(0)}20%{transform:rotate(-16deg)}40%{transform:rotate(12deg)}60%{transform:rotate(-8deg)}80%{transform:rotate(4deg)}}@keyframes frBellPulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}100%{box-shadow:0 0 0 14px rgba(239,68,68,0)}}`}</style>
         <button title="Notificações" onClick={() => setOpen((v) => !v)} style={{ all: 'unset', cursor: 'pointer', position: 'relative', width: 44, height: 44, borderRadius: 13, background: flash ? frHexToRgba('#ef4444', 0.14) : open ? t.hover : t.elevated, border: `1px solid ${flash ? '#ef4444' : open ? t.borderStrong : t.border}`, display: 'grid', placeItems: 'center', color: flash ? '#ef4444' : t.text, transition: 'background .14s, border-color .14s, color .14s', animation: flash ? 'frBellPulse 1.4s ease-out 2' : 'none' }}
           onMouseEnter={(e) => { if (!flash) { e.currentTarget.style.background = t.hover; e.currentTarget.style.borderColor = t.borderStrong; } }}
           onMouseLeave={(e) => { if (!open && !flash) { e.currentTarget.style.background = t.elevated; e.currentTarget.style.borderColor = t.border; } }}>
@@ -170,8 +299,14 @@ function Topbar({ t, brand, setBrand, mod, setActive, mobile, onMenu }) {
             <span style={{ position: 'absolute', top: -2, right: -2, width: 9, height: 9, borderRadius: '50%', background: '#ef4444', animation: 'frPing 1.8s cubic-bezier(0,0,.2,1) infinite' }} />
           </>}
         </button>
-        {open && <NotifMenu t={t} items={notifs} onRead={readOne} onReadAll={readAll} onClose={() => setOpen(false)} />}
+        {open && <NotifMenu t={t} items={notifs} onRead={readOne} onReadAll={readAll} onClose={() => setOpen(false)} mobile={mobile} />}
+        {/* Ponto de status no canto do sino: o aviso discreto que fica mesmo depois de o
+            usuário fechar/ignorar a faixa do topo. */}
+        {net !== 'online' && (
+          <span title="Sem conexão" style={{ position: 'absolute', bottom: -3, right: -3, width: 14, height: 14, borderRadius: '50%', background: '#dc2626', border: `2px solid ${t.panel}`, display: 'grid', placeItems: 'center' }} />
+        )}
       </div>
+      <FrNetBanner t={t} state={net} />
     </div>
   );
 }

@@ -25,6 +25,47 @@
   .fr-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
   .fr-scroll::-webkit-scrollbar-thumb { background: rgba(128,128,128,.28); border-radius: 8px; }
   .fr-scroll::-webkit-scrollbar-track { background: transparent; }
+  /* Rolagem sem barra visível — usado na nav da sidebar (redesign). */
+  .fr-noscroll { scrollbar-width: none; -ms-overflow-style: none; }
+  .fr-noscroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+  @keyframes frTripUp { from { transform: translateY(100%); } to { transform: none; } }
+  @keyframes frTripFade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ====================================================================
+     RESPONSIVIDADE GLOBAL (tablet/celular) — origem: handoff do redesign
+     ("Sidebar Fluxo Royale.html"), copiado sem alteração de regra.
+
+     ESTRATÉGIA, e por que ela é assim: as telas do Fluxo são escritas com
+     ESTILO INLINE (herança do protótipo), então não existe classe pra
+     ancorar a media query. A saída é SELETOR DE ATRIBUTO sobre o próprio
+     inline — `[style*="auto-fill"]` alcança toda grade de cards sem tocar
+     em nenhuma das ~40 telas. É cirurgia de fora pra dentro: nenhuma tela
+     precisa saber que virou responsiva.
+
+     O `!important` é obrigatório aqui e não é preguiça: estilo inline tem
+     especificidade maior que qualquer regra de folha, e sem ele a media
+     query não venceria o atributo que ela está corrigindo.
+     ==================================================================== */
+  @media (max-width: 720px) {
+    /* grades de cards (auto-fill/auto-fit com minmax fixo) nunca estouram a tela */
+    [style*="auto-fill"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr)) !important; }
+    [style*="auto-fit"] { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)) !important; }
+    /* inputs de busca com largura fixa passam a ocupar a linha */
+    input[style*="width: 340px"], input[style*="width: 300px"], input[style*="width: 210px"], input[style*="width: 200px"] { width: 100% !important; max-width: 100% !important; }
+    /* imagens e vídeos nunca ultrapassam o contêiner */
+    img, video { max-width: 100%; }
+    /* tipografia de heros gigantes reduz um passo */
+    h1[style*="font-size: 34px"], h2[style*="font-size: 34px"], h2[style*="font-size: 32px"] { font-size: 26px !important; }
+    h2[style*="font-size: 30px"] { font-size: 24px !important; }
+  }
+  @media (max-width: 480px) {
+    /* pares de campos lado a lado empilham no celular */
+    [style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: 1fr !important; }
+    [style*="grid-template-columns: 1.4fr 1fr"] { grid-template-columns: 1fr !important; }
+  }
+  @media (pointer: coarse) {
+    button { touch-action: manipulation; }
+  }
   @keyframes fr-pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
   @keyframes fr-spin { to { transform: rotate(360deg); } }
   .fr-spin { animation: fr-spin .7s linear infinite; display: inline-block; }

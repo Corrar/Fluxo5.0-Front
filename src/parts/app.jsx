@@ -121,8 +121,11 @@ function App() {
     setUser(null); setStartMod(null); setScreen('login');
   };
 
+  // Rolagem VERTICAL liberada só no login e no seletor (redesign): num celular baixo esses dois
+  // cortavam conteúdo sem deixar rolar. O ERP segue travado — quem rola lá dentro é o painel de
+  // conteúdo, e soltar aqui criaria duas barras concorrendo.
   return (
-    <div style={{ height: '100vh', width: '100vw', overflow: 'hidden' }}>
+    <div style={{ height: '100vh', width: '100vw', overflowX: 'hidden', overflowY: (screen === 'login' || screen === 'selector') ? 'auto' : 'hidden', WebkitOverflowScrolling: 'touch' }}>
       {screen === 'intro' && <IntroScreen onDone={() => setScreen('login')} />}
       {screen === 'login' && <LoginScreen onLogin={handleLogin} />}
       {screen === 'selector' && <ModuleSelector user={user} onEnter={handleEnter} onLogout={handleLogout} />}
