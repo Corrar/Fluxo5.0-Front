@@ -119,9 +119,25 @@ function DevPainelReal({ t }) {
   const antigo = fila.mais_antigo_dias === null || fila.mais_antigo_dias === undefined
     ? '—' : (fila.mais_antigo_dias === 0 ? 'hoje' : `${fila.mais_antigo_dias} d`);
 
+  // HERO do redesign — só o traje. A saudação sai do relógio local e o nome do perfil REAL
+  // (FRAuth.profile.name, não o window.USER do mock). A linha de baixo repete números que já
+  // vieram do /dev-dashboard: nenhum número novo nasce aqui. As "orientações diárias", os
+  // atalhos p/ dev-area/dev-custos e os KPIs cravados do desenho ficaram de fora — sem fonte.
+  const dpHoraAgora = new Date().getHours();
+  const dpSaudacao = dpHoraAgora < 12 ? 'Bom dia' : dpHoraAgora < 18 ? 'Boa tarde' : 'Boa noite';
+  const dpNome = (((window.FRAuth && window.FRAuth.profile && window.FRAuth.profile.name) || '').trim().split(' ')[0]) || 'Dev';
+
   return (
     <div>
       {cabecalho}
+
+      <div style={{ borderRadius: 22, padding: '26px 28px', marginBottom: 18, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadow }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.14em', textTransform: 'uppercase', color: t.accentText, marginBottom: 8 }}>Painel do desenvolvedor</div>
+        <h2 style={{ margin: 0, fontSize: 30, fontWeight: 850, letterSpacing: '-.03em', color: t.text, lineHeight: 1.1 }}>{dpSaudacao}, {dpNome}</h2>
+        <p style={{ margin: '8px 0 0', fontSize: 13.5, color: t.muted }}>
+          {fila.fila_total || 0} na fila · {fila.em_desenvolvimento || 0} em desenvolvimento · {fila.sem_atendente || 0} sem atendente.
+        </p>
+      </div>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
         <KPI t={t} icon="file" label="Na fila" value={fila.fila_total || 0} kind="accent"
@@ -333,10 +349,32 @@ function DevChamadosReal({ t }) {
   };
   const tabs = [['novos', 'Novos'], ['dev', 'Em desenvolvimento'], ['feitos', 'Concluídos']];
   const view = tab === 'dev' && viewDev !== null ? viewDev : groups[tab];
+  // KPIs do hero — só o que sai do MESMO GET que monta a fila, nada estimado.
+  const ativosN = groups.novos.length + groups.dev.length;
+  const urgentesN = groups.novos.concat(groups.dev).filter(function (x) { return x.priority === 'alta'; }).length;
 
   return (
     <div>
       <PageHeader t={t} title="Chamados" subtitle="Fila única de suporte — todos os chamados abertos pelos setores, direto do banco." />
+
+      {/* HERO do redesign — traje. O subtítulo do desenho ("ordenados por prioridade real: SLA,
+          urgência e tempo") foi RECUSADO: não existe score nem SLA no nosso contrato e a ordem é
+          a do GET. Dos 5 KPIs do desenho sobraram 2: "aguardando user" não tem status no backend,
+          "fechados (7d)" era fechados.length + 10 (número inflado no mock) e "SLA 92%" é cravado. */}
+      <div style={{ borderRadius: 22, padding: '24px 26px', marginBottom: 18, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadow }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.14em', textTransform: 'uppercase', color: t.accentText, marginBottom: 8 }}>Fila de suporte</div>
+        <h2 style={{ margin: 0, fontSize: 28, fontWeight: 850, letterSpacing: '-.03em', color: t.text, lineHeight: 1.1 }}>Chamados do time</h2>
+        <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginTop: 16 }}>
+          {[['ABERTOS', ativosN, t.text], ['URGENTES', urgentesN, urgentesN > 0 ? uiTone(t, 'red').fg : t.text]].map(function (kv) {
+            return (
+              <div key={kv[0]}>
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.08em', color: t.faint }}>{kv[0]}</div>
+                <div style={{ fontSize: 26, fontWeight: 850, color: kv[2], letterSpacing: '-.02em', marginTop: 2 }}>{kv[1]}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
       {loading ? (
         <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando a fila…</Card>
       ) : error ? (
@@ -346,41 +384,51 @@ function DevChamadosReal({ t }) {
         </Card>
       ) : (
         <React.Fragment>
-          <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 22 }}>
+          {/* chips do redesign (pílula sólida no ativo) — mesmo estado `tab`, mesmos contadores */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
             {tabs.map(function ([k, label]) {
               const on = tab === k;
               return (
-                <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : t.muted }}>{label} <span style={{ opacity: .6, fontWeight: 800 }}>({groups[k].length})</span></button>
+                <button key={k} onClick={() => setTab(k)} style={{ all: 'unset', cursor: 'pointer', height: 38, padding: '0 16px', borderRadius: 999, fontSize: 12.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', background: on ? t.text : t.panel, color: on ? t.panel : t.muted, border: `1px solid ${on ? t.text : t.border}`, transition: 'all .14s' }}>{label} ({groups[k].length})</button>
               );
             })}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 16 }}>
-            {view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhum chamado neste grupo." /></Card></div>}
-            {view.map(function (c) {
+          {/* LISTA EM LINHAS (traje do redesign) — as colunas `score`, `tag` e `extra` do desenho
+              não entraram: não existem no contrato /tickets. Cada campo abaixo vem do MESMO GET
+              que a grade de cards usava; o wiring (setAberto) é o mesmo. */}
+          <Card t={t} style={{ padding: 0, overflow: 'hidden' }}>
+            {view.length === 0 && <div style={{ padding: 10 }}><EmptyState t={t} title="Nada por aqui" sub="Nenhum chamado neste grupo." /></div>}
+            {view.map(function (c, i) {
               const st = Tk.TK_STATUS[c.status] || Tk.TK_STATUS.aberto;
               const prio = Tk.TK_PRIO[c.priority] || [c.priority, 'gray'];
               return (
-                <Card t={t} key={c.id} hover style={{ padding: 16, cursor: 'pointer' }}>
-                  <div onClick={() => setAberto(c.id)}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ fontFamily: 'monospace', fontSize: 11.5, fontWeight: 800, color: t.muted }}>TI-{c.display_no}</span><Badge t={t} kind={prio[1]} dot>{prio[0]}</Badge></div>
+                <div key={c.id} onClick={() => setAberto(c.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', cursor: 'pointer', flexWrap: 'wrap', borderTop: i ? `1px solid ${t.border}` : 'none', transition: 'background .14s' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                  <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 850, color: t.muted }}>TI-{c.display_no}</span>
+                      <Badge t={t} kind={prio[1]} dot>{prio[0]}</Badge>
                       <Badge t={t} kind={st.kind} dot>{st.label}</Badge>
                     </div>
-                    <div style={{ fontSize: 15.5, fontWeight: 800, color: t.text, margin: '11px 0 10px', lineHeight: 1.3 }}>{c.title}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                      <span style={{ width: 28, height: 28, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 10.5 }}>{String(c.requester_name || '?').split(' ').map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase()}</span>
-                      <span style={{ fontSize: 12, color: t.muted }}>{c.requester_name} · {c.requester_sector}</span>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: t.text, marginTop: 8, letterSpacing: '-.01em' }}>{c.title}</div>
+                    <div style={{ fontSize: 12.5, color: t.muted, marginTop: 4 }}>
+                      {c.requester_name} · {c.requester_sector}{c.assignee_name ? ` · atendente: ${c.assignee_name}` : ''}
                     </div>
-                    {c.assignee_name && <div style={{ fontSize: 11.5, color: t.faint, marginTop: 8 }}>Atendente: {c.assignee_name}</div>}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 13, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
-                    <span style={{ fontSize: 11.5, color: t.faint }}>{Tk.tkQuando(c.created_at)}</span>
-                    <button onClick={() => setAberto(c.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, background: t.accentSoft }}>Abrir <Icon name="chevronRight" size={14} /></button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0, marginLeft: 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                      <span style={{ width: 34, height: 34, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 850, fontSize: 11.5 }}>{String(c.requester_name || '?').split(' ').map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase()}</span>
+                      <span style={{ fontSize: 11.5, color: t.faint, whiteSpace: 'nowrap' }}>{Tk.tkQuando(c.created_at)}</span>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); setAberto(c.id); }} style={{ all: 'unset', cursor: 'pointer', height: 40, padding: '0 18px', borderRadius: 999, fontSize: 13, fontWeight: 800, color: t.text, background: t.panel, border: `1px solid ${t.borderStrong}`, display: 'inline-flex', alignItems: 'center', gap: 7 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; }}>Abrir <Icon name="chevronRight" size={14} /></button>
                   </div>
-                </Card>
+                </div>
               );
             })}
-          </div>
+          </Card>
         </React.Fragment>
       )}
       {aberto && <Detail t={t} ticketId={aberto} atendente={true} onClose={() => setAberto(null)} onChanged={() => carregar(false)} />}
