@@ -111,10 +111,21 @@ function NotifMenu({ t, items, onRead, onReadAll, onClose, mobile }) {
   );
 }
 
-// FrNotifToast — VISUAL do redesign, SEM USO nesta fase.
-// O componente entra agora porque o traje é da fase de fundação; os GATILHOS são decisão
-// travada da fase 3c (ticket_created pro admin, ticket_updated pro requester — os dois eventos
-// de socket que JÁ existem). Enquanto ninguém o monta, ele não custa nada e não inventa nada.
+// FrNotifToast — o traje entrou na fundação e AGORA É MONTADO (fase 3b-nova).
+//
+// O ENCANAMENTO É UM ADAPTADOR, NÃO UMA VIA NOVA. O barramento já existia e já estava vivo:
+// `dvNotify` (conferencia.jsx, aba Devoluções) dispara o CustomEvent 'fr-notify' desde sempre,
+// e o Topbar (logo abaixo) escuta e empilha no sino. O que faltava era ALGUÉM MOSTRAR o toast.
+// Então window.frNotify NÃO cria um canal paralelo: publica no MESMO evento.
+//
+// A CONSEQUÊNCIA DISSO É INTENCIONAL E PRECISA SER DITA: o sino continua recebendo tudo que
+// já recebia (inclusive as devoluções), porque nada no barramento mudou. O TOAST, esse sim,
+// só aparece para quem chamar window.frNotify — as ações locais da Área Dev e do Custos.
+// Devoluções NÃO ganha toast por efeito colateral: ela dispara o evento direto, sem passar
+// por aqui, e o FrNotifHost só exibe o que vier com a marca `toast: true`.
+//
+// ZERO GATILHOS DE SOCKET nesta fase. ticket_created/ticket_updated continuam sendo decisão
+// travada da 3c — quando ela vier, é plugar dois listeners no carteiro que já existe.
 function FrNotifToast({ t, item, onOpen }) {
   const [phase, setPhase] = useStateF('in');   // in → open → out
   React.useEffect(() => {
@@ -139,6 +150,49 @@ function FrNotifToast({ t, item, onOpen }) {
       </div>
     </div>
   );
+}
+
+// FrNotifHost — a FILA do toast: 1 visível por vez, os próximos esperam.
+//
+// Por que fila e não "renderiza todos": a animação do FrNotifToast é in → open → out em 4,2s
+// e ele é `position: fixed` no mesmo ponto. Dois ao mesmo tempo se empilhariam no pixel e o
+// segundo comeria o primeiro. Fila mantém a promessa que o componente já fazia sozinho.
+//
+// Só exibe item com `toast: true`. É esse campo que separa "publicar no barramento" (o que a
+// aba Devoluções faz há tempo, e que só alimenta o sino) de "pedir um toast" (o que as duas
+// páginas novas fazem via window.frNotify).
+function FrNotifHost({ t }) {
+  const [fila, setFila] = useStateF([]);
+  React.useEffect(() => {
+    const onNotify = (e) => {
+      const d = e.detail || {};
+      if (!d.toast) return;                 // sino sim, toast não — ver o cabeçalho acima
+      setFila((xs) => [...xs, { ...d, id: d.id || ('t' + Date.now() + Math.round(performance.now())) }]);
+    };
+    window.addEventListener('fr-notify', onNotify);
+    return () => window.removeEventListener('fr-notify', onNotify);
+  }, []);
+
+  // O tempo de vida é do HOST, não do toast: o componente anima sozinho, mas quem decide
+  // quando o próximo entra é a fila. 4,6s = os 4,2s da animação + a folga da saída.
+  React.useEffect(() => {
+    if (fila.length === 0) return undefined;
+    const id = setTimeout(() => setFila((xs) => xs.slice(1)), 4600);
+    return () => clearTimeout(id);
+  }, [fila]);
+
+  if (fila.length === 0) return null;
+  const atual = fila[0];
+  return <FrNotifToast t={t} item={atual} onOpen={() => { if (atual.onOpen) atual.onOpen(); setFila((xs) => xs.slice(1)); }} />;
+}
+
+// window.frNotify — a porta de entrada das telas. Publica no MESMO barramento 'fr-notify' que
+// o sino já escuta, marcando `toast: true` para que o FrNotifHost também mostre.
+// Assinatura: { icon, tone, titulo, txt, onOpen? }.
+if (typeof window !== 'undefined') {
+  window.frNotify = function (item) {
+    window.dispatchEvent(new CustomEvent('fr-notify', { detail: { ...(item || {}), toast: true } }));
+  };
 }
 
 // FrNetBanner — faixa de status da conexão. Visual do redesign, TEXTO NOSSO.
@@ -373,6 +427,9 @@ function ERPFrame({ user, initialMod, allowedModules, onLogout, onSwitchModule }
           {renderPage(active, { t, theme, brand: b, mod, setActive: goActive })}
         </div>
       </div>
+      {/* Fila do toast — global, fora do scroll da página: um toast não desaparece porque o
+          usuário rolou. Só mostra o que vier marcado `toast: true` (ver FrNotifHost). */}
+      <FrNotifHost t={t} />
     </div>
   );
 }

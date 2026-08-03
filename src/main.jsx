@@ -47,7 +47,9 @@ import './parts/devolucao.jsx';      // Devolução por OP
 
 // --- outros módulos ---
 import './parts/producao3d.jsx';     // Produção 3D
-import './parts/dev.jsx';            // Desenvolvedor (chamados, projetos, painel, chat)
+import './parts/dev.jsx';            // Desenvolvedor (painel, chamados, projetos, repos)
+import './parts/areadev.jsx';        // Área Dev (agenda, tarefas, notas, snippets) — migration 019
+import './parts/devcustos.jsx';      // Custos & Serviços — migration 019
 import './parts/producaoger.jsx';    // Produção (armazém, apontamento)
 import './parts/montagem.jsx';       // Montagem de Máquinas
 import './parts/recebimento.jsx';    // Recebimento (Produção)

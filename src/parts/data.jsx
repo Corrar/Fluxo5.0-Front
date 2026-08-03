@@ -129,9 +129,23 @@ const NAV_DEV = [
     label: 'Desenvolvimento',
     items: [
       { id: 'dev-painel',    name: 'Painel', icon: 'barChart2' },
+      // SEM badge de contagem: o número teria que vir de um GET que o NAV não faz, e um badge
+      // chumbado é a mentira mais barata de todas. A contagem real vive no painel e na fila.
       { id: 'dev-chamados',  name: 'Chamados', icon: 'file' },
-      { id: 'dev-chat',      name: 'Chat', icon: 'bell' },
-      { id: 'dev-projetos',  name: 'Projetos', icon: 'kanban' },
+      // Área Dev e Custos & Serviços (migration 019 + Fase 4): as duas últimas telas do módulo
+      // deixaram de ser mock cadeado e ganharam banco. Gate nas próprias telas por
+      // canAccess('dev_area') / canAccess('dev_custos').
+      { id: 'dev-area',      name: 'Área Dev', icon: 'calendar' },
+      { id: 'dev-custos',    name: 'Custos & Serviços', icon: 'wallet' },
+      // dev-chat MORREU DE VEZ (decisão do Bruno, 01/08/2026): era mock cadeado sem backend
+      // nenhum, e o helpdesk (Chamados + Meus Chamados) já cobre a conversa com o dev. Item,
+      // mock e cadeado removidos inteiros — não há o que reativar.
+      //
+      // dev-projetos SEM PORTA DE MENU por decisão de NAV 01/08/2026 — a rota real e a
+      // migration 013 continuam DORMENTES e intactas: /dev-projects responde, DevProjetos
+      // segue montável pelo renderPage, e reativar é UMA LINHA (devolver o item aqui).
+      // Não é remoção: é fechar a porta sem demolir o cômodo.
+      //
       // dev-repos v1 (migration 018): espelho dos commits do GitHub + relatório por período.
       // Gate na própria tela por canAccess('dev_repos'), padrão das irmãs.
       { id: 'dev-repos',     name: 'Repositórios', icon: 'terminal' },
@@ -328,7 +342,13 @@ const FR_LOCKED_MODULE_PREFIXES = ['rh-', 'cp-', 'dev-', 'at-', 'fin-'];
 // frIsLocked ANTES de despachar pro renderPageDev, então sem a exceção o padrão do módulo
 // cairia no <EmDesenvolvimento> e o DevPainel real nunca montaria.
 // dev-repos: tela real desde a migration 018 (gate por canAccess('dev_repos') na própria tela).
-const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos', 'dev-painel', 'dev-repos']);
+// dev-area e dev-custos: telas reais desde a migration 019 (gate por canAccess('dev_area') e
+// canAccess('dev_custos') nas próprias telas).
+// dev-projetos CONTINUA na lista mesmo tendo perdido o item de menu: a rota é DORMENTE, não
+// morta — sem a exceção, quem chegasse por localStorage antigo ou busca cairia no cadeado em
+// vez da tela real que existe e responde.
+// 'dev-chat' NÃO está aqui e nunca mais estará: a feature foi removida inteira em 01/08.
+const FR_LOCKED_PREFIX_EXCECOES = new Set(['dev-chamados', 'dev-projetos', 'dev-painel', 'dev-repos', 'dev-area', 'dev-custos']);
 function frIsLocked(id) {
   if (!id) return false;
   if (FR_LOCKED_PREFIX_EXCECOES.has(id)) return false;

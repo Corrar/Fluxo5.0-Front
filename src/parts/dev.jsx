@@ -283,7 +283,8 @@ function DevPainel({ t }) {
 // O MOCK MORREU: DV_CHAMADOS_SEED, DV_STATUS/DV_STEPS (substituídos pelos mapas reais de
 // window.FRTk), o chat fake do detalhe, o DevTrabalhos (órfão, nunca roteado) e o
 // "Meus Scripts" (anotação particular sem relação com tickets — morre com o mock; se fizer
-// falta, volta como feature própria). dev-chat segue MOCK CADEADO (tempo real é v2).
+// falta, volta como feature própria). O dev-chat, que aqui ainda era "mock cadeado", MORREU
+// DE VEZ em 01/08 — ver a lápide mais abaixo neste arquivo.
 //
 // Gate canAccess('chamados') padrão da casa (tela interna nem monta). NOTA v1: a page_key
 // 'chamados' não está concedida a NENHUM papel — o atendente de hoje é o admin (bypass).
@@ -457,118 +458,13 @@ function DevChamados({ t }) {
   return <DevChamadosReal t={t} />;
 }
 
-// ---------- Chat centralizado ----------
-function DevChat({ t, chamados, setChamados }) {
-  const base = chamados.filter((c) => c.chat.length > 0 || c.status !== 'concluido');
-  const lastTs = (c) => c.chat.reduce((m, x) => Math.max(m, x.ts || 0), 0);
-  const convs = [...base].sort((a, b) => lastTs(b) - lastTs(a));
-  const [sel, setSel] = useStateDV(convs[0] ? convs[0].id : null);
-  const [msg, setMsg] = useStateDV('');
-  const [rec, setRec] = useStateDV(0);
-  const [lightbox, setLightbox] = useStateDV(null);
-  const cur = chamados.find((c) => c.id === sel);
-  const unread = (c) => c.chat.filter((m) => m.de === 'user' && m.unread).length;
-  const markRead = (id) => setChamados((xs) => xs.map((x) => (x.id === id ? { ...x, chat: x.chat.map((m) => (m.unread ? { ...m, unread: false } : m)) } : x)));
-  const openConv = (id) => { setSel(id); markRead(id); };
-  const push = (m) => setChamados((xs) => xs.map((x) => (x.id === cur.id ? { ...x, chat: [...x.chat, { de: 'dev', h: 'agora', ts: Date.now(), ...m }] } : x)));
-  const send = () => { if (!msg.trim() || !cur) return; push({ txt: msg.trim() }); setMsg(''); };
-  const onFile = (file) => { if (!file || !cur) return; const img = (file.type || '').indexOf('image') === 0; const r = new FileReader(); r.onload = () => push({ kind: 'file', nome: file.name, tipo: file.type, url: r.result, img }); r.readAsDataURL(file); };
-  const openFile = (m) => { if (m.img) setLightbox(m.url); else { const a = document.createElement('a'); a.href = m.url; a.download = m.nome || 'arquivo'; a.target = '_blank'; a.click(); } };
-  React.useEffect(() => { if (!rec) return; const id = setInterval(() => setRec((s) => s + 1), 1000); return () => clearInterval(id); }, [rec]);
-  const stopRec = (sendIt) => { if (sendIt && rec > 0) push({ kind: 'audio', dur: rec }); setRec(0); };
-  const fmtDur = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-  const last = (c) => { const m = c.chat[c.chat.length - 1]; if (!m) return 'Sem mensagens'; return m.kind === 'audio' ? '🎤 Áudio' : m.kind === 'file' ? (m.img ? '📷 Imagem' : '📎 Arquivo') : m.txt; };
+// ---------- dev-chat: MORREU DE VEZ (decisão do Bruno, 01/08/2026) ----------
+// O DevChat era mock cadeado: uma tela de conversa alimentada por estado local que nunca teve
+// backend. O helpdesk real cobre o que ele prometia — o solicitante fala em Meus Chamados, o
+// atendente responde na fila, e a timeline do TicketDetail É a conversa, persistida no banco.
+// Removido INTEIRO (item de menu, componente e cadeado): não é rota dormente como o
+// dev-projetos — é feature que não existe mais. Se o chat voltar um dia, nasce com backend.
 
-  return (
-    <div>
-      <PageHeader t={t} title="Chat" subtitle="Responda todas as conversas dos chamados em um só lugar." />
-      <Card t={t} style={{ padding: 0, overflow: 'hidden', display: 'flex', height: 'min(640px, 74vh)' }}>
-        {/* conversation list */}
-        <div className="fr-scroll" style={{ width: 290, flexShrink: 0, borderRight: `1px solid ${t.border}`, overflowY: 'auto' }}>
-          {convs.map((c) => { const on = sel === c.id; const u = unread(c); return (
-            <button key={c.id} onClick={() => openConv(c.id)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', gap: 11, padding: '13px 16px', borderBottom: `1px solid ${t.border}`, background: on ? t.accentSoft : 'transparent' }}>
-              <span style={{ width: 40, height: 40, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 12.5, flexShrink: 0 }}>{c.solicitante.split(' ').map((x) => x[0]).slice(0, 2).join('')}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 13.5, fontWeight: u ? 800 : 700, color: t.text, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.solicitante}</span>
-                  {u > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: uiTone(t, 'green').fg, color: '#fff', fontSize: 10.5, fontWeight: 800, display: 'grid', placeItems: 'center' }}>{u}</span><span style={{ width: 9, height: 9, borderRadius: '50%', background: uiTone(t, 'green').fg }} /></span>}</div>
-                <div style={{ fontSize: 11.5, color: u ? t.text : t.muted, fontWeight: u ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 }}>{last(c)}</div>
-                <div style={{ fontSize: 10, color: t.faint, marginTop: 2, fontFamily: 'monospace' }}>{c.id} · {c.titulo}</div>
-              </div>
-            </button>
-          ); })}
-        </div>
-        {/* messages */}
-        {cur ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <div style={{ padding: '14px 18px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 11 }}>
-              <span style={{ width: 38, height: 38, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 13 }}>{cur.solicitante.split(' ').map((x) => x[0]).slice(0, 2).join('')}</span>
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{cur.solicitante}</div><div style={{ fontSize: 11.5, color: t.muted }}>{cur.setor} · online</div></div>
-            </div>
-            <div className="fr-scroll" style={{ flex: 1, overflowY: 'auto', padding: 18, display: 'flex', flexDirection: 'column', gap: 10, background: t.elevated }}>
-              {cur.chat.length === 0 && <div style={{ fontSize: 13, color: t.faint, textAlign: 'center', marginTop: 20 }}>Inicie a conversa.</div>}
-              {cur.chat.map((m, i) => { const mine = m.de === 'dev'; const refC = m.ref && chamados.find((x) => x.id === m.ref); return (
-                <div key={i} style={{ display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
-                  <div style={{ maxWidth: '76%' }}>
-                    <div style={{ padding: m.kind === 'file' && m.img ? 4 : '8px 11px', borderRadius: 14, borderBottomRightRadius: mine ? 4 : 14, borderBottomLeftRadius: mine ? 14 : 4, background: mine ? t.accent : t.panel, color: mine ? '#fff' : t.text, fontSize: 13.5, lineHeight: 1.45, boxShadow: '0 1px 2px rgba(0,0,0,.08)' }}>
-                      {/* chamado reference */}
-                      {refC && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', borderRadius: 9, marginBottom: 7, background: mine ? 'rgba(255,255,255,.18)' : t.elevated, borderLeft: `3px solid ${mine ? '#fff' : uiTone(t, refC.prioridade[1]).fg}` }}>
-                          <Icon name="file" size={14} style={{ color: mine ? '#fff' : t.accentText, flexShrink: 0 }} />
-                          <div style={{ minWidth: 0 }}><div style={{ fontSize: 10.5, fontWeight: 800, fontFamily: 'monospace', color: mine ? '#fff' : t.accentText }}>{refC.id}</div><div style={{ fontSize: 11, color: mine ? 'rgba(255,255,255,.85)' : t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{refC.titulo}</div></div>
-                        </div>
-                      )}
-                      {m.kind === 'audio' ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 170 }}>
-                          <span style={{ width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: mine ? 'rgba(255,255,255,.22)' : t.accentSoft, color: mine ? '#fff' : t.accentText }}><Icon name="play" size={15} /></span>
-                          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 2 }}>{[6, 12, 8, 16, 10, 14, 7, 13, 9, 5, 11, 8].map((h, k) => <span key={k} style={{ width: 2.5, height: h, borderRadius: 2, background: mine ? 'rgba(255,255,255,.7)' : t.accentText }} />)}</div>
-                          <span style={{ fontSize: 11, fontWeight: 600, color: mine ? 'rgba(255,255,255,.9)' : t.muted }}>{fmtDur(m.dur)}</span>
-                        </div>
-                      ) : m.kind === 'file' ? (
-                        m.img ? <img src={m.url} alt={m.nome} onClick={() => openFile(m)} style={{ display: 'block', maxWidth: 220, borderRadius: 11, cursor: 'pointer' }} />
-                          : <button onClick={() => openFile(m)} style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, padding: '4px 4px 4px 0', minWidth: 160 }}><span style={{ width: 36, height: 36, borderRadius: 9, display: 'grid', placeItems: 'center', flexShrink: 0, background: mine ? 'rgba(255,255,255,.2)' : t.accentSoft, color: mine ? '#fff' : t.accentText }}><Icon name="file" size={18} /></span><span style={{ minWidth: 0 }}><span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.nome}</span><span style={{ fontSize: 10.5, opacity: .75, textDecoration: 'underline' }}>Abrir arquivo</span></span></button>
-                      ) : m.txt}
-                    </div>
-                    <div style={{ fontSize: 10, color: t.faint, marginTop: 3, textAlign: mine ? 'right' : 'left' }}>{mine ? 'Você' : cur.solicitante} · {m.h}</div>
-                  </div>
-                </div>
-              ); })}
-            </div>
-            {/* input bar */}
-            <div style={{ padding: 12, borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 9 }}>
-              {rec > 0 ? (
-                <React.Fragment>
-                  <button onClick={() => stopRec(false)} title="Cancelar" style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', color: uiTone(t, 'red').fg, border: `1px solid ${t.border}` }}><Icon name="trash" size={18} /></button>
-                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, height: 44, padding: '0 16px', borderRadius: 12, background: uiTone(t, 'red').bg }}>
-                    <span style={{ width: 9, height: 9, borderRadius: '50%', background: uiTone(t, 'red').fg, animation: 'frPing 1.4s ease-in-out infinite' }} />
-                    <span style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Gravando… {fmtDur(rec)}</span>
-                  </div>
-                  <button onClick={() => stopRec(true)} title="Enviar áudio" style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: t.accent, color: '#fff', flexShrink: 0 }}><Icon name="send" size={18} /></button>
-                </React.Fragment>
-              ) : (
-                <React.Fragment>
-                  <label title="Anexar arquivo" style={{ cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', color: t.muted, border: `1px solid ${t.border}`, flexShrink: 0 }}>
-                    <input type="file" style={{ display: 'none' }} onChange={(e) => onFile(e.target.files[0])} />
-                    <Icon name="paperclip" size={18} />
-                  </label>
-                  <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} placeholder="Escreva uma mensagem…" style={{ flex: 1, minWidth: 0, height: 44, borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
-                  {msg.trim()
-                    ? <button onClick={send} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: t.accent, color: '#fff', flexShrink: 0 }}><Icon name="send" size={18} /></button>
-                    : <button onClick={() => setRec(1)} title="Gravar áudio" style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', background: t.accent, color: '#fff', flexShrink: 0 }}><Icon name="mic" size={18} /></button>}
-                </React.Fragment>
-              )}
-            </div>
-          </div>
-        ) : <div style={{ flex: 1, display: 'grid', placeItems: 'center', color: t.muted, fontSize: 13 }}>Selecione uma conversa.</div>}
-      </Card>
-      {lightbox && (
-        <div onClick={() => setLightbox(null)} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(8,10,16,.85)', display: 'grid', placeItems: 'center', padding: 30 }}>
-          <img src={lightbox} alt="" style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,.5)' }} />
-          <button onClick={() => setLightbox(null)} style={{ all: 'unset', cursor: 'pointer', position: 'fixed', top: 24, right: 28, width: 42, height: 42, borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.15)', color: '#fff' }}><Icon name="x" size={22} /></button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ---------- Projetos (REAL — dev-projetos v1) ----------
 // LIGAÇÃO REAL: GET /dev-projects (?status=ativo|arquivado, envelope {projects,total}),
@@ -1545,15 +1441,15 @@ function DevRepos({ t }) {
 
 function DevModule(props) {
   const t = frTokens(props.theme, DV_ACCENT, DV_ACCENT_T);
-  // O seed de chamados MORREU com a fila real. Sobrou o dev-chat (mock, inalcançável pelo
-  // cadeado de prefixo), que recebe lista vazia até o tempo real nascer. O Painel NÃO usa
-  // mais este estado — ele lê GET /dev-dashboard direto do banco.
-  const [chamados, setChamados] = useStateDV([]);
-  const p = { ...props, t, chamados, setChamados };
+  const p = { ...props, t };
   if (props.active === 'dev-chamados') return <DevChamados {...p} />;
-  if (props.active === 'dev-chat') return <DevChat {...p} />;
+  // dev-projetos continua ROTEADO de propósito: perdeu a porta do menu (decisão de NAV
+  // 01/08), mas a rota e a migration 013 seguem vivas. Quem chegar por localStorage antigo,
+  // busca do topbar ou link direto encontra a tela funcionando — dormente não é morto.
   if (props.active === 'dev-projetos') return <DevProjetos {...p} />;
   if (props.active === 'dev-repos') return <DevRepos {...p} />;
+  if (props.active === 'dev-area') return <DevAreaDev {...p} />;
+  if (props.active === 'dev-custos') return <DevCustos {...p} />;
   return <DevPainel {...p} />;
 }
 
