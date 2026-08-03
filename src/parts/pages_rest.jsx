@@ -1252,7 +1252,8 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
 
 function TripDetail({ t, trip, busy, onClose, onConfronto }) {
   const [tab, setTab] = useStateR('levados');
-  const tripMobile = typeof window !== 'undefined' && window.innerWidth <= 640;
+  // reativo: o hook da Fase 1 responde ao resize (o window.innerWidth solto congelava no primeiro render)
+  const { mobile: tripMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: typeof window !== 'undefined' && window.innerWidth <= 640 });
   const stageInfo = TRIP_STAGES.find((s) => s.key === trip.stage);
   const chegou = trip.done;
   const av = (n) => n.split(' ').map((x) => x[0]).slice(0, 2).join('');
@@ -1266,10 +1267,28 @@ function TripDetail({ t, trip, busy, onClose, onConfronto }) {
     );
   };
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(840px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-        <div style={{ position: 'relative', padding: '22px 24px', background: `linear-gradient(135deg, ${t.accent}, ${frHexToRgba(t.accent, 0.7)})`, color: '#fff' }}>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 16, right: 18, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.18)', color: '#fff' }}><Icon name="x" size={16} /></button>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: tripMobile ? 'flex' : 'grid', flexDirection: tripMobile ? 'column' : undefined, justifyContent: tripMobile ? 'flex-end' : undefined, placeItems: tripMobile ? undefined : 'center', padding: tripMobile ? 0 : 20, animation: tripMobile ? 'frTripFade .2s ease-out' : 'none' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: tripMobile ? '100%' : 'min(840px,96vw)', boxSizing: 'border-box', maxHeight: '92vh', flex: tripMobile ? '0 0 auto' : undefined, display: 'flex', flexDirection: 'column', background: t.panel, border: tripMobile ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: tripMobile ? '24px 24px 0 0' : 20, boxShadow: t.shadow, overflow: 'hidden', animation: tripMobile ? 'frTripUp .34s cubic-bezier(.22,1,.36,1)' : 'none', transition: tripMobile ? 'transform .18s ease-out' : 'none' }}>
+        <style>{`@keyframes frTripUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frTripFade{from{opacity:0}to{opacity:1}}`}</style>
+        {tripMobile && (
+          <div style={{ flexShrink: 0, background: t.accent, padding: '12px 0 8px', cursor: 'grab', touchAction: 'none' }}
+            onPointerDown={(e) => {
+              const sheet = e.currentTarget.parentElement; const startY = e.clientY; let dy = 0;
+              sheet.style.transition = 'none';
+              const move = (ev) => { dy = Math.max(0, ev.clientY - startY); sheet.style.transform = `translateY(${dy}px)`; };
+              const up = () => {
+                window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+                sheet.style.transition = 'transform .22s ease-out';
+                if (dy > 110) { sheet.style.transform = 'translateY(100%)'; setTimeout(onClose, 200); }
+                else sheet.style.transform = '';
+              };
+              window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+            }}>
+            <div style={{ width: 48, height: 5, borderRadius: 3, background: 'rgba(255,255,255,.45)', margin: '0 auto' }} />
+          </div>
+        )}
+        <div style={{ position: 'relative', padding: tripMobile ? '14px 24px 22px' : '22px 24px', background: tripMobile ? t.accent : `linear-gradient(135deg, ${t.accent}, ${frHexToRgba(t.accent, 0.7)})`, color: '#fff' }}>
+          {!tripMobile && <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 16, right: 18, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.18)', color: '#fff' }}><Icon name="x" size={16} /></button>}
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)', marginBottom: 12 }}><Icon name={stageInfo.icon} size={13} /> {stageInfo.label}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 19, fontWeight: 850, letterSpacing: '-.01em', flexWrap: 'wrap' }}>
             <Icon name="mapPin" size={17} style={{ opacity: .8 }} /> {trip.destino}
@@ -1356,6 +1375,7 @@ function TripDetail({ t, trip, busy, onClose, onConfronto }) {
 // não existe cadastro de técnicos no backend (technicians é VARCHAR na viagem); o roster sugerido
 // vem dos nomes das viagens já existentes, nunca de nomes inventados.
 function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }) {
+  const { mobile: saMob } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
   const [destino, setDestino] = useStateR('');
   const [team, setTeam] = useStateR([]);
   const [roster, setRoster] = useStateR(rosterSeed || []);
@@ -1375,12 +1395,33 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
   const lab = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 };
 
   return (
-    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(820px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
+    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: saMob ? 'flex' : 'grid', flexDirection: saMob ? 'column' : undefined, justifyContent: saMob ? 'flex-end' : undefined, placeItems: saMob ? undefined : 'center', padding: saMob ? 0 : 20, animation: saMob ? 'frTripFade .2s ease-out' : 'none' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: saMob ? '100%' : 'min(820px,96vw)', boxSizing: 'border-box', maxHeight: '92vh', flex: saMob ? '0 0 auto' : undefined, display: 'flex', flexDirection: 'column', background: t.panel, border: saMob ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: saMob ? '24px 24px 0 0' : 20, boxShadow: t.shadow, overflow: 'hidden', animation: saMob ? 'frTripUp .34s cubic-bezier(.22,1,.36,1)' : 'none', transition: saMob ? 'transform .18s ease-out' : 'none' }}>
+        {/* keyframes repetidos de propósito: no desenho eles moram só no TripDetail, e a saída
+            abre SEM viagem aberta — sem esta cópia a folha entraria seca no mobile. */}
+        <style>{`@keyframes frTripUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frTripFade{from{opacity:0}to{opacity:1}}`}</style>
+        {saMob && (
+          <div style={{ flexShrink: 0, background: t.panel, padding: '12px 0 8px', cursor: 'grab', touchAction: 'none' }}
+            onPointerDown={(e) => {
+              if (salvando) return;   // gravando: a folha não sai de baixo do dedo
+              const sheet = e.currentTarget.parentElement; const startY = e.clientY; let dy = 0;
+              sheet.style.transition = 'none';
+              const move = (ev) => { dy = Math.max(0, ev.clientY - startY); sheet.style.transform = `translateY(${dy}px)`; };
+              const up = () => {
+                window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+                sheet.style.transition = 'transform .22s ease-out';
+                if (dy > 110) { sheet.style.transform = 'translateY(100%)'; setTimeout(onClose, 200); }
+                else sheet.style.transform = '';
+              };
+              window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+            }}>
+            <div style={{ width: 48, height: 5, borderRadius: 3, background: t.borderStrong, margin: '0 auto' }} />
+          </div>
+        )}
+        <div style={{ padding: saMob ? '8px 20px 14px' : '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
           <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="out" size={20} /></span>
           <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Registrar saída</div><div style={{ fontSize: 12.5, color: t.muted }}>Defina a viagem e o material que vai a campo — o estoque fica reservado até o confronto.</div></div>
-          <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+          {!saMob && <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>}
         </div>
 
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
@@ -1415,7 +1456,9 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
             {q && <button onClick={() => setQ('')} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 24, height: 24, borderRadius: 6, color: t.muted }}><Icon name="x" size={15} /></button>}
           </label>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
+          {/* FIX AVULSO (furo pré-existente, provado contra o HEAD): em 390 as duas colunas fixas davam
+              ~60px de texto e a linha do SKU quebrava em 4; o desenho empilha no mobile e isso resolve. */}
+          <div style={{ display: 'grid', gridTemplateColumns: saMob ? '1fr' : '1fr 1fr', gap: 18, alignItems: 'start' }}>
             {/* catálogo inline */}
             <div>
               <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Catálogo</div>
@@ -1456,10 +1499,10 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
         </div>
 
         {erro && <div style={{ padding: '10px 24px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ padding: saMob ? '12px 20px calc(14px + env(safe-area-inset-bottom))' : '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: t.muted }}>{itens.length} {itens.length === 1 ? 'item' : 'itens'} · levado <b style={{ color: t.text }}>{fmtBRL(levado)}</b></div>
           <button onClick={() => valid && onSave({ technicians: team.join(', '), city: destino.trim(), items: itens.map((it) => ({ product_id: it.product_id, quantity: it.levou })) })} disabled={!valid}
-            style={{ all: 'unset', boxSizing: 'border-box', cursor: valid ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 13, fontSize: 14, fontWeight: 800, background: valid ? t.accent : t.elevated, color: valid ? t.onAccent : t.faint, boxShadow: valid ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none' }}>
+            style={{ all: 'unset', boxSizing: 'border-box', cursor: valid ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 13, fontSize: 14, fontWeight: 800, background: valid ? t.accent : t.elevated, color: valid ? t.onAccent : t.faint, boxShadow: valid ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', width: saMob ? '100%' : 'auto' }}>
             <Icon name="out" size={18} /> {salvando ? 'Registrando…' : 'Registrar saída'}
           </button>
         </div>
