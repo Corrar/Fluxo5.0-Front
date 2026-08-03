@@ -134,6 +134,7 @@ function useFRConferencia() {
 }
 
 function ConferenciaEnvioTab({ t, setActive }) {
+  const { mobile: cfMob } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
   const { items: solic, loading, error, reload } = useFRConferencia();
   const [enviando, setEnviando] = useStateCf(false);
   const [enviandoEnvio, setEnviandoEnvio] = useStateCf(null);   // id da solicitação em ENVIO (conferido→entregue), separado do 'enviando' da conferência
@@ -339,19 +340,21 @@ function ConferenciaEnvioTab({ t, setActive }) {
       <div onClick={focusInput} style={{ position: 'relative', overflow: 'hidden', borderRadius: 16, padding: 18, marginBottom: 16, cursor: 'text',
         background: `linear-gradient(135deg, #0f1230, #1a1f4d)`, border: `1px solid ${t.border}` }}>
         <div style={{ position: 'absolute', inset: 0, opacity: .5, background: 'linear-gradient(90deg, transparent, rgba(99,160,255,.18), transparent)', width: '40%', animation: 'cfbeam 2.6s linear infinite' }} />
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span style={{ width: 50, height: 50, borderRadius: 13, background: 'rgba(99,160,255,.16)', display: 'grid', placeItems: 'center', flexShrink: 0, color: '#9cc0ff' }}>
-            <Icon name="barcode" size={26} />
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: cfMob ? 10 : 14, flexWrap: cfMob ? 'wrap' : 'nowrap' }}>
+          <span style={{ width: cfMob ? 42 : 50, height: cfMob ? 42 : 50, borderRadius: 13, background: 'rgba(99,160,255,.16)', display: 'grid', placeItems: 'center', flexShrink: 0, color: '#9cc0ff' }}>
+            <Icon name="barcode" size={cfMob ? 21 : 26} />
           </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 180 }}>
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,.55)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 7 }}>
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 0 3px rgba(52,211,153,.25)' }} /> Leitor Elgin conectado · pronto
             </div>
+            {/* SÓ PINTURA: o contrato de bipagem (ref/onChange/onKeyDown/submitScan/autoComplete)
+                não muda. O 16px no mobile é o limiar que evita o auto-zoom do iOS ao focar. */}
             <input ref={inputRef} value={scanVal} onChange={(e) => setScanVal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitScan(); }}
               placeholder="Bipe a etiqueta com o leitor Elgin (ou digite o código)…" autoComplete="off" spellCheck={false}
-              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: 22, fontWeight: 700, fontFamily: 'ui-monospace, monospace', letterSpacing: '.04em' }} />
+              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#fff', fontSize: cfMob ? 16 : 22, fontWeight: 700, fontFamily: 'ui-monospace, monospace', letterSpacing: '.04em' }} />
           </div>
-          <button onClick={(e) => { e.stopPropagation(); submitScan(); }} style={{ all: 'unset', cursor: 'pointer', flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 11, fontWeight: 800, fontSize: 14, color: '#0f1230', background: '#9cc0ff' }}>
+          <button onClick={(e) => { e.stopPropagation(); submitScan(); }} style={{ all: 'unset', cursor: 'pointer', flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 11, fontWeight: 800, fontSize: 14, color: '#0f1230', background: '#9cc0ff', width: cfMob ? '100%' : 'auto', boxSizing: 'border-box' }}>
             <Icon name="check" size={17} /> Conferir
           </button>
         </div>
@@ -385,7 +388,7 @@ function ConferenciaEnvioTab({ t, setActive }) {
                 <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>{act.req} <span style={{ fontWeight: 600, color: t.muted, fontSize: 13 }}>· {act.sol} · OP {act.op}</span></div>
               </div>
               <div style={{ fontSize: 13, fontWeight: 800, color: ready ? '#10b981' : t.text }}>{ok}/{tot} itens</div>
-              <button onClick={() => concluir(act)} disabled={!ready} style={{ all: 'unset', boxSizing: 'border-box', cursor: ready ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 11, fontSize: 13.5, fontWeight: 800, background: ready ? '#10b981' : t.hover, color: ready ? '#fff' : t.faint, boxShadow: ready ? '0 6px 16px rgba(16,185,129,.3)' : 'none' }}>
+              <button onClick={() => concluir(act)} disabled={!ready} style={{ all: 'unset', boxSizing: 'border-box', cursor: ready ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 11, fontSize: 13.5, fontWeight: 800, background: ready ? '#10b981' : t.hover, color: ready ? '#fff' : t.faint, boxShadow: ready ? '0 6px 16px rgba(16,185,129,.3)' : 'none', width: cfMob ? 'calc(100% - 52px)' : 'auto' }}>
                 <Icon name="truck" size={16} /> Confirmar conferência
               </button>
               <button onClick={() => setActiveId(null)} title="Trocar solicitação" style={{ all: 'unset', cursor: 'pointer', width: 42, height: 42, borderRadius: 11, display: 'grid', placeItems: 'center', color: t.muted, border: `1px solid ${t.border}` }}><Icon name="x" size={16} /></button>
@@ -396,14 +399,19 @@ function ConferenciaEnvioTab({ t, setActive }) {
       })()}
 
       {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+      {/* minmax(0,1fr) e não o 'repeat(2, 1fr)' cru do desenho: com 1fr o mínimo é min-content e os
+          nossos rótulos ("Ordens pendentes") estouravam a coluna em 390 — medido 190px de coluna
+          num container de 353. Mesmo padrão do grid principal logo abaixo. */}
+      <div style={{ display: 'grid', gridTemplateColumns: cfMob ? 'repeat(2, minmax(0,1fr))' : 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
         <KPI t={t} icon="box" label="Itens a enviar" value={String(totalItens - bipados)} />
         <KPI t={t} icon="check" label="Bipados" value={String(bipados)} tone="green" />
         <KPI t={t} icon="truck" label="Ordens prontas" value={String(prontas)} tone="blue" />
         <KPI t={t} icon="clipboard" label="Ordens pendentes" value={String(pend.length)} tone="amber" />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.05fr) minmax(0,.95fr)', gap: 16, alignItems: 'start' }}>
+      {/* mesmo motivo do grid dos KPIs: o '1fr' cru do desenho tem mínimo = min-content e o cartão
+          "Itens da solicitação" abria a coluna em 452px dentro de 353 (43 elementos fora da tela). */}
+      <div style={{ display: 'grid', gridTemplateColumns: cfMob ? 'minmax(0,1fr)' : 'minmax(0,1.05fr) minmax(0,.95fr)', gap: 16, alignItems: 'start' }}>
         {/* Left — itens da solicitação ativa (destaque) + feed */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {(() => {
@@ -550,7 +558,7 @@ function ConferenciaEnvioTab({ t, setActive }) {
                     </div>
                   </div>
                   <div style={{ height: 4, background: t.subtle }}><div style={{ height: '100%', width: pct + '%', background: ready ? '#10b981' : CF_ACCENT, transition: 'width .3s' }} /></div>
-                  <div style={{ display: 'flex', gap: 8, padding: '11px 16px', borderTop: `1px solid ${t.border}` }}>
+                  <div style={{ display: 'flex', gap: 8, padding: '11px 16px', borderTop: `1px solid ${t.border}`, flexWrap: 'wrap' }}>
                     <Btn t={t} variant="ghost" icon="barcode" onClick={() => setLabelsId(o.id)}>Etiquetas</Btn>
                     <button disabled={!ready || enviando} onClick={() => concluir(o)} style={{ all: 'unset', marginLeft: 'auto', cursor: (ready && !enviando) ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 16px', borderRadius: 10, fontWeight: 800, fontSize: 13.5, color: '#fff', background: ready ? '#10b981' : t.faint, opacity: (ready && !enviando) ? 1 : .55 }}>
                       <Icon name="truck" size={16} /> {enviando ? 'Concluindo…' : 'Concluir conferência'}
@@ -811,7 +819,7 @@ function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
                 </div>
               </div>
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Pré-visualização</div>
-              <div style={{ margin: '0 auto', width: 300, background: '#fff', borderRadius: 8, padding: 8 }}>
+              <div style={{ margin: '0 auto', width: 300, maxWidth: '100%', boxSizing: 'border-box', background: '#fff', borderRadius: 8, padding: 8 }}>
                 <div style={{ border: '1px solid #222', borderRadius: 6, padding: '12px 14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <img src={window.__asset ? window.__asset('assets/logo-royale.png') : 'assets/logo-royale.png'} alt="" style={{ width: 15, height: 15, objectFit: 'contain' }} onError={(e) => (e.target.style.display = 'none')} />
