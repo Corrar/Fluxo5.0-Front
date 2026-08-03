@@ -1223,6 +1223,12 @@ function PageRelatorios({ t }) {
           <Btn t={t} icon="download" onClick={exportar}>Exportar CSV</Btn>
         </>} />
 
+      {/* PAINEL BI (Fase 3a) — os 5 cards agregados no servidor, com filtro de período PRÓPRIO.
+          Fica ACIMA do extrato de propósito: é a leitura gerencial, e o extrato é o detalhe de
+          quem já sabe o que procurar. Não substitui nada — os 4 KPIs abaixo, o período do
+          extrato e o CSV continuam exatamente como estavam. */}
+      {window.RelatoriosBI ? <window.RelatoriosBI t={t} /> : null}
+
       {/* período — alimenta o /reports/general */}
       <Card t={t} style={{ padding: '14px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <Icon name="calendar" size={17} style={{ color: t.accentText }} />
