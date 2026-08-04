@@ -25,12 +25,10 @@ function BrandToggle({ t, brand, setBrand }) {
   );
 }
 
-const FR_NOTIFS = [
-  { id: 1, icon: 'truck', tone: 'blue', titulo: 'Separação enviada', txt: 'OP 73001 · Granja Paraíso saiu para entrega.', time: 'há 5 min' },
-  { id: 2, icon: 'alert', tone: 'amber', titulo: 'Estoque baixo', txt: 'Tinta Epóxi Cinza 3,6L · 7 un. restantes.', time: 'há 22 min' },
-  { id: 3, icon: 'clipboard', tone: 'green', titulo: 'Nova solicitação', txt: 'William Souza solicitou materiais p/ OP 88210.', time: 'há 1 h' },
-  { id: 4, icon: 'box', tone: 'gray', titulo: 'Recebimento confirmado', txt: 'Setor Esteira confirmou o recebimento da OP 12010.', time: 'há 3 h' },
-];
+// FR_NOTIFS MORREU (04/08/2026): número sem query atrás — os 4 avisos inventados do handoff
+// faziam o sino nascer em 4 para TODO usuário, e o seed ainda se contradizia sozinho (a OP 73001
+// era da "Granja Paraíso" aqui e do cliente DERLI JOSE em pages_clientes.jsx:30). O sino nasce
+// VAZIO e só enche com evento real do barramento 'fr-notify'.
 
 // NotifMenu — VISUAL do redesign (handoff), LÓGICA a do repo.
 //
@@ -259,7 +257,7 @@ function frBootActivePage(startMod, home) {
 }
 
 function Topbar({ t, brand, setBrand, mod, setActive, mobile, onMenu }) {
-  const [notifs, setNotifs] = useStateF(FR_NOTIFS.map((n) => ({ ...n, read: false })));
+  const [notifs, setNotifs] = useStateF([]);   // nasce vazio — ver a lápide do FR_NOTIFS no topo
   const [open, setOpen] = useStateF(false);
   const [q, setQ] = useStateF('');
   const [sOpen, setSOpen] = useStateF(false);
