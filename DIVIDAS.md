@@ -134,3 +134,24 @@ a missão do redesign, que não tocou nenhuma das duas. O arquivo entrou no diff
 (o helpdesk mora nele).
 **Prioridade**: baixa — sai quando o Quadro de Tarefas for atacado de verdade, que é quando as
 dívidas de `tasks` do backend (guard de OP fantasma, `completed` inexistente) também vencem.
+
+## (i) Falha de impressão SILENCIOSA na Entrada
+
+**Causa**: `cfPrintIdentificacao` (`conferencia.jsx:614`) captura a exceção INTERNAMENTE e reporta
+por `notify`. A Entrada por NF (`pages_admin.jsx:180`) e o Reaproveitamento (`pages_admin.jsx:210`)
+passam `onFlash = null`, que vira `function () {}` no-op (`conferencia.jsx:615`). Como o erro é
+engolido lá dentro, o `await` completa normalmente, o `catch` de `handleEntradaImprimir` não vê
+nada, e o fluxo segue para `setDone(true)`.
+
+**Consequência operacional**: com o agente fora do ar ou a impressora desligada, **nenhuma
+etiqueta sai E a tela confirma sucesso**. A mercadoria vai para a prateleira sem identificação e
+o erro só aparece na contagem seguinte — quando ninguém mais liga o sumiço à impressão daquele
+dia. É a pior forma de falhar: silenciosa, com confirmação positiva por cima.
+
+**Não ocorre na Conferência**, que passa `onFlash` real e mostra até a contagem parcial
+("Impressão falhou (3/7): … Browser Print rodando e a ZD220 ligada?").
+
+**Conserto**: a Entrada precisa do MESMO retorno de erro visível da Conferência — o tratamento já
+existe e está provado, falta ligá-lo nos dois call sites.
+**Escopo**: pequeno — dois call sites, sem mudança de contrato.
+**Prioridade**: ALTA. Escopo pequeno não é o critério aqui; é caminho crítico de operação.
