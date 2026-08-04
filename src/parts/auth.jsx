@@ -121,10 +121,8 @@ function LoginScreen({ onLogin }) {
         {/* Footer */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12.5, color: '#9ca3af' }}>
           <span>© {new Date().getFullYear()} Fluxo Royale</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-            <span style={{ fontWeight: 600, color: '#6b7280' }}>Contato</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600, color: '#6b7280' }}>Português <Icon name="chevronDown" size={13} /></span>
-          </div>
+          {/* rodapé: seletor de idioma removido — sem i18n no projeto */}
+          <span style={{ fontWeight: 600, color: '#6b7280' }}>Contato</span>
         </div>
 
       </div>
