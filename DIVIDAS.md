@@ -16,9 +16,27 @@ papel some da UI das DUAS abas (Exceções inclusa) e só volta por SQL. Risco c
 
 Registrado em 28/07/2026 (aprovação do commit 2 da tela Permissões).
 
-## Rodapé com USER mock pós-F5 (cosmética pré-existente)
+## (f) Identidade exibida ≠ identidade que age
 
-`syncGlobalUser` (app.jsx) roda em `useEffect` pós-render e MUTA o objeto `USER` global sem
-disparar re-render — num F5 logado, o rodapé do ERPFrame renderiza uma vez com o mock
-("Bruno / ADMIN") e fica assim até o próximo re-render natural. Pré-existente à tela de
-Permissões; observada durante o smoke de 28/07/2026.
+UMA CLASSE, DOIS CASOS. O nome que a tela mostra pode divergir de quem a sessão realmente é —
+e quem age é a sessão. Reclassificada em 04/08/2026: **não é cosmética**. Num terminal
+compartilhado o operador confia no nome que está na tela e atribui a ação a quem está escrito.
+
+**Caso 1 — localStorage por origem.** O token vive por ORIGEM, não por aba: um segundo login
+sobrescreve o token de todas as abas de `localhost:5173`. A aba antiga continua exibindo o
+usuário antigo (estado React já montado) e AGE como o novo (o interceptor manda o token novo).
+Nenhum aviso, nenhuma tela muda.
+
+**Caso 2 — rodapé com USER mock pós-F5.** `sidebar.jsx:289-292` lê o global `USER`
+(`data.jsx:77` = `{ name: 'Bruno', role: 'ADMIN' }`); `syncGlobalUser` (`app.jsx:14`) MUTA esse
+objeto dentro de um `useEffect` — mutação não dispara re-render, e o efeito roda DEPOIS do
+primeiro render. Num F5 direto dentro de um módulo, o rodapé mostra "Bruno / ADMIN" para
+qualquer usuário logado, e fica assim até um re-render natural. Entrando pelo seletor de
+módulos o nome sai certo — por isso passa despercebido.
+Registrado em 28/07/2026 como "cosmética pré-existente" (smoke da tela Permissões); MEDIDO DE
+NOVO na passada 2 da fase 3c em 04/08/2026, com a sessão do 005 íntegra por baixo (token,
+`FRAuth.user`, `FRAuth.profile` e permissões todos 005) — só o texto na tela mentia.
+
+**Conserto da classe inteira**: a identidade exibida vem do token / `FRAuth` por ESTADO React,
+nunca de cópia global mutada. Missão própria, pós-merge, PRIORIDADE ALTA. Consertar só o caso 2
+(trocar a leitura do rodapé) deixa o caso 1 de pé — são a mesma causa vista de dois lados.
