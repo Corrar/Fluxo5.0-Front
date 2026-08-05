@@ -156,6 +156,31 @@ existe e está provado, falta ligá-lo nos dois call sites.
 **Escopo**: pequeno — dois call sites, sem mudança de contrato.
 **Prioridade**: ALTA. Escopo pequeno não é o critério aqui; é caminho crítico de operação.
 
+### STATUS — consertada em `3fc809b`, com COBERTURA PARCIAL
+
+Consertada e no ar em 05/08/2026 (`3fc809b`, confirmado no bundle de
+`https://fluxo-royale50.vercel.app`).
+
+**Medido** no smoke local contra a validação (`ep-summer-wave`), Browser Print comprovadamente
+fora do ar antes E depois de cada entrada (HTTP 000 nas duas leituras, para excluir a janela em
+que o serviço sobe sozinho):
+
+- Falha exibida nos DOIS call sites — entrada por NF e reaproveitamento
+- Contagem parcial `(0/3)` com denominador real, vindo das 3 etiquetas pedidas
+- Aviso sobrevive a 6s — sem o timer de 4s dos toasts da tela
+- Badge âmbar no lugar do verde que dizia "etiquetas enviadas!"
+- Transação preservada: `on_hand` 5→8→11, com `xml_logs`, `xml_items` e `stock_ledger` gravados
+  nos dois casos. Revertido depois por `reverseReceive`, saldo de volta a 5.00
+
+**POR MEDIR — não fingir que está fechado**:
+
+- O caminho de SUCESSO da impressão (nenhuma etiqueta saiu por este código ainda)
+- O botão "Reimprimir etiquetas" funcionando de fato
+
+Nenhum dos dois é testável em máquina sem impressora alcançável: o clique só reproduz a mesma
+falha. **Fecham na máquina com a ZD220.** Até lá, o que está provado é que o erro deixou de ser
+silencioso — não que a reimpressão resolve.
+
 ## (j) Gate de segredo é disciplina, não garantia
 
 **Causa**: não existe script de gate de segredo no `package.json` de NENHUM dos dois repos (o front
@@ -179,6 +204,74 @@ moram `JWT_SECRET` e `DATABASE_URL`, tem mais a perder que o front.
 **Escopo**: pequeno — um script por repo, sem dependência nova.
 **Prioridade**: MÉDIA-ALTA. Barato de fazer, caro de não ter: o preço não é o bug, é a credencial
 queimada e o histórico reescrito.
+
+## (k) `PageEntradaNova` compartilha estado entre as variants NF e Reaproveitamento
+
+**Causa**: "Por NF-e" e "Entrada por Reaproveitamento" são o MESMO componente
+(`PageEntradaNova`, `pages_admin.jsx:87`) com `variant` diferente. Trocar de aba muda a prop, não
+o componente — o React preserva a instância, e com ela `rows`, `done` e `avisoEtiqueta`.
+
+**Consequência**: ao ir de uma aba para a outra, a tela nova aparece com as linhas, o badge e o
+painel de aviso da entrada ANTERIOR. O painel afirma "Entrada registrada, mas a etiqueta NÃO saiu"
+numa tela onde nada foi registrado. Observado no smoke da dívida (i) em 05/08/2026: depois da
+entrada por NF, o Reaproveitamento abriu já mostrando o aviso e o badge âmbar da NF.
+
+**Pré-existente**: já valia para `rows` e `done` desde sempre. O painel novo da (i) não criou o
+problema — tornou visível, porque texto afirmativo mente mais alto que uma lista de linhas.
+
+**Conserto**: forçar remontagem por variant (`key={variant}` no ponto de uso) ou limpar o estado
+num efeito que observe `variant`. A primeira é one-liner e não deixa estado sobrando.
+**Escopo**: pequeno.
+**Prioridade**: MÉDIA. Não corrompe dado — o backend nunca vê esse estado —, mas mente na tela, e
+tela que mente é o que esta lista aprendeu a não tolerar na (i).
+
+## (l) Dois fronts diferentes no ar com nomes parecidos e domínios cruzados no CORS
+
+**Causa**: `https://fluxo-royale.vercel.app` NÃO serve este repositório. O bundle publicado ali é
+React + Tailwind + TSX com biblioteca de toast (`_e.success("Entrada registrada com sucesso!")`,
+`className="absolute inset-0 bg-[url(...)]"`) — é o **`Frontend-5.0-App`**, outra aplicação, com
+um "Reportar Erro" que já carregava os contatos reais do Bruno. Este repo
+(`Corrar/Fluxo5.0-Front`, base com `cfPrintIdentificacao`/`FRApi`) mora em
+`https://fluxo-royale50.vercel.app` (projeto `fluxo-royale5.0`).
+
+### AGRAVANTE — o fallback do CORS autoriza os estranhos e esquece o nosso
+
+Esta é a parte perigosa, e não é cosmética. O fallback de `CORS_ORIGINS`
+(`src/config/cors.ts:17-20`) está assim:
+
+```
+'https://fluxo-royale.vercel.app',      ← NÃO é nosso (Frontend-5.0-App)
+'https://fluxoroyale21.vercel.app',     ← NÃO é nosso
+'https://fluxo-royale.com.br',
+'https://www.fluxo-royale.com.br',
+```
+
+**`https://fluxo-royale50.vercel.app` — o front REAL deste sistema — não está na lista.**
+
+O front só funciona hoje porque a env `CORS_ORIGINS` do Render supre a ausência (o log do boot
+distingue "fonte: fallback" de "fonte: env"). **Se essa env sumir, for reescrita ou vier vazia num
+redeploy, o backend cai para o fallback: o front real perde acesso ao backend — indisponibilidade
+TOTAL, todo request bloqueado pelo navegador — enquanto os dois fronts estranhos seguem
+autorizados.** É uma variável de ambiente de distância.
+
+**Conserto**: `https://fluxo-royale50.vercel.app` entra no fallback; os dois domínios do 2.0 saem,
+se não houver razão para estarem lá.
+**Escopo**: uma linha.
+**Prioridade**: MÉDIA-ALTA — uma linha que evita indisponibilidade total do front.
+
+### Consequência do lado humano
+
+Em go-live alguém vai abrir o app errado, testar, e reportar bug fantasma — ou pior, achar que um
+conserto não subiu porque olhou no domínio vizinho. Aconteceu nesta sessão em 05/08/2026: a
+confirmação do deploy do `3fc809b` foi buscada em `fluxo-royale.vercel.app` e deu falso negativo,
+com o agravante de que o outro app tinha `royaleavicultura` no bundle por conta própria — o
+marcador que deveria distinguir os dois estava presente nos dois.
+
+**Conserto** (além da linha do CORS, acima): aposentar ou renomear o app vizinho. Enquanto os dois
+viverem, documentar em ambos os READMEs qual domínio serve qual repo — e nunca confirmar deploy
+por marcador que os dois possam ter.
+**Escopo**: decisão de produto.
+**Prioridade**: MÉDIA — o custo aparece na hora pior, o go-live, mas não derruba nada sozinho.
 
 ---
 
