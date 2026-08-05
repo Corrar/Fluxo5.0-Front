@@ -356,15 +356,35 @@ real, e o zero é barrado antes de chegar ao banco.
 `profiles.role` (`auth.controller.ts:43`) e é dela que sai a `role` do JWT. A coluna `users.role`
 não é escrita por esse caminho.
 
-**Consequência**: duas fontes para o mesmo conceito, uma delas provavelmente parada no tempo. Quem
-escrever uma query nova pode pegar a errada — e RBAC lendo a role errada é furo de permissão, não
-detalhe cosmético. Aparenta resíduo de versão anterior, mas **não foi verificado**: pode haver
-código legado ou trigger que ainda dependa dela.
+### MEDIDO no smoke de 05/08/2026 — não é mais suspeita
 
-**Conserto**: recon próprio antes de qualquer coisa — quem lê `users.role`, quem escreve, se o
-enum ainda casa com a matriz RBAC. Só depois decidir entre dropar a coluna ou sincronizá-la.
+O registro anterior dizia "provavelmente parada no tempo". **É pior que isso, e agora está
+medido**:
+
+```
+users.role    = 'setor'   em TODOS os 8 usuários, INCLUSIVE no admin 001
+profiles.role = 'admin' | 'almoxarife' | 'desenvolvimento' | 'gerente' | ...
+```
+
+**Causa da uniformidade**: o `INSERT` do `register` lista apenas
+`(email, encrypted_password, is_active)` — `users.role` nunca é escrita e fica no **DEFAULT do
+enum**. Não é dado desatualizado, que ao menos já foi verdade um dia: é **constante e errada**.
+
+**Quem manda, provado**: o JWT do usuário 003 (criado no smoke com cargo `desenvolvimento`) veio
+com `role: 'desenvolvimento'`. Se o login lesse `users.role`, teria vindo `'setor'`. A fonte de
+verdade é `profiles.role`, sem ambiguidade.
+
+**Consequência**: qualquer código futuro que leia `users.role` como fonte de verdade **trata o
+admin como `setor`**. Dependendo do sentido do gate, isso é negação de acesso a quem tem direito ou
+concessão a quem não tem. Parente direta da dívida (f) — RBAC lendo a role errada é furo de
+permissão, não detalhe cosmético.
+
+**Conserto candidato**: ou `users.role` sai do schema, ou passa a ser preenchida corretamente e uma
+das duas vira derivada da outra. **Exige recon antes de tocar**: quem lê a coluna hoje, se há
+trigger, view ou código legado dependendo dela, e se o enum ainda casa com a matriz RBAC. Dropar
+coluna que alguém lê em silêncio troca uma dívida por um incidente.
 **Escopo**: recon primeiro; a correção depende do que ele achar.
-**Prioridade**: MÉDIA — não morde hoje, e mordendo morde em RBAC. Parente da dívida (f).
+**Prioridade**: MÉDIA — não morde hoje porque ninguém lê a coluna; morde no dia em que alguém ler.
 
 ## (p) `POST /auth/login` não normaliza o e-mail no servidor
 
@@ -405,3 +425,24 @@ usuário que lê português não é problema a resolver.
 
 **Consequência prática**: `pt-BR` é a única língua do produto. Textos podem ser escritos direto no
 JSX, sem camada de tradução e sem `t()` — que é como o código já é hoje, agora com respaldo.
+
+## Régua — smoke que exige provar login deixa resíduo permanente
+
+**Descoberto em 05/08/2026**, no smoke do cadastro por código. O critério de aceite era "criar o
+usuário e provar que ele loga". O cleanup planejado era hard-delete por id. **Os dois são
+incompatíveis por construção**: o login grava um `audit_logs` com `user_id` do novo usuário, e a FK
+`audit_logs.user_id → users.id` é `NO ACTION`. O `DELETE /users/:id` devolveu **409** — como o
+próprio backend documenta: *"Usuário tem histórico vinculado e não pode ser excluído. Use a
+suspensão da conta."*
+
+Não é bug. É a auditoria funcionando: **`audit_logs` é append-only e não se edita por conveniência
+de limpeza.** Apagar o registro de LOGIN para viabilizar o hard-delete seria destruir a trilha para
+esconder o rastro de um teste — exatamente o que a auditoria existe para impedir.
+
+**A régua**: quando o smoke precisa provar autenticação, o cleanup **não é** hard-delete — é
+**suspensão** (`is_active = false`). O usuário de teste fica, suspenso e nomeado, e a trilha fica
+inteira. Planejar hard-delete nesses casos é planejar um cleanup que vai falhar no fim, quando o
+dado já está gravado.
+
+**Aplicado**: o `003@fluxoroyale.local` (nome "Smoke Codigo 003") vive na validação com
+`is_active = false` e um `audit_logs` de LOGIN preservado. Estado final: 8 usuários, 1 ativo.
