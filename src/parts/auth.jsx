@@ -113,7 +113,9 @@ function LoginScreen({ onLogin }) {
         <form onSubmit={submit} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: mobile ? 'flex-start' : 'center', maxWidth: 400, width: '100%', margin: '0 auto', paddingTop: mobile ? 24 : 0 }}>
           <h2 style={{ margin: '0 0 26px', fontSize: mobile ? 34 : 44, fontWeight: 800, color: AUTH_INK, letterSpacing: '-.03em' }}>Entrar</h2>
 
-          <input type="text" inputMode="numeric" value={userId} onChange={(e) => setUserId(e.target.value)} onFocus={onFocus} onBlur={onBlur}
+          {/* Filtro REAL de dígitos: inputMode="numeric" é só dica de teclado no celular e não
+              impedia digitar um e-mail inteiro aqui — a porta lateral que o FRAuth.login fechou. */}
+          <input type="text" inputMode="numeric" value={userId} onChange={(e) => setUserId(e.target.value.replace(/\D/g, '').slice(0, 3))} onFocus={onFocus} onBlur={onBlur}
             placeholder="Código de usuário (ex.: 007)" autoComplete="username" style={{ ...field, marginBottom: 14 }} />
 
           <div style={{ position: 'relative' }}>

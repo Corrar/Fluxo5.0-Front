@@ -762,6 +762,31 @@ function PageUsuarios({ t }) {
   return <PageUsuariosReal t={t} />;
 }
 
+// ── CÓDIGO DE ACESSO ────────────────────────────────────────────────────────────────────────
+// A identidade de login é o e-mail `NNN@fluxoroyale.local`; o "código" que o operador digita é o
+// LOCAL-PART. Não existe coluna de código no banco (`users` só tem `email`), então a convenção não
+// se sustenta sozinha — ela é sustentada aqui, no POST /auth/register e no FRAuth.login. Falta a
+// 5ª camada, o CHECK no banco: registrada como dívida (n).
+const FR_DOM_ACESSO = '@fluxoroyale.local';
+const FR_COD_MIN = 1;
+const FR_COD_MAX = 999;
+// Zero-padding é do CÓDIGO, nunca exigido de quem digita: '7' → '007'.
+const frCodPad = (c) => String(parseInt(c, 10)).padStart(3, '0');
+const frCodEmail = (c) => frCodPad(c) + FR_DOM_ACESSO;
+// Código de um usuário EXISTENTE. Devolve null se o e-mail não casa a convenção — assim um
+// eventual fora-do-padrão nunca é confundido com um código em uso.
+const frCodDoEmail = (email) => {
+  const m = /^(\d{1,3})@fluxoroyale\.local$/i.exec(String(email || '').trim());
+  return m ? parseInt(m[1], 10) : null;
+};
+// SUGESTÃO do próximo código: MENOR LIVRE, não max+1. Os buracos da sequência (003, 004, 006-009…)
+// carregam significado organizacional; max+1 os apagaria. É sugestão editável, não imposição.
+function frProximoCodigo(usuarios) {
+  const usados = new Set((usuarios || []).map((u) => frCodDoEmail(u.email)).filter((n) => n != null));
+  for (let n = FR_COD_MIN; n <= FR_COD_MAX; n++) if (!usados.has(n)) return String(n).padStart(3, '0');
+  return '';   // 999 códigos ocupados — o modal abre vazio e a validação cobra
+}
+
 function PageUsuariosReal({ t }) {
   const meuId = (window.FRAuth.user && window.FRAuth.user.id) || null;
   const roleLabel = (window.FRAccess && window.FRAccess.roleLabel) || function (r) { return r; };
@@ -830,14 +855,22 @@ function PageUsuariosReal({ t }) {
   };
   const criar = function () {
     const n = novo || {};
-    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(n.email || '').trim());
-    if (!emailOk) return setNovo({ ...n, erro: 'E-mail inválido.' });
+    const cod = parseInt(String(n.codigo || '').trim(), 10);
+    if (!Number.isInteger(cod) || cod < FR_COD_MIN || cod > FR_COD_MAX) {
+      return setNovo({ ...n, erro: `Código de acesso inválido: informe um número de ${FR_COD_MIN} a ${FR_COD_MAX}.` });
+    }
+    // Duplicidade CHECADA NA BORDA, contra a lista que já veio do servidor — inclui contas
+    // suspensas, porque o UNIQUE(email) não liga pra is_active. Não depender do erro do backend:
+    // avisar antes de gastar um POST é mais barato e a mensagem fica no idioma do operador.
+    if ((usuarios || []).some((u) => frCodDoEmail(u.email) === cod)) {
+      return setNovo({ ...n, erro: `O código ${frCodPad(cod)} já está em uso por outro colaborador.` });
+    }
     if (!String(n.nome || '').trim()) return setNovo({ ...n, erro: 'Nome é obrigatório.' });
     if (!n.cargo) return setNovo({ ...n, erro: 'Escolha o cargo.' });
     if (String(n.senha || '').length < 6) return setNovo({ ...n, erro: 'A senha inicial deve ter pelo menos 6 caracteres.' });
     if (n.senha !== n.senha2) return setNovo({ ...n, erro: 'As senhas não conferem.' });
     setAgindo(true);
-    window.FRApi.post('/auth/register', { email: String(n.email).trim(), password: n.senha, name: String(n.nome).trim(), role: n.cargo, sector: String(n.setor || '').trim() || undefined })
+    window.FRApi.post('/auth/register', { email: frCodEmail(cod), password: n.senha, name: String(n.nome).trim(), role: n.cargo, sector: String(n.setor || '').trim() || undefined })
       .then(function () { return carregar(false); })
       .then(function () { setNovo(null); flash('Colaborador criado.'); })
       .catch(function (e) { setNovo(function (m) { return { ...m, erro: usrErr(e) }; }); })
@@ -905,7 +938,7 @@ function PageUsuariosReal({ t }) {
             <p style={{ margin: '6px 0 0', fontSize: 13.5, color: t.muted, maxWidth: 460 }}>Contas reais do sistema — suspensão, cargo, senha e atividade, direto do banco.</p>
           </div>
         </div>
-        <Btn t={t} icon="userPlus" onClick={() => setNovo({ email: '', nome: '', cargo: '', setor: '', senha: '', senha2: '' })}>Novo Colaborador</Btn>
+        <Btn t={t} icon="userPlus" onClick={() => setNovo({ codigo: frProximoCodigo(usuarios), nome: '', cargo: '', setor: '', senha: '', senha2: '' })}>Novo Colaborador</Btn>
       </div>
 
       {loading ? (
@@ -1052,8 +1085,16 @@ function PageUsuariosReal({ t }) {
       {novo && modalShell(() => setNovo(null), (
         <div>
           {modalTitulo('userPlus', 'accent', 'Novo Colaborador')}
-          <label style={lblM}>E-mail de acesso</label>
-          <input value={novo.email} onChange={(e) => setNovo({ ...novo, email: e.target.value, erro: null })} placeholder="nome@empresa.com" style={inputM} />
+          {/* Era "E-mail de acesso" com placeholder nome@empresa.com — descasado do login, que pede
+              código de 3 dígitos. Agora pede o CÓDIGO e mostra a identidade que será criada. */}
+          <label style={lblM}>Código de acesso</label>
+          <input value={novo.codigo} onChange={(e) => setNovo({ ...novo, codigo: e.target.value.replace(/\D/g, '').slice(0, 3), erro: null })}
+            placeholder="Ex.: 007" inputMode="numeric" style={inputM} />
+          <div style={{ fontSize: 12, color: t.muted, margin: '-6px 2px 12px' }}>
+            {String(novo.codigo || '').trim() && parseInt(novo.codigo, 10) >= FR_COD_MIN
+              ? <>Entra no sistema como <b style={{ color: t.text }}>{frCodEmail(novo.codigo)}</b> — digitar <b style={{ color: t.text }}>{String(parseInt(novo.codigo, 10))}</b> no login também funciona.</>
+              : <>Número de {FR_COD_MIN} a {FR_COD_MAX}. Sugerimos o menor livre; pode trocar.</>}
+          </div>
           <label style={lblM}>Nome completo</label>
           <input value={novo.nome} onChange={(e) => setNovo({ ...novo, nome: e.target.value, erro: null })} placeholder="Nome e sobrenome" style={inputM} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

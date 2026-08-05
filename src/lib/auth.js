@@ -8,7 +8,8 @@
 //
 // Contrato de POST /auth/login (docs/API_CONTRACT.md §1):
 //   body { email, password } -> { token, user, profile{id,name,role,sector}, permissions[] }
-//   ID sem "@" vira "id@fluxoroyale.local".
+//   O login recebe CÓDIGO (1..999) e monta `NNN@fluxoroyale.local`. E-mail cru é REJEITADO —
+//   ver o comentário em login(). O zero-padding acontece só ali.
 import { api, AUTH_KEYS, clearAuthStorage, getErrorMessage } from './api.js';
 import { roleCanAccessModule } from './access.js';
 
@@ -106,13 +107,21 @@ function applyAuthedSideEffects() {
 }
 
 // ---- ações ----
-async function login(idOuEmail, senha) {
+async function login(codigo, senha) {
+  // PORTA LATERAL FECHADA: antes, um input contendo '@' era usado como e-mail CRU. Isso deixava
+  // entrar identidade que a própria tela nega — ela pede código de 3 dígitos, e um usuário criado
+  // como joao@empresa.com logava digitando o e-mail inteiro. Agora só código numérico.
+  // O padStart mora AQUI, no único ponto que monta a identidade: digitar 7 loga o 007.
+  // Validação ANTES do _loading pra não deixar a UI em "Entrando…" num erro puramente local.
+  const raw = String(codigo || '').trim();
+  if (!/^\d{1,3}$/.test(raw) || parseInt(raw, 10) < 1) {
+    return { error: { message: 'Informe o código de usuário: um número de 1 a 999 (ex.: 007).' } };
+  }
+  const email = `${String(parseInt(raw, 10)).padStart(3, '0')}@fluxoroyale.local`;
+
   _loading = true;
   notify();
   try {
-    const raw = String(idOuEmail || '').trim().toLowerCase();
-    const email = raw.includes('@') ? raw : `${raw}@fluxoroyale.local`;
-
     const { data } = await api.post('/auth/login', { email, password: senha });
 
     // DESCARTA encrypted_password: guardamos só id/email do usuário.

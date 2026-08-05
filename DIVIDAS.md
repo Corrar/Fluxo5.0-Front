@@ -320,6 +320,68 @@ onde alguém com pressa iria mexer.
 **Prioridade**: ALTA até a prova sair. Não é dívida de código — é dívida de VERIFICAÇÃO, e some
 sozinha no dia em que uma etiqueta correta for impressa e escaneada.
 
+## (n) Falta o CHECK no banco sobre o formato do e-mail de acesso
+
+**Causa**: a identidade de login é `NNN@fluxoroyale.local` e o "código" é o local-part, mas
+`users` só tem `email TEXT` com `UNIQUE (email)` e `PRIMARY KEY (id)` — **nenhum CHECK de
+formato**. A convenção passou a ser sustentada em quatro camadas (modal, validação do front,
+`POST /auth/register`, `FRAuth.login`), todas em código de aplicação. O banco continua aceitando
+qualquer string.
+
+**Consequência**: um INSERT direto, um script de seed, uma migration futura ou um endpoint novo
+que esqueça a regra recria contas inalcançáveis pelo login por código — exatamente o buraco que as
+quatro camadas fecharam por cima.
+
+**Conserto proposto** (migration, repo do BACKEND):
+
+```sql
+ALTER TABLE users ADD CONSTRAINT users_email_codigo_chk
+  CHECK (email ~ '^[0-9]{3}@fluxoroyale\.local$');
+```
+
+Verificado em 05/08/2026 na validação: os 7 usuários existentes passam no CHECK, então ele entra
+sem `NOT VALID` e sem limpeza prévia. **Conferir de novo no host de produção antes de aplicar** —
+lá o conjunto de usuários é outro.
+
+Nota: o CHECK aceita `000@fluxoroyale.local`, que as camadas de aplicação rejeitam (faixa 1–999).
+Fechar isso em SQL exige `substring(...)::int BETWEEN 1 AND 999`; a versão simples já cobre o caso
+real, e o zero é barrado antes de chegar ao banco.
+**Escopo**: uma migration.
+**Prioridade**: MÉDIA — as quatro camadas de cima cobrem o caminho normal; isto é a rede embaixo.
+
+## (o) `users.role` (enum) coexiste com `profiles.role` (text)
+
+**Causa**: `users` tem uma coluna `role` de tipo USER-DEFINED (enum do Postgres) e `profiles` tem
+`role TEXT`. O `POST /auth/register` grava **só** `profiles.role`; o `login` lê **só**
+`profiles.role` (`auth.controller.ts:43`) e é dela que sai a `role` do JWT. A coluna `users.role`
+não é escrita por esse caminho.
+
+**Consequência**: duas fontes para o mesmo conceito, uma delas provavelmente parada no tempo. Quem
+escrever uma query nova pode pegar a errada — e RBAC lendo a role errada é furo de permissão, não
+detalhe cosmético. Aparenta resíduo de versão anterior, mas **não foi verificado**: pode haver
+código legado ou trigger que ainda dependa dela.
+
+**Conserto**: recon próprio antes de qualquer coisa — quem lê `users.role`, quem escreve, se o
+enum ainda casa com a matriz RBAC. Só depois decidir entre dropar a coluna ou sincronizá-la.
+**Escopo**: recon primeiro; a correção depende do que ele achar.
+**Prioridade**: MÉDIA — não morde hoje, e mordendo morde em RBAC. Parente da dívida (f).
+
+## (p) `POST /auth/login` não normaliza o e-mail no servidor
+
+**Causa**: `auth.controller.ts:23` faz `SELECT * FROM users WHERE email = $1` com o valor cru do
+body. Quem normaliza é o front (`FRAuth.login` monta o e-mail a partir do código, sempre em
+minúsculas). O `register` grava `trim().toLowerCase()`, então o dado no banco é minúsculo.
+
+**Consequência**: hoje **não morde** — o único cliente é o nosso front, que sempre manda
+normalizado, e agora o e-mail nem vem mais do usuário: é montado a partir de um código numérico.
+Morderia um cliente novo (script, integração, app) que mandasse `001@FLUXOROYALE.LOCAL`: o login
+falharia com "Usuário não encontrado", mensagem que aponta pro lugar errado.
+
+**Conserto**: `LOWER(email) = LOWER($1)` na query, ou `trim().toLowerCase()` na borda do
+controller — a segunda é mais barata e não atrapalha o índice `users_email_key`.
+**Escopo**: uma linha.
+**Prioridade**: BAIXA — depende de um cliente que ainda não existe.
+
 ---
 
 # Decisões fechadas
