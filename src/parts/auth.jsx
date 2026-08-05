@@ -20,6 +20,17 @@ const AUTH_BRAND = '#2e3192';      // Azul Royale (logo)
 const AUTH_BRAND_D = '#1f2170';
 const AUTH_INK = '#0e0f12';
 
+// Canais de contato REAIS da Royale (popover do rodapé de login).
+// telE164/wa em E.164 sem separadores — é o que mailto/tel/wa.me exigem; telExib
+// guarda a máscara brasileira, que é o que a tela mostra. Telefone e WhatsApp são
+// o MESMO número: as duas linhas se distinguem pelo ícone e pelo rótulo do canal.
+const AUTH_CONTATO = {
+  email: 'brunocorral@royaleavicultura.com.br',
+  telExib: '(18) 99812-6464',
+  telE164: '+5518998126464',
+  wa: 'https://wa.me/5518998126464',
+};
+
 // ---------- Login ----------
 function LoginScreen({ onLogin }) {
   const [userId, setUserId] = useStateAuth('');
@@ -27,6 +38,19 @@ function LoginScreen({ onLogin }) {
   const [show, setShow] = useStateAuth(false);
   const [err, setErr] = useStateAuth('');
   const [busy, setBusy] = useStateAuth(false);
+  const [contato, setContato] = useStateAuth(false);
+
+  // Popover de contato: fecha por clique fora e por Esc. Mesmo padrão do switcher de
+  // módulo da sidebar (sidebar.jsx:234) — listener só existe enquanto está aberto.
+  const contatoRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!contato) return;
+    const onDoc = (e) => { if (contatoRef.current && !contatoRef.current.contains(e.target)) setContato(false); };
+    const onEsc = (e) => { if (e.key === 'Escape') setContato(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onEsc);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onEsc); };
+  }, [contato]);
 
   // Login REAL: código de usuário + senha -> window.FRAuth.login (POST /auth/login).
   // O FRAuth concatena codigo -> codigo@fluxoroyale.local e DESCARTA encrypted_password.
@@ -122,7 +146,40 @@ function LoginScreen({ onLogin }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12.5, color: '#9ca3af' }}>
           <span>© {new Date().getFullYear()} Fluxo Royale</span>
           {/* rodapé: seletor de idioma removido — sem i18n no projeto */}
-          <span style={{ fontWeight: 600, color: '#6b7280' }}>Contato</span>
+          {/* "Contato" deixou de ser span inerte: abre o popover com os canais reais.
+              O chevron voltou porque agora ele promete uma abertura que EXISTE. */}
+          <div ref={contatoRef} style={{ position: 'relative' }}>
+            <button type="button" onClick={() => setContato((v) => !v)} aria-haspopup="true" aria-expanded={contato}
+              style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 600, color: contato ? AUTH_BRAND : '#6b7280', transition: 'color .14s' }}>
+              Contato <Icon name="chevronDown" size={13} style={{ transform: contato ? 'rotate(180deg)' : 'none', transition: 'transform .16s' }} />
+            </button>
+
+            {contato && (
+              <div style={{ position: 'absolute', bottom: 'calc(100% + 10px)', right: 0, width: mobile ? 268 : 300, background: '#fff', borderRadius: 16, border: '1px solid #ececec', boxShadow: '0 20px 50px -12px rgba(0,0,0,.28)', padding: 12, zIndex: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: '#9ca3af', margin: '4px 6px 10px' }}>Contato</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[
+                    { canal: 'E-mail', valor: AUTH_CONTATO.email, icon: 'mail', href: 'mailto:' + AUTH_CONTATO.email, ext: false },
+                    { canal: 'Telefone', valor: AUTH_CONTATO.telExib, icon: 'phone', href: 'tel:' + AUTH_CONTATO.telE164, ext: false },
+                    { canal: 'WhatsApp', valor: AUTH_CONTATO.telExib, icon: 'message', href: AUTH_CONTATO.wa, ext: true },
+                  ].map((c) => (
+                    <a key={c.canal} href={c.href} onClick={() => setContato(false)}
+                      {...(c.ext ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                      style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, border: '1px solid #ececec', background: '#fff', transition: 'border-color .14s, background .14s' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = AUTH_BRAND; e.currentTarget.style.background = 'rgba(46,49,146,.05)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#ececec'; e.currentTarget.style.background = '#fff'; }}>
+                      <span style={{ width: 28, height: 28, borderRadius: 9, background: 'rgba(46,49,146,.12)', color: AUTH_BRAND_D, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={c.icon} size={15} /></span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        {/* overflowWrap: e-mail de 35 chars QUEBRA em vez de truncar — endereço cortado é endereço errado. */}
+                        <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: AUTH_INK, overflowWrap: 'anywhere' }}>{c.valor}</span>
+                        <span style={{ display: 'block', fontSize: 11, color: '#9ca3af' }}>{c.canal}</span>
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
       </div>
