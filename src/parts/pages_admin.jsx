@@ -116,7 +116,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
     if (k === 'qtd') return { ...r, qtd: v, etiq: r.etiqT ? r.etiq : v };   // etiquetas acompanham a quantidade até serem editadas
     if (k === 'etiq') return { ...r, etiq: v, etiqT: true };
     return { ...r, [k]: v };
-  })); setDone(false); };
+  })); setDone(false); setAvisoEtiqueta(null); };
   const addRow = () => setRows((rs) => [...rs, { sku: '', qtd: '', etiq: '', etiqT: false }]);
   const removeRow = (i) => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : rs));
   // importSample (mock que preenchia rows com SKUs fixos) REMOVIDO — a dropzone agora importa .xlsx real
@@ -154,12 +154,44 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       if (idx >= 0) return rs.map((r, j) => (j === idx ? { ...r, ...novaRow } : r));
       return [...rs, novaRow];
     });
-    setQ(''); setDone(false);
+    setQ(''); setDone(false); setAvisoEtiqueta(null);
+  };
+  // (i) FALHA DE IMPRESSÃO SILENCIOSA — conserto. cfPrintIdentificacao (conferencia.jsx:614) captura
+  // a exceção INTERNAMENTE e só reporta pelo onFlash; os dois call sites daqui passavam `null`, que
+  // virava no-op (conferencia.jsx:615). O erro era engolido, o await completava normal e o fluxo
+  // seguia para setDone(true) — exibindo "Entrada feita · etiquetas enviadas!" com ZERO etiqueta na
+  // mesa. Agora a falha chega até aqui.
+  //
+  // SEM timer de 4s de propósito: os toasts desta tela somem sozinhos, e sumir é exatamente o que
+  // deixa a mercadoria ir para a prateleira sem identificação e sem ninguém ver. Este aviso só sai
+  // quando a tela muda de estado (edição de linha, novo envio ou reimpressão bem-sucedida).
+  const [avisoEtiqueta, setAvisoEtiqueta] = useStateA(null);
+  const [reimprimindo, setReimprimindo] = useStateA(false);
+  // A mensagem já chega pronta com a CONTAGEM PARCIAL ("Impressão falhou (3/7): …"), que é o dado
+  // que diz quantas etiquetas o operador ainda precisa colar.
+  const onFlashEtiqueta = (kind, msg) => { if (kind === 'error') setAvisoEtiqueta(msg); };
+  // Na REIMPRESSÃO o sucesso também é reportado (toast verde): sem isso o operador não sabe se o
+  // retry pegou — o sumiço do aviso é sinal fraco demais para caminho crítico.
+  const onFlashReimpressao = (kind, msg) => { if (kind === 'error') setAvisoEtiqueta(msg); else setOkMsg(msg); };
+  const itensEtiquetaDeFilled = () => filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: parseInt(r.etiq !== '' && r.etiq != null ? r.etiq : r.qtd) || 0 }));
+  // Reimpressão NÃO toca no backend. A entrada já foi persistida (o 201 veio ANTES da impressão);
+  // repetir o POST duplicaria estoque. Aqui só reenvia o ZPL dos MESMOS itens que já estão na tela.
+  const handleReimprimir = async () => {
+    if (reimprimindo) return;
+    setReimprimindo(true);
+    setAvisoEtiqueta(null);
+    try {
+      const dataEntrada = new Date().toLocaleDateString('pt-BR');
+      await window.cfPrintIdentificacao(itensEtiquetaDeFilled(), onFlashReimpressao, isNF ? nf.trim() : null, dataEntrada, isNF ? {} : { reaproveitado: true });
+    } finally {
+      setReimprimindo(false);
+    }
   };
   // POST /stock/entries -> só imprime (ZPL, via Conferência) se der 201. Ordem: entrada → sucesso → imprime.
   const handleEntradaImprimir = async () => {
     if (enviando) return;                              // anti duplo-clique (Btn não tem prop `disabled`)
     setEnvErro(null);
+    setAvisoEtiqueta(null);
     if (!nf.trim()) { setEnvErro('Informe o número da NF.'); return; }
     if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
     const invalidRows = filled.filter((r) => !resolvePid(r));
@@ -176,8 +208,10 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       });
       // 2. IMPRESSÃO (só após 201) — etiqueta de material ZPL, com NF real + data de hoje.
       const dataEntrada = new Date().toLocaleDateString('pt-BR');
-      const itensEtiqueta = filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: parseInt(r.etiq !== '' && r.etiq != null ? r.etiq : r.qtd) || 0 }));
-      await window.cfPrintIdentificacao(itensEtiqueta, null, nf.trim(), dataEntrada);
+      // onFlash REAL (era `null`): a impressão é PERIFÉRICO, não transação. Falhar aqui NÃO reverte
+      // nem bloqueia a entrada — o estoque já foi creditado. setDone(true) continua, mas o badge
+      // passa a dizer a verdade quando avisoEtiqueta existe (ver rodapé fixo).
+      await window.cfPrintIdentificacao(itensEtiquetaDeFilled(), onFlashEtiqueta, nf.trim(), dataEntrada);
       setDone(true);
     } catch (e) {
       // 400 do backend ("Esta NF-e já foi cadastrada." / "Número da NF é obrigatório..." / furo) → mostra, NÃO imprime.
@@ -192,6 +226,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const handleReuseConfirmar = async () => {
     if (enviando) return;                              // mesmo guard anti duplo-clique
     setEnvErro(null);
+    setAvisoEtiqueta(null);
     if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
     const invalidRows = filled.filter((r) => !resolvePid(r));
     if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar entrada.'); return; }
@@ -206,8 +241,8 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       }, { headers: { 'X-Idempotency-Key': idemKey } });
       // IMPRESSÃO (só após 201) — mesma regra de etiqueta da NF; banner REAPROVEITADO, sem NF.
       const dataEntrada = new Date().toLocaleDateString('pt-BR');
-      const itensEtiqueta = filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: parseInt(r.etiq !== '' && r.etiq != null ? r.etiq : r.qtd) || 0 }));
-      await window.cfPrintIdentificacao(itensEtiqueta, null, null, dataEntrada, { reaproveitado: true });
+      // onFlash REAL (era `null`) — mesma regra da NF: periférico não reverte transação.
+      await window.cfPrintIdentificacao(itensEtiquetaDeFilled(), onFlashEtiqueta, null, dataEntrada, { reaproveitado: true });
       setDone(true);
       setReview(false);                                // só no SUCESSO fecha o modal
     } catch (e) {
@@ -497,6 +532,23 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       </div>
       </div>
 
+      {/* (i) Aviso PERSISTENTE de etiqueta que não saiu. Fica ACIMA da barra sticky, colado nela, que
+          é para onde o operador já está olhando quando clica em "Entrada / Imprimir". Sem timer. */}
+      {avisoEtiqueta && (
+        <div style={{ marginTop: 18, marginBottom: -8, display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap',
+          padding: '14px 18px', borderRadius: 14, background: uiTone(t, 'amber').bg, border: `1px solid ${uiTone(t, 'amber').fg}` }}>
+          <span style={{ color: uiTone(t, 'amber').fg, display: 'flex', paddingTop: 1 }}><Icon name="alert" size={19} /></span>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 14, fontWeight: 850, color: uiTone(t, 'amber').fg }}>Entrada registrada, mas a etiqueta NÃO saiu</div>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: t.text, marginTop: 4 }}>{avisoEtiqueta}</div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: t.muted, marginTop: 6 }}>
+              O estoque JÁ foi creditado — não repita a entrada. Resolva a impressora e reimprima daqui.
+            </div>
+          </div>
+          <Btn t={t} icon="printer" onClick={handleReimprimir}>{reimprimindo ? 'Reimprimindo…' : 'Reimprimir etiquetas'}</Btn>
+        </div>
+      )}
+
       <div style={{ position: 'sticky', bottom: 0, marginTop: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
         padding: '14px 18px', borderRadius: 14, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadow }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
@@ -507,7 +559,11 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
           <div><div style={{ fontSize: 10.5, fontWeight: 700, color: t.faint, letterSpacing: '.06em' }}>ETIQUETAS</div><div style={{ fontSize: 20, fontWeight: 850, color: t.accentText }}>{totalEtiq}</div></div></>}
         </div>
         {done
-          ? <Badge t={t} kind="green" dot>{L.confirmado}</Badge>
+          ? (avisoEtiqueta
+              // O badge de sucesso da NF era literalmente "Entrada feita · etiquetas enviadas!" —
+              // afirmava um envio que não houve. Com falha de impressão ele passa a ser âmbar e diz o que é.
+              ? <Badge t={t} kind="amber" dot>Entrada registrada · etiqueta NÃO saiu</Badge>
+              : <Badge t={t} kind="green" dot>{L.confirmado}</Badge>)
           : isNF
             ? <Btn t={t} icon="barcode" onClick={handleEntradaImprimir}>{enviando ? 'Dando entrada…' : 'Entrada / Imprimir'}</Btn>
             : <Btn t={t} icon="eye" onClick={() => { if (filled.length) { setIdemKey(genKey()); setReview(true); } }}>Revisar e Confirmar</Btn>}

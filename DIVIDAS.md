@@ -179,3 +179,27 @@ moram `JWT_SECRET` e `DATABASE_URL`, tem mais a perder que o front.
 **Escopo**: pequeno — um script por repo, sem dependência nova.
 **Prioridade**: MÉDIA-ALTA. Barato de fazer, caro de não ter: o preço não é o bug, é a credencial
 queimada e o histórico reescrito.
+
+---
+
+# Decisões fechadas
+
+Isto **não são dívidas**. São assuntos encerrados por decisão de produto, registrados aqui para
+que não voltem à mesa como se estivessem em aberto. Uma dívida pede conserto; uma decisão só é
+revista se a premissa mudar — e cada entrada abaixo diz qual é a premissa.
+
+## Idioma — sem i18n, seletor removido
+
+**Decisão (05/08/2026)**: o seletor de idioma sai de vez. Já havia sido removido do rodapé de
+login em `2931cbc` por ser inerte (span "Português" com chevron, sem handler, sem estado, sem
+lista de opções); agora fica registrado que a ausência é **deliberada**, não uma pendência.
+
+**Base**: a Royale não tem demanda de outro idioma, e i18n real não é o seletor — é extrair
+~1.222 strings da UI mais as mensagens da API, e mantê-las sincronizadas para sempre. O custo é
+permanente; a demanda, inexistente.
+
+**Premissa que reabriria**: demanda real de cliente estrangeiro. Só isso. Tela em português com
+usuário que lê português não é problema a resolver.
+
+**Consequência prática**: `pt-BR` é a única língua do produto. Textos podem ser escritos direto no
+JSX, sem camada de tradução e sem `t()` — que é como o código já é hoje, agora com respaldo.
