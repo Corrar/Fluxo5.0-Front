@@ -605,12 +605,33 @@ function cfClienteDaOP(op) {
   const found = ops.find((c) => (c.ops || []).some((o) => String(o) === String(op) || String(o).includes(String(op))));
   return found ? found.cliente : null;
 }
+// Teto do NOME na etiqueta de identificação. Ver frZplTeto: o ^FB sobrepõe, não corta.
+const FR_ZPL_NOME_MAX = 150;
+
 // Etiqueta de MATERIAL (identificação) — ZPL 100x60mm @203dpi (800x480), impressão AUTOMÁTICA na ZD220.
 // Migrada de window.print()/HTML → Browser Print/ZPL (mesmo caminho do cfPrintVolumes, reusando frSendZplBrowserPrint).
 // Layout do Bruno: cabeçalho, SKU grande em destaque, nome do produto, "NF ${nf} · ${data}", barcode Code 128 e SKU legível.
 // ^BC codifica o it.sku LITERAL (com pontos) — é exatamente o valor que o handleScan de ITEM casa
 // (String(it.sku).toUpperCase() === code). N cópias por item = it.faltam (1 device.send por etiqueta).
 // Na Conferência: nf='-' e data=hoje (dd/mm/aaaa, padrão do app).
+//
+// MAPA VERTICAL (dots; ^LL480 é o limite FÍSICO — 60mm @203dpi = 479, não dá pra aumentar):
+//    25..51   cabeçalho "Fluxo Royale"    (A0N,26)
+//    70..134  SKU grande                  (A0N,64)   ← identificador primário, intocado
+//   142..238  NOME, ATÉ 3 LINHAS          (A0N,26)   ← 96 dots p/ 3 linhas = 32/linha
+//   238..262  "NF … · data"               (A0N,24)
+//   266..386  barcode Code 128, h=120                ← altura NÃO reduzida de propósito:
+//                                                      é tolerância de leitura em ângulo ruim,
+//                                                      e a bipagem real é com etiqueta amassada
+//                                                      dentro do plástico
+//   390..418  SKU legível                 (A0N,28)   ← intocado
+//   425..473  banner REAPROVEITADO (só no reuse)     ← sobram 7 dots; NÃO há espaço pra descer nada
+//
+// ⚠ SE A TERCEIRA LINHA DO NOME ENCOSTAR NO "NF · data": a entrelinha do firmware passou de
+// 32 dots. O ajuste é o TERCEIRO parâmetro do ^FB (espaçamento entre linhas, hoje 0 — aceita
+// valor negativo pra apertar). NÃO reposicione campo: o ^FO0,238 do NF·data e o ^FO,266 do
+// barcode saem de uma conta que já está no limite (4 dots de folga de cada lado do barcode),
+// e o banner do reuse termina em 473, a 7 dots do papel. Mexer em ^FO aqui quebra outra coisa.
 async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().toLocaleDateString('pt-BR'), opts = {}) {
   const notify = onFlash || function () {};
   // nf e data agora vêm por PARÂMETRO (defaults '-'/hoje preservam a chamada interna da Conferência :735).
@@ -620,7 +641,9 @@ async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().
     if (n <= 0) return;
     const sku = frZplField(it.sku);          // literal, mantém os pontos (só remove ^ e ~)
     if (!sku) return;                        // item sem SKU (custom) → sem barcode válido, pula
-    const nome = frZplField(it.nome);
+    // Teto de 150 chars: 3 linhas de ~53 no ^A0N,26,26 dão ~159 de capacidade. Vale para os DOIS
+    // modos do template (NF e reaproveitado) porque `nome` é montado uma vez, aqui.
+    const nome = frZplTeto(frZplField(it.nome), FR_ZPL_NOME_MAX);
     // Largura do Code 128 (subset B, cota superior) = (11*len+35)*módulo. Escolhe o MAIOR módulo (4→2)
     // que ainda cabe em 800 com margem (útil 760) e centraliza. Não pode cortar → senão não escaneia.
     const bLen = sku.length;
@@ -631,8 +654,8 @@ async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().
     // Reaproveitamento (opts.reaproveitado): omite "NF …" (reuse não tem NF) e imprime só a data;
     // adiciona banner reverse-video "REAPROVEITADO" na zona livre y=418-480. Sem opts → NF-mode INALTERADO.
     const linhaInfo = opts.reaproveitado
-      ? `^FO0,200^A0N,24,24^FB800,1,0,C^FD${data}^FS`
-      : `^FO0,200^A0N,24,24^FB800,1,0,C^FDNF ${nf} · ${data}^FS`;
+      ? `^FO0,238^A0N,24,24^FB800,1,0,C^FD${data}^FS`
+      : `^FO0,238^A0N,24,24^FB800,1,0,C^FDNF ${nf} · ${data}^FS`;
     const bannerReuse = opts.reaproveitado
       ? `\n^FO0,425^GB800,48,48^FS\n^FO0,432^A0N,30,30^FB800,1,0,C^FR^FDREAPROVEITADO^FS`
       : '';
@@ -642,9 +665,9 @@ async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().
 ^CI28
 ^FO0,25^A0N,26,26^FB800,1,0,C^FDFluxo Royale^FS
 ^FO0,70^A0N,64,64^FB800,1,0,C^FD${sku}^FS
-^FO0,150^A0N,32,32^FB800,1,0,C^FD${nome}^FS
+^FO0,142^A0N,26,26^FB800,3,0,C^FD${nome}^FS
 ${linhaInfo}
-^FO${barX},250^BY${barBY}^BCN,120,N,N,N^FD${sku}^FS
+^FO${barX},266^BY${barBY}^BCN,120,N,N,N^FD${sku}^FS
 ^FO0,390^A0N,28,28^FB800,1,0,C^FD${sku}^FS${bannerReuse}
 ^XZ`;
     for (let k = 0; k < n; k++) jobs.push(zpl);
@@ -661,6 +684,18 @@ ${linhaInfo}
 
 // Sanitiza texto p/ campo ^FD (remove os control chars ^ e ~ do ZPL).
 function frZplField(s) { return String(s == null ? '' : s).replace(/[\^~]/g, ' ').trim(); }
+
+// Teto de comprimento para campo de texto do ZPL. EXISTE PORQUE O ^FB SOBREPÕE O EXCESSO EM VEZ
+// DE CORTAR — remover este teto reintroduz a etiqueta ilegível com o nome empilhado sobre si mesmo.
+// Corta no último espaço ANTES do limite; nome de palavra única corta no seco, as reticências avisam.
+// Reticências em ASCII ('...', não '…'): a fonte residente 0 não garante o glifo U+2026.
+function frZplTeto(s, max) {
+  const t = String(s == null ? '' : s);
+  if (t.length <= max) return t;
+  const corte = t.slice(0, max);
+  const esp = corte.lastIndexOf(' ');
+  return (esp > 0 ? corte.slice(0, esp) : corte).replace(/[\s.,;:/-]+$/, '') + '...';
+}
 
 // Envia UM ZPL pro Browser Print (SDK window.BrowserPrint se presente; senão fallback serviço local 9100). Retorna Promise.
 function frSendZplBrowserPrint(zpl) {
