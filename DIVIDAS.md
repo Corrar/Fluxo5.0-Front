@@ -155,3 +155,27 @@ dia. É a pior forma de falhar: silenciosa, com confirmação positiva por cima.
 existe e está provado, falta ligá-lo nos dois call sites.
 **Escopo**: pequeno — dois call sites, sem mudança de contrato.
 **Prioridade**: ALTA. Escopo pequeno não é o critério aqui; é caminho crítico de operação.
+
+## (j) Gate de segredo é disciplina, não garantia
+
+**Causa**: não existe script de gate de segredo no `package.json` de NENHUM dos dois repos (o front
+tem só `dev`/`build`/`preview`). O gate tem sido varredura manual sobre o diff, refeita a cada
+commit por hábito. Funcionou até hoje — mas por disciplina, não por mecanismo.
+
+**Consequência**: um commit apressado passa sem verificação e ninguém percebe. Diferente de quase
+toda dívida desta lista, esta não é reversível pelo caminho normal: segredo que entra no histórico
+git não se apaga, só se reescreve com força (`filter-repo`/`push --force`) — e, se o repo já foi
+clonado ou o push já saiu, a rotação da credencial vira obrigatória de qualquer jeito. O custo não
+está em consertar o commit; está em trocar o que vazou.
+
+**Conserto**: script npm que roda a varredura de padrões sobre o diff STAGED e sai com código != 0
+ao encontrar qualquer um:
+
+    senha|password|secret|token|api_key|bearer|JWT|private_key|postgres://|sk-|ghp_|AKIA
+
+Opcionalmente pendurado num hook de `pre-commit`. Vale nos DOIS repos — o backend, que é onde
+moram `JWT_SECRET` e `DATABASE_URL`, tem mais a perder que o front.
+
+**Escopo**: pequeno — um script por repo, sem dependência nova.
+**Prioridade**: MÉDIA-ALTA. Barato de fazer, caro de não ter: o preço não é o bug, é a credencial
+queimada e o histórico reescrito.
