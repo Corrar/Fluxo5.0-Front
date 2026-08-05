@@ -273,6 +273,53 @@ por marcador que os dois possam ter.
 **Escopo**: decisão de produto.
 **Prioridade**: MÉDIA — o custo aparece na hora pior, o go-live, mas não derruba nada sozinho.
 
+## (m) Etiqueta: layout de 3 linhas NO AR e SEM PROVA NO PAPEL
+
+**O que era**: o campo do nome usava `^FB800,1,0,C` (máximo de UMA linha) e nada no JS limitava
+comprimento. O excesso voltava sobre a mesma linha — etiqueta com o texto empilhado sobre si
+mesmo, ilegível. A base tinha mudado sem ninguém notar: o pior caso era ~43 chars no recon
+anterior e virou **112** (SKU `3.01.0271`), com a entrada de um bloco Siemens/elétrica que traz a
+descrição técnica completa no campo nome. Dos 59 produtos ativos, 14 passam de 43 chars; e dos 27
+que já tiveram entrada — logo, já geraram etiqueta — **11 são longos**.
+
+**Consertado em `8d753cd`** (05/08/2026): `^FB800,3,0,C` com fonte 26, layout recalculado fechando
+em 480 dots sem colisão, barcode mantido em h=120, e teto de 150 chars no JS com corte explícito
+em `...` ASCII. Ver `conferencia.jsx` — o mapa vertical e o alerta do `^FB` moram lá.
+
+### TRAVA DE PUSH LEVANTADA — e o que isso muda no risco
+
+O commit `8d753cd` subiu com `NAO PUSHAR ATE A PROVA NO PAPEL` no corpo. **Essa trava foi
+levantada por decisão do Bruno em 05/08/2026**, e o motivo é bom: a máquina que tem a ZD220 não
+roda ambiente local, então a prova no papel **só é possível com o código em nuvem**. A trava
+estava impedindo a própria prova que ela exigia.
+
+Consequência — e é ela que precisa ficar escrita, porque o corpo do `8d753cd` ainda diz o
+contrário: **os quatro itens da fila continuam pendentes, e agora estão pendentes COM O CÓDIGO NO
+AR.** Antes, um layout errado morria no repositório local. Agora, se o layout falhar no papel, ele
+falha em nuvem, na validação, com o operador na frente da impressora.
+
+### Fila da ZD220 — etiqueta IMPRESSA e ESCANEADA, não simulação
+
+1. **Nome em 3 linhas** legível, sem sobreposição e sem encostar no `NF · data`
+   (pior caso: SKU `3.01.0271`, 112 chars)
+2. **Barcode h=120 em y=266** escaneando com a etiqueta amassada dentro do plástico — a condição
+   real de bipagem, não de bancada
+3. **Caminho de sucesso da impressão** — herdado da dívida (i), pendente desde `3fc809b`
+4. **Botão "Reimprimir etiquetas"** — herdado da dívida (i), pendente desde `3fc809b`
+
+Os quatro fecham na mesma sessão de impressora, com um único lote de etiquetas.
+
+**Por que ainda não está provado**: os ~53 chars/linha do `^A0N,26,26` são estimativa de fonte
+proporcional. Capacidade real de fonte proporcional só o papel confirma.
+
+**Se o item 1 falhar**: o ajuste é o TERCEIRO parâmetro do `^FB` (espaçamento entre linhas, aceita
+negativo), NÃO reposicionar campo — as posições saem de uma conta com 4 dots de folga de cada lado
+do barcode e 7 dots entre o banner do reuse e a borda do papel. O alerta está no código, no ponto
+onde alguém com pressa iria mexer.
+
+**Prioridade**: ALTA até a prova sair. Não é dívida de código — é dívida de VERIFICAÇÃO, e some
+sozinha no dia em que uma etiqueta correta for impressa e escaneada.
+
 ---
 
 # Decisões fechadas
