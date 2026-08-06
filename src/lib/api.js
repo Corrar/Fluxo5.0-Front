@@ -86,6 +86,28 @@ export const api = axios.create({ baseURL: getBaseUrl() });
 // ---- Interceptor de request: Bearer + loader ----
 api.interceptors.request.use(
   (config) => {
+    // ===== DETECTOR DE DIVERGÊNCIA, PONTO 1: A GARANTIA — dívida (f), fase 4 / etapa 1 =====
+    //
+    // Este interceptor é o FUNIL ÚNICO de tudo que AGE. Se o token do localStorage não é mais o
+    // que montou a sessão em memória, a request NÃO PARTE — a ação errada não chega a acontecer,
+    // em vez de acontecer e ser atribuída a outro no audit_log (que é append-only e não se corrige).
+    //
+    // POR REFERÊNCIA AO GLOBAL, não por import: api.js é importado por auth.js, e importar de
+    // volta seria ciclo. Quando um request acontece, `window.FRAuth` existe há muito.
+    //
+    // FAIL-OPEN DE PROPÓSITO: sem `FRAuth` (ordem de carga inesperada, teste isolado) a request
+    // segue. O risco desta etapa é o FALSO POSITIVO — na dúvida, deixa passar; o backend continua
+    // sendo a barreira real.
+    const A = typeof window !== 'undefined' ? window.FRAuth : null;
+    if (A && typeof A.validarSessao === 'function' && !A.validarSessao()) {
+      // Erro NOMEADO, não 401 genérico do servidor: quem trata sabe que a sessão caiu por
+      // divergência local, e o `status: null` diz que isto nunca virou tráfego.
+      const e = new Error('Sessão encerrada: outro usuário fez login neste navegador.');
+      e.status = null;
+      e.code = 'FR_SESSAO_DIVERGENTE';
+      return Promise.reject(e);
+    }
+
     const token = localStorage.getItem(AUTH_KEYS.token);
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -152,8 +174,13 @@ export function normalizeError(err) {
     };
   }
 
+  // `code` PRESERVADO: é como um erro nomeado sobrevive à normalização. Sem ele, quem trata só
+  // conseguiria distinguir por string de mensagem — frágil e intraduzível. É o caso do
+  // 'FR_SESSAO_DIVERGENTE' (dívida (f), fase 4), e serve para qualquer erro futuro que precise ser
+  // reconhecido por código em vez de texto. Erros do axios (ERR_NETWORK etc.) passam junto.
   return {
     status: null,
+    code: axErr?.code,
     message: axErr?.message || 'Erro inesperado.',
   };
 }

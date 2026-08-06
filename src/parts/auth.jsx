@@ -40,6 +40,26 @@ function LoginScreen({ onLogin }) {
   const [busy, setBusy] = useStateAuth(false);
   const [contato, setContato] = useStateAuth(false);
 
+  // A SAÍDA POR DIVERGÊNCIA CHEGA AQUI COM NOME — dívida (f), fase 4 / etapa 1.
+  //
+  // Cair no login sem explicação faz o operador achar que "deslogou sozinho" e desconfiar do
+  // sistema. Só a divergência produz mensagem: logout normal, F5 e token vencido chegam aqui
+  // MUDOS de propósito (`motivoSaida` é null neles), porque não houve anomalia a nomear.
+  //
+  // ASSINA, não lê uma vez no mount: se esta tela já estiver montada quando a queda acontecer,
+  // uma leitura única perderia o aviso para sempre. Medido no smoke — a mensagem não apareceu
+  // justamente porque a tela não tinha remontado. Depender do instante da montagem é o tipo de
+  // acoplamento que funciona no caminho comum e falha no dia estranho.
+  React.useEffect(() => {
+    const A = window.FRAuth;
+    if (!A) return undefined;
+    const MSG = 'Sua sessão foi substituída por um login de outro usuário neste navegador. Entre de novo para continuar.';
+    const aplicar = () => { if (A.motivoSaida === 'substituida') setErr(MSG); };
+    aplicar();                                    // já caiu antes desta tela montar
+    if (typeof A.subscribe !== 'function') return undefined;
+    return A.subscribe(aplicar);                  // ou cai agora, com a tela de pé
+  }, []);
+
   // Popover de contato: fecha por clique fora e por Esc. Mesmo padrão do switcher de
   // módulo da sidebar (sidebar.jsx:234) — listener só existe enquanto está aberto.
   const contatoRef = React.useRef(null);

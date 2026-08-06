@@ -54,6 +54,99 @@ function lerPayloadJwt(token) {
   }
 }
 
+/**
+ * Classifica o estado da sessão AGORA. Os quatro estados do desenho, e a diferença entre
+ * AUSÊNCIA e DIVERGÊNCIA é o coração desta etapa:
+ *
+ *   'ok'          nada a fazer
+ *   'ausente'     o token sumiu do storage e a memória ainda tem sessão -> foi logout em OUTRA
+ *                 aba. Logout normal, SEM alarde: a outra aba fez o certo, não há anomalia.
+ *   'invalido'    token ilegível ou vencido -> logout normal, também sem alarde.
+ *   'divergente'  o token é de OUTRO usuário -> houve segundo login neste navegador. Só ESTE
+ *                 caso ganha mensagem nomeando o que aconteceu.
+ *
+ * Tratar 'ausente' como divergência produziria falso positivo em TODO logout comum — que é o
+ * defeito que esta etapa não pode ter.
+ */
+function checarSessao() {
+  // ABA JÁ DERRUBADA CONTINUA BLOQUEADA. Medido em 06/08/2026: sem esta linha, depois que o
+  // listener de storage derrubava a sessão, `_user` ficava null e o ramo de baixo devolvia 'ok' —
+  // então qualquer request tardia (timer pendente, componente desmontando) saía com o token do
+  // OUTRO usuário e era aceita. A aba obsoleta fica muda até alguém logar nela de novo, que é o
+  // único ponto que zera `_derrubando`.
+  if (_derrubando) return 'ausente';
+  if (!_user) return 'ok';                      // sem sessão em memória: não há o que proteger
+  let tk = null;
+  try { tk = localStorage.getItem(AUTH_KEYS.token); } catch (e) { return 'ok'; }  // storage indisponível: não derruba
+  if (!tk) return 'ausente';
+  if (tk === _sessionToken) return 'ok';        // caminho rápido: string idêntica, zero decode
+
+  const p = lerPayloadJwt(tk);
+  if (!p || !p.id) return 'invalido';
+  if (p.exp && p.exp * 1000 <= Date.now()) return 'invalido';
+  if (p.id !== _user.id) return 'divergente';
+
+  // MESMO USUÁRIO, TOKEN DIFERENTE -> NÃO é divergência. Adota e segue.
+  //
+  // Hoje isto acontece quando o mesmo usuário loga de novo (T_exp = 24h, SEM refresh). Se um dia
+  // entrar refresh de token, é ESTE o ramo que o acomoda — e é aqui que ele deve ser tratado
+  // explicitamente (ex.: `FRAuth.trocarToken(novo)`), em vez de o detector adivinhar.
+  //
+  // ⚠️ LIMITAÇÃO CONHECIDA, registrada de propósito: comparar por `jwt.id` significa que dois
+  // tokens do MESMO usuário nunca disparam divergência — desejado. Mas o JWT também carrega
+  // `role`, e se um dia o cargo puder mudar SEM re-login, um token antigo do mesmo usuário com
+  // role diferente passaria por aqui. Hoje não morde: trocar cargo emite
+  // `role_permissions_updated`/`user_permissions_updated`, e o socket força logout. Não consertado
+  // nesta etapa — comparar role aqui criaria falso positivo no caminho legítimo de renovação.
+  _sessionToken = tk;
+  return 'ok';
+}
+
+/**
+ * Encerra a sessão SÓ NESTA ABA: limpa memória, para os timers e notifica (o socket cai pelo
+ * subscribe). **NÃO toca no localStorage.**
+ *
+ * ⚠️ ESTA É A DIFERENÇA QUE EVITA DERRUBAR A ABA LEGÍTIMA. Na divergência, o storage pertence à
+ * sessão NOVA — foi ela que acabou de gravar o token. Se a aba obsoleta chamasse `logout()`, o
+ * `clearAuthStorage()` apagaria o token do usuário que acabou de entrar, e a aba legítima cairia
+ * junto no request seguinte ('ausente'). O falso positivo mais caro possível: derrubar quem fez
+ * tudo certo. A aba obsoleta sai de cena em silêncio e deixa o storage como está.
+ */
+function encerrarSessaoLocal() {
+  _sessionToken = null;
+  _user = null;
+  _profile = null;
+  _permissions = [];
+  applyAuthedSideEffects();
+  notify();
+}
+
+/** A queda por divergência, UMA vez. Ver `_derrubando`. */
+function derrubarPorDivergencia() {
+  if (_derrubando) return;   // várias requests em voo -> uma única queda, um único redirect
+  _derrubando = true;
+  _motivoSaida = 'substituida';
+  console.info('Sessão encerrada: outro usuário fez login neste navegador.');
+  encerrarSessaoLocal();     // memória só — o storage é da sessão nova
+}
+
+/**
+ * Aplica a checagem e diz se a sessão SEGUE VÁLIDA. `false` = a sessão foi (ou está sendo)
+ * derrubada e quem chamou não deve prosseguir.
+ */
+function validarSessao() {
+  const r = checarSessao();
+  if (r === 'ok') return true;
+  if (r === 'divergente') { derrubarPorDivergencia(); return false; }
+  // 'ausente' e 'invalido': saída normal, sem mensagem — não há anomalia a nomear.
+  //
+  // Também sem tocar no storage: em 'ausente' não há o que limpar (outra aba já limpou), e em
+  // 'invalido' o token ruim sai no próximo login. Manter a mão fora do storage compartilhado é a
+  // regra desta etapa — quem escreve nele é quem está entrando, não quem está saindo.
+  if (!_derrubando) { _derrubando = true; encerrarSessaoLocal(); }
+  return false;
+}
+
 /** Retorna null se coerente; senão, o MOTIVO (string curta, para o console). */
 function motivoDeIncoerencia(token, savedUser, savedProfile) {
   const p = lerPayloadJwt(token);
@@ -70,6 +163,18 @@ let _user = null;        // { id, email } | null   (encrypted_password NUNCA ent
 let _profile = null;     // { id, name, role, sector } | null
 let _permissions = [];   // string[]
 let _loading = true;
+// ===== DETECTOR DE DIVERGÊNCIA — dívida (f), fase 4 / etapa 1 =====
+//
+// INVARIANTE: o token que o interceptor envia é o MESMO que montou a sessão em memória. Divergiu,
+// derruba — não reconcilia, porque não há como saber qual das duas identidades o operador acredita
+// estar usando, e adotar a nova em silêncio é exatamente como o caso 3 desta dívida nasceu.
+//
+// O RISCO DESTA ETAPA É O FALSO POSITIVO, não o falso negativo. Deixar passar uma divergência
+// mantém o status quo de hoje; derrubar operador legítimo no meio de uma separação é regressão
+// nova. Por isso, na dúvida, `checarSessao()` devolve 'ok' — ver os ramos comentados lá.
+let _sessionToken = null;    // memo do token que montou ESTA sessão (caminho rápido do detector)
+let _derrubando = false;     // guarda de idempotência: a queda acontece UMA vez, não uma por request
+let _motivoSaida = null;     // 'substituida' | null — lido pela tela de login para nomear o que houve
 
 // ---- pub/sub: as telas (Etapa 1+) assinam para re-renderizar quando o auth muda ----
 const subs = new Set();
@@ -159,6 +264,17 @@ async function login(codigo, senha) {
   }
   const email = `${String(parseInt(raw, 10)).padStart(3, '0')}@fluxoroyale.local`;
 
+  // A TENTATIVA DE LOGIN LIBERA A GUARDA — senão a aba derrubada não consegue voltar.
+  //
+  // Medido no smoke de 06/08/2026: com `_derrubando` ainda true, o próprio POST /auth/login era
+  // bloqueado pelo interceptor (que consulta `validarSessao`), e a aba ficava presa até um F5.
+  // O operador cuja sessão foi substituída é exatamente quem MAIS precisa conseguir entrar de
+  // novo — travá-lo seria transformar a proteção em prisão. Tentar logar é declarar sessão nova.
+  //
+  // `_motivoSaida` NÃO é limpo aqui: a mensagem tem que continuar visível enquanto ele digita.
+  // Quem a limpa é o sucesso, mais abaixo.
+  _derrubando = false;
+
   _loading = true;
   notify();
   try {
@@ -196,6 +312,12 @@ async function login(codigo, senha) {
     localStorage.setItem(AUTH_KEYS.permissions, JSON.stringify(perms));
     localStorage.setItem(AUTH_KEYS.token, data.token);   // ← commit da sessão
 
+    // Sessão NOVA: o detector reinicia junto. `_derrubando` volta a false (a guarda vale só para
+    // a rajada de UMA queda) e `_motivoSaida` é limpo, para não vazar na saída seguinte.
+    _sessionToken = data.token;
+    _derrubando = false;
+    _motivoSaida = null;
+
     _user = safeUser;
     _profile = data.profile;
     _permissions = perms;
@@ -212,6 +334,9 @@ async function login(codigo, senha) {
 
 function logout() {
   clearAuthStorage();
+  // `_motivoSaida` NÃO é limpo aqui de propósito: a tela de login ainda precisa lê-lo para
+  // nomear o que houve. Quem o limpa é o próximo login.
+  _sessionToken = null;
   _user = null;
   _profile = null;
   _permissions = [];
@@ -276,6 +401,7 @@ function restore() {
       _user = savedUser;
       _profile = savedProfile;
       _permissions = savedPerms ?? [];
+      _sessionToken = token;   // a sessão restaurada também tem um token que a montou
       applyAuthedSideEffects();
     }
   }
@@ -291,6 +417,25 @@ if (typeof window !== 'undefined') {
 }
 
 // ---- objeto global consumível pelas telas ----
+// ===== O SEGUNDO PONTO DO DETECTOR: listener de `storage` (a IMEDIATEZ) =====
+//
+// O interceptor é a GARANTIA — nenhuma ação sai divergente. Mas ele só roda quando alguém tenta
+// AGIR: uma aba parada continuaria exibindo a identidade antiga até a próxima request, que pode
+// ser minutos depois. Este listener fecha essa janela.
+//
+// `storage` dispara SÓ NAS OUTRAS ABAS da mesma origem, nunca na que escreveu — que é exatamente
+// o comportamento desejado: a aba que fez o login não se derruba, as obsoletas caem na hora.
+//
+// FILTRO POR CHAVE: o evento dispara para QUALQUER chave (permissões, módulo ativo, página do
+// catálogo...). Sem o filtro, um write de preferência viraria avaliação de sessão à toa.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== AUTH_KEYS.token) return;   // só o token muda quem somos
+    if (!_user) return;                      // sem sessão nesta aba: nada a derrubar
+    validarSessao();
+  });
+}
+
 const FRAuth = {
   // estado (getters — sempre refletem o estado atual)
   get user() { return _user; },
@@ -299,6 +444,10 @@ const FRAuth = {
   get isAuthenticated() { return _user !== null; },
   get isMaster() { return computeIsMaster(); },
   get loading() { return _loading; },
+  /** 'substituida' quando a saída foi por divergência; null nas saídas normais. Lido pelo login. */
+  get motivoSaida() { return _motivoSaida; },
+  /** Usado pelo interceptor do FRApi antes de anexar o token. true = sessão íntegra. */
+  validarSessao,
   // ações
   login,
   logout,
