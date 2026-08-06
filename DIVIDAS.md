@@ -22,6 +22,47 @@ que só produz 403** vale mais do que manter uma ilusão que já enganava.
 Saída, se a decisão for "cada um cancela o seu": o gate `frSolPodeCancelar()` (pages_admin.jsx)
 ganha o ramo do dono, na MESMA linha do que o backend passar a aceitar — nunca antes.
 
+## Socket morre depois da reconexão esgotada e nada o re-arma — PRIORIDADE ALTA
+
+Medido em 06/08/2026, no smoke da fase 3 da dívida (f). **Pré-existente** — o `if (socket) return`
+antigo tinha exatamente o mesmo efeito. Não é regressão da fase 3.
+
+**O mecanismo**: `io()` sobe com `reconnectionAttempts: 5` (`socket.js`), que esgota em ~17s de
+backend fora. Depois disso o Socket.IO desiste **permanentemente** daquela instância, e **nada
+re-arma**: `FRAuth.subscribe` só chama `connect()` numa transição de autenticação, que não ocorre
+numa sessão já logada. Medido: derrubei o backend por ~15s, ele voltou, e o socket ficou
+`isConnected: false` indefinidamente. Só um F5 ou um novo login trazem o tempo real de volta.
+
+**A consequência operacional**: separação confirmada não aparece, chamado novo não notifica, fila
+não acorda. O dado continua correto — todo GET é autoritativo —, mas a tela para de se mexer
+sozinha e o operador segue trabalhando achando que nada aconteceu.
+
+### CORREÇÃO ao que eu havia reportado: NÃO é silencioso na tela
+
+Ao levantar o conserto candidato (c) verifiquei o `FrNetBanner` e ele **já é dirigido pelo socket**
+(`erpframe.jsx:277-296` assina `FRSocket.subscribe` e lê `isConnected`, com debounce de 2s) — não
+pelo `navigator.onLine`. Então a faixa vermelha **aparece e fica**.
+
+O defeito é outro, e é mais sutil: a faixa diz **"Sem conexão — verifique a rede"**, e a rede está
+ótima — quem desistiu foi o cliente. O operador confere a rede, encontra tudo funcionando, conclui
+que a faixa é frescura da tela e **aprende a ignorá-la**. Um aviso que ensina a ser ignorado é pior
+que a ausência de aviso. E ele não diz a única coisa que resolveria: recarregue a página.
+
+### Consertos candidatos, a decidir
+
+- **(a) Re-arme por evento**: `reconnect_failed` dispara nova tentativa com backoff longo.
+- **(b) Re-arme na volta do foco/visibilidade da aba** — barato e cobre o caso real (o operador
+  volta para a aba depois de um tempo).
+- **(c) Texto honesto na faixa** quando o socket desistiu: distinguir "sem rede" de "tempo real
+  parado — recarregue a página", com ação. A faixa já existe e já é do socket; falta o terceiro
+  estado. **É o conserto mais barato dos três e o único que não mexe em ciclo de vida.**
+
+### ⚠️ Cuidado que qualquer conserto precisa respeitar
+
+Re-arme tem que passar pelo detector da fase 4: **reconectar com token divergente é pior que não
+reconectar**. Um re-arme cego depois de um segundo login em outra aba abriria socket novo com a
+identidade errada — exatamente a classe (f) que estas fases fecham.
+
 ## Permissões v1 — universo do checklist é a união das chaves em uso
 
 Universo do checklist de Permissões = união das chaves em uso: chave que perder o último

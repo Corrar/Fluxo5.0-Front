@@ -290,7 +290,16 @@ Valem para as próximas sessões, e cada uma custou tempo para ser descoberta.
 11. **Cleanup de smoke é cirúrgico, por id.** `UPDATE`/`DELETE` global já destruiu o seed de
     validação duas vezes.
 
-12. **`TaskStop` não derruba dev server — matar por PID e CONFERIR a porta.** Terceira aparição do
+12. **Instrumento de medição precisa de GUARDA DE IDEMPOTÊNCIA e página limpa.** Terceira aparição
+    da classe num dia. Medindo se o socket duplicava listener, contei 3 e depois 2 disparos para
+    **uma** emissão do servidor — e as duas vezes o defeito era do instrumento: na primeira eu
+    havia registrado `addEventListener` em três instrumentações sucessivas na mesma página; na
+    segunda, um bloco que lançou exceção **já tinha registrado os listeners antes de lançar**.
+    Listener registrado duas vezes **conta a si mesmo**. Com página recarregada e
+    `if (window.__armado) return`, o número saiu 1 — que era a verdade desde o começo. Instrumento
+    que acumula estado entre execuções mede o instrumento, não o sistema.
+
+13. **`TaskStop` não derruba dev server — matar por PID e CONFERIR a porta.** Terceira aparição do
     mesmo padrão: parar a tarefa de background mata o wrapper, não o processo filho. O vite
     continuou respondendo `200` na 8080 depois do stop. **Ambiente só está encerrado quando a porta
     parou de servir** — verificar (`Get-NetTCPConnection -LocalPort N -State Listen`), nunca

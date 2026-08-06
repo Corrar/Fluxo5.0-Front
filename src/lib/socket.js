@@ -19,6 +19,17 @@ function getSocketUrl() {
 
 let socket = null;
 let isConnected = false;
+// O TOKEN QUE ABRIU ESTE SOCKET — dívida (f), fase 3.
+//
+// INVARIANTE DESTE ARQUIVO: **um socket = um token**. Não existe socket que troque de identidade
+// no meio da vida. É por isso que guardamos o token da conexão em vez de reler o localStorage a
+// cada evento: assim dá para DETECTAR a troca e derrubar, em vez de descobrir tarde.
+let socketToken = null;
+
+const tokenAtual = () => { try { return localStorage.getItem(AUTH_KEYS.token) || null; } catch (e) { return null; } };
+// Identidade CORRENTE, lida no momento do evento — nunca a capturada na closure do connect.
+const idCorrente = () => (FRAuth.user && FRAuth.user.id) || null;
+const roleCorrente = () => (FRAuth.profile && FRAuth.profile.role) || null;
 
 const subs = new Set();
 function notify() {
@@ -32,9 +43,23 @@ function connect() {
   const user = FRAuth.user;
   const profile = FRAuth.profile;
   if (!user || !profile) return;
-  if (socket) return; // já conectado/conectando
 
-  const token = localStorage.getItem(AUTH_KEYS.token) || undefined;
+  const token = tokenAtual() || undefined;
+
+  // ===== TROCA DE SESSÃO — dívida (f), fase 3 =====
+  //
+  // Aqui havia `if (socket) return;`, e era o defeito: o `FRAuth.subscribe` chama connect() a
+  // cada login, mas com um socket vivo a chamada morria no early-return. Resultado medido: re-login
+  // na MESMA aba mantinha o socket do usuário ANTERIOR, com o token anterior, nas salas anteriores
+  // — HTTP de um usuário e tempo real de outro, sem sinal nenhum em tela.
+  //
+  // Agora o early-return é CONDICIONADO AO TOKEN: mesmo token segue no-op (nada de reconexão
+  // gratuita a cada notify do FRAuth — o heartbeat e o updatePermissions também notificam);
+  // token diferente derruba o antigo antes de abrir o novo.
+  if (socket) {
+    if (socketToken === token) return;   // mesma sessão: no-op, como antes
+    disconnect();                        // sessão trocou: o socket velho não sobrevive a ela
+  }
 
   let s;
   try {
@@ -51,12 +76,18 @@ function connect() {
   }
 
   socket = s;
+  socketToken = token ?? null;   // carimba a identidade desta conexão (ver invariante no topo)
   notify();
 
   s.on('connect', () => {
     isConnected = true;
     // Fallback legado: se o servidor não autenticou (anônimo), entra na sala pelo cargo.
-    const role = profile.role;
+    //
+    // Lê a role CORRENTE, não a da closure: o handler roda de novo a cada reconexão nativa do
+    // Socket.IO, e reler garante que as salas do fallback sejam as do cargo vigente. (Na prática
+    // um cargo novo já força logout via role_permissions_updated, mas depender disso seria
+    // depender de um evento chegar — a leitura direta não depende de nada.)
+    const role = roleCorrente();
     if (role) {
       s.emit('join_room', role);
       if (role === 'admin') {
@@ -79,20 +110,32 @@ function connect() {
   });
 
   // --- Segurança em tempo real (nomes CORRETOS — nunca 'permissions_updated') ---
+  //
+  // OS TRÊS COMPARAM COM A IDENTIDADE CORRENTE, não com a capturada na closure do connect —
+  // dívida (f), fase 3. Antes usavam `user.id`/`profile.role` do fechamento, e o efeito era o
+  // oposto do pretendido: depois de uma troca de sessão, a suspensão do usuário CORRENTE não
+  // derrubava nada (o socket ainda se achava o antigo), enquanto um evento do usuário ANTIGO
+  // derrubaria a sessão de quem não tem nada a ver com ele.
+  //
+  // Com a invariante "um socket = um token" isto vira cinto e suspensório — mas é o cinto certo:
+  // a decisão de derrubar sessão nunca deve depender de um valor capturado no passado.
   s.on('user_status_changed', (data) => {
-    if (data?.userId === user.id && data?.is_active === false) {
+    const meu = idCorrente();
+    if (meu && data?.userId === meu && data?.is_active === false) {
       console.info('Sessão encerrada: conta suspensa pelo administrador.');
       FRAuth.logout();
     }
   });
   s.on('role_permissions_updated', (data) => {
-    if (profile.role && data?.role === profile.role) {
+    const meuCargo = roleCorrente();
+    if (meuCargo && data?.role === meuCargo) {
       console.info('Permissões do cargo atualizadas. Refaça o login.');
       setTimeout(() => FRAuth.logout(), 3000);
     }
   });
   s.on('user_permissions_updated', (data) => {
-    if (data?.userId === user.id) {
+    const meu = idCorrente();
+    if (meu && data?.userId === meu) {
       console.info('Suas permissões foram atualizadas. Refaça o login.');
       setTimeout(() => FRAuth.logout(), 3000);
     }
@@ -170,8 +213,14 @@ function toastDeTicket(data, tipo) {
 
 function disconnect() {
   if (!socket) return;
+  // removeAllListeners ANTES do disconnect: o objeto antigo não pode disparar mais nada depois
+  // que soltamos a referência. `socket.disconnect()` já desliga a reconexão daquela instância,
+  // mas um handler pendente entre o disconnect e o GC emitiria toast/ação de uma sessão morta —
+  // e ação duplicada é o pior defeito possível num carteiro de tempo real.
+  try { socket.removeAllListeners(); } catch (e) { /* ignore */ }
   try { socket.disconnect(); } catch (e) { /* ignore */ }
   socket = null;
+  socketToken = null;
   isConnected = false;
   notify();
 }

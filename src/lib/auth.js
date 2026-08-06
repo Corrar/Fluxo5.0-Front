@@ -128,6 +128,20 @@ async function login(codigo, senha) {
     const safeUser = { id: data.user.id, email: data.user.email };
     const perms = data.permissions ?? [];
 
+    // A SESSÃO ANTERIOR MORRE ANTES DA NOVA NASCER — dívida (f), fase 3.
+    //
+    // Um login com socket vivo deixava o tempo real do usuário ANTERIOR de pé: o socket.js
+    // detecta a troca de token e reconstrói sozinho, mas ele só é notificado DEPOIS que o estado
+    // novo já está publicado. Derrubar aqui fecha a janela em que o token novo já está no
+    // localStorage e o socket velho ainda está recebendo — janela curta, mas é exatamente onde a
+    // divergência de sessão nasce.
+    //
+    // PELO GLOBAL, não por import: socket.js importa auth.js, e importar de volta criaria ciclo.
+    // `window.FRSocket` é o idioma da casa e já existe quando um login acontece (main.jsx carrega
+    // api -> auth -> socket antes de qualquer render). O optional-chaining cobre o caso de o
+    // socket nunca ter subido — o app funciona sem tempo real, e isso não pode travar o login.
+    try { window.FRSocket?.disconnect(); } catch (e) { /* socket é best-effort; nunca trava login */ }
+
     localStorage.setItem(AUTH_KEYS.token, data.token);
     localStorage.setItem(AUTH_KEYS.user, JSON.stringify(safeUser));
     localStorage.setItem(AUTH_KEYS.profile, JSON.stringify(data.profile));
