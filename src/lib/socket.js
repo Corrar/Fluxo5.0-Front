@@ -31,9 +31,101 @@ const tokenAtual = () => { try { return localStorage.getItem(AUTH_KEYS.token) ||
 const idCorrente = () => (FRAuth.user && FRAuth.user.id) || null;
 const roleCorrente = () => (FRAuth.profile && FRAuth.profile.role) || null;
 
+// ===== RE-ARME APÓS A RECONEXÃO NATIVA ESGOTAR =====
+//
+// O DEFEITO (medido em 06/08/2026): `reconnectionAttempts: 5` com os defaults do socket.io-client
+// 4.8.3 (`reconnectionDelay` 1s, `reconnectionDelayMax` 5s, jitter 0.5) esgota em ~17s de backend
+// fora. Depois disso o Socket.IO desiste PARA SEMPRE daquela instância, e nada re-arma: o
+// `FRAuth.subscribe` só chama `connect()` numa transição de autenticação, que não acontece numa
+// sessão já logada. O operador segue trabalhando sem tempo real por tempo indefinido.
+//
+// POR QUE ISSO É O CASO COMUM, NÃO O EXÓTICO: o Render free-tier hiberna. Numa volta de cold start
+// o servidor demora dezenas de segundos para aceitar conexão — mais do que os ~17s do orçamento.
+// Ou seja, o cenário que mais acontece em produção é exatamente o que estoura as 5 tentativas.
+//
+// A ESCADA É LONGA DE PROPÓSITO: 30s, 1min, 2min, 5min e daí 5min fixo. NUNCA desiste. Curto
+// demais martelaria um serviço hibernando (e são N abas por operador); desistir seria repetir o
+// defeito com outro nome.
+const REARME_ESCADA = [30000, 60000, 120000, 300000];   // e depois 5min fixo, para sempre
+let rearmeTimer = null;
+let rearmeDegrau = 0;
+let ultimaTentativaMs = 0;   // quando o re-arme tentou pela última vez (ver JANELA_ANTI_DUPLO)
+let semTempoReal = false;   // reconexão nativa esgotou -> a tela precisa dizer isso
+
+function cancelarRearme() {
+  if (rearmeTimer) { clearTimeout(rearmeTimer); rearmeTimer = null; }
+  rearmeDegrau = 0;
+}
+
+function agendarRearme() {
+  if (rearmeTimer) return;   // guarda de idempotência: UM timer pendente, nunca empilhado
+  const espera = REARME_ESCADA[Math.min(rearmeDegrau, REARME_ESCADA.length - 1)];
+  rearmeDegrau += 1;
+  rearmeTimer = setTimeout(() => { rearmeTimer = null; tentarRearme(); }, espera);
+}
+
+/**
+ * A tentativa em si. Passa pelas MESMAS travas do resto do arquivo:
+ *
+ * ⚠️ IDENTIDADE ANTES DE TUDO — dívida (f). Reconectar com token divergente é PIOR que não
+ * reconectar: abriria um socket com a identidade errada, que é exatamente a classe que as quatro
+ * fases fecharam. `FRAuth.validarSessao()` é o mesmo conferidor do interceptor; se ele derrubar a
+ * sessão, o re-arme morre junto e não agenda de novo.
+ */
+function tentarRearme() {
+  ultimaTentativaMs = Date.now();
+  if (!FRAuth.isAuthenticated) { cancelarRearme(); return; }
+  if (typeof FRAuth.validarSessao === 'function' && !FRAuth.validarSessao()) {
+    cancelarRearme();   // sessão divergente/ausente: quem sai de cena não reconecta
+    return;
+  }
+  // O socket morto ainda ocupa a variável, e `connect()` é no-op com o MESMO token — por isso o
+  // descarte explícito antes. É troca de instância, não reconexão da antiga (que já desistiu).
+  //
+  // `manterSinal` = true: o descarte aqui é MEIO do re-arme, não fim do problema. Sem isso o
+  // `semTempoReal` zerava a cada tentativa e a faixa piscava entre âmbar e vermelho a cada ciclo
+  // — duas mensagens diferentes alternando enquanto nada mudou para o operador. Medido.
+  disconnect(true);
+  connect();
+  // Não conectou de imediato? Reagenda no próximo degrau. O 'connect' cancela quando vier.
+  if (!isConnected) agendarRearme();
+}
+
+// RE-ARME POR FOCO/VISIBILIDADE — registrado UMA VEZ, no módulo, nunca por conexão.
+//
+// Cobre o caso real: o operador sai da aba, volta, e quer o tempo real de volta AGORA, sem esperar
+// o degrau. Registrar dentro de `connect()` acumularia um listener por reconexão — o defeito que a
+// fase 3 fechou no socket e que aqui seria reintroduzido pela porta dos fundos.
+//
+// `visibilitychange` cobre troca de aba e de aplicativo; `focus` cobre voltar para a janela sem que
+// a aba tenha ficado oculta.
+//
+// ⚠️ OS DOIS DISPARAM NA MESMA TRANSIÇÃO. Medido no smoke (Ctrl+9 real, não evento sintético): ao
+// voltar para a aba saíram QUATRO notificações no mesmo instante, não duas — ou seja, duas
+// tentativas. A guarda `isConnected` não segura a segunda porque `connect()` é assíncrono: quando o
+// `focus` chega, o socket criado pelo `visibilitychange` ainda está em handshake. O resultado era a
+// segunda tentativa DERRUBAR o socket que a primeira acabou de abrir, e abrir outro no lugar.
+//
+// Nada quebrava (uma instância só sobrevivia), mas era uma conexão desperdiçada e uma sessão órfã
+// no servidor a cada volta de aba. A janela colapsa o par em UMA tentativa: dois eventos, uma
+// transição, uma reconexão.
+const JANELA_ANTI_DUPLO = 3000;
+function aoVoltarParaFrente() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  if (!semTempoReal || isConnected) return;      // só age quando há o que consertar
+  if (!FRAuth.isAuthenticated) return;
+  if (Date.now() - ultimaTentativaMs < JANELA_ANTI_DUPLO) return;   // o par já foi atendido
+  cancelarRearme();                              // mata o timer longo: a tentativa é agora
+  tentarRearme();
+}
+if (typeof window !== 'undefined') {
+  document.addEventListener('visibilitychange', aoVoltarParaFrente);
+  window.addEventListener('focus', aoVoltarParaFrente);
+}
+
 const subs = new Set();
 function notify() {
-  const snap = { socket, isConnected };
+  const snap = { socket, isConnected, semTempoReal };
   subs.forEach((fn) => {
     try { fn(snap); } catch (e) { /* assinante não pode derrubar o socket */ }
   });
@@ -79,8 +171,23 @@ function connect() {
   socketToken = token ?? null;   // carimba a identidade desta conexão (ver invariante no topo)
   notify();
 
+  // ⚠️ NO MANAGER (`s.io`), NÃO NO SOCKET. Conferido no código do socket.io-client 4.8.3
+  // (`manager.js:368`): `reconnect_failed` é `emitReserved` do Manager. `s.on('reconnect_failed')`
+  // NUNCA dispararia — é o tipo de gancho que parece instalado e não está.
+  //
+  // Aqui é o único ponto em que se sabe que a reconexão nativa DESISTIU. É o começo do re-arme.
+  s.io.on('reconnect_failed', () => {
+    semTempoReal = true;
+    console.info('Tempo real perdido: a reconexão automática esgotou. Tentando de novo em segundo plano.');
+    notify();          // a faixa da tela reage a isto
+    agendarRearme();
+  });
+
   s.on('connect', () => {
     isConnected = true;
+    // Voltou: o re-arme perdeu a razão de existir e a escada zera (a próxima queda recomeça em 30s).
+    semTempoReal = false;
+    cancelarRearme();
     // Fallback legado: se o servidor não autenticou (anônimo), entra na sala pelo cargo.
     //
     // Lê a role CORRENTE, não a da closure: o handler roda de novo a cada reconexão nativa do
@@ -211,8 +318,21 @@ function toastDeTicket(data, tipo) {
   } catch (e) { /* aviso é cortesia: nunca derruba o socket */ }
 }
 
-function disconnect() {
+/**
+ * @param {boolean} manterSinal - true só quando o descarte é PARTE de uma tentativa de re-arme:
+ *   o problema continua de pé, então o sinal para a tela e o timer sobrevivem à troca de instância.
+ *   Em qualquer outro caminho (logout, troca de sessão) o padrão `false` limpa tudo.
+ */
+function disconnect(manterSinal = false) {
   if (!socket) return;
+  if (!manterSinal) {
+    // Timer órfão reconectando depois do logout é bug novo — cancela ANTES de soltar a referência.
+    cancelarRearme();
+    semTempoReal = false;
+  }
+  // O listener de `reconnect_failed` mora no MANAGER, e `removeAllListeners()` do socket não o
+  // alcança. Sem esta linha, um manager sobrevivente agendaria re-arme de uma sessão morta.
+  try { socket.io.off('reconnect_failed'); } catch (e) { /* ignore */ }
   // removeAllListeners ANTES do disconnect: o objeto antigo não pode disparar mais nada depois
   // que soltamos a referência. `socket.disconnect()` já desliga a reconexão daquela instância,
   // mas um handler pendente entre o disconnect e o GC emitiria toast/ação de uma sessão morta —
@@ -237,6 +357,9 @@ if (FRAuth.isAuthenticated) connect();
 const FRSocket = {
   get socket() { return socket; },
   get isConnected() { return isConnected; },
+  /** true quando a reconexão NATIVA esgotou e só o re-arme longo está tentando. A tela usa isto
+   *  para dizer a verdade: o HTTP funciona, o que parou foi o tempo real. */
+  get semTempoReal() { return semTempoReal; },
   connect,
   disconnect,
   subscribe(fn) {

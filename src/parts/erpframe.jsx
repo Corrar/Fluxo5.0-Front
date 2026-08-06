@@ -213,10 +213,16 @@ function FrNetBanner({ t, state }) {
   if (state === 'online') return null;
   const off = state === 'offline';
   const bg = off ? '#dc2626' : '#d97706';
+  // O texto do estado ÂMBAR diz o que está acontecendo de verdade: o HTTP funciona, quem parou foi
+  // o tempo real, e há uma tentativa em andamento. "Sem conexão" aqui seria mentira — o usuário
+  // conferiria a rede, acharia tudo certo, e aprenderia a ignorar a faixa.
+  const texto = off
+    ? 'Sem conexão — verifique a rede'
+    : 'Sem atualizações em tempo real — tentando reconectar';
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '7px 14px', background: bg, color: '#fff', fontSize: 12.5, fontWeight: 700, boxShadow: '0 6px 18px -6px rgba(0,0,0,.4)', animation: 'frNetIn .34s cubic-bezier(.22,1.2,.36,1)' }}>
       <Icon name={off ? 'wifiOff' : 'wifi'} size={15} style={{ animation: off ? 'none' : 'frNetPulse 1.4s ease-in-out infinite' }} />
-      {off ? 'Sem conexão — verifique a rede' : 'Reconectando…'}
+      {texto}
     </div>
   );
 }
@@ -279,21 +285,32 @@ function Topbar({ t, brand, setBrand, mod, setActive, mobile, onMenu }) {
   // A CARÊNCIA de 2s não é enfeite: logo após o login o socket ainda está subindo, e mostrar
   // "Sem conexão" nesse instante seria uma afirmação falsa na cara do usuário. O banner só
   // aparece se a desconexão PERSISTIR — reconexão rápida não pisca aviso nenhum.
+  // O TERCEIRO ESTADO DEIXOU DE SER INALCANÇÁVEL (06/08/2026, dívida do re-arme do socket).
+  //
+  // Antes só existiam 'online' e 'offline', e o comentário original dizia que 'unstable' ficava
+  // inalcançável de propósito — porque o socket é binário. Continua binário: o que nasceu não é um
+  // meio-termo de conexão, é uma DISTINÇÃO DE CAUSA. Enquanto a reconexão nativa tenta, é queda
+  // ("offline"). Quando ela ESGOTA (`FRSocket.semTempoReal`), a natureza do problema muda: o HTTP
+  // segue funcionando, o que parou foi o tempo real, e o único conserto é o re-arme em segundo
+  // plano. Dizer "verifique a rede" nessa hora é falso — e um aviso falso ensina a ser ignorado.
   const [netOff, setNetOff] = useStateF(false);
+  const [semRT, setSemRT] = useStateF(false);
   React.useEffect(() => {
     const S = window.FRSocket;
     if (!S || typeof S.subscribe !== 'function') return undefined;
     let timer = null;
-    const aplicar = (conectado) => {
+    const aplicar = (conectado, semRealTime) => {
+      setSemRT(!!semRealTime);
       clearTimeout(timer);
       if (conectado) { setNetOff(false); return; }
       timer = setTimeout(() => setNetOff(true), 2000);
     };
-    aplicar(!!S.isConnected);
-    const desinscrever = S.subscribe((snap) => aplicar(!!(snap && snap.isConnected)));
+    aplicar(!!S.isConnected, !!S.semTempoReal);
+    const desinscrever = S.subscribe((snap) => aplicar(!!(snap && snap.isConnected), !!(snap && snap.semTempoReal)));
     return () => { clearTimeout(timer); if (typeof desinscrever === 'function') desinscrever(); };
   }, []);
-  const net = netOff ? 'offline' : 'online';
+  // 'semtemporeal' tem precedência sobre 'offline': é a informação mais específica e mais útil.
+  const net = semRT ? 'semtemporeal' : (netOff ? 'offline' : 'online');
 
   const unread = notifs.filter((n) => !n.read).length;
   const readOne = (id) => setNotifs((xs) => xs.map((n) => n.id === id ? { ...n, read: true } : n));
@@ -355,7 +372,10 @@ function Topbar({ t, brand, setBrand, mod, setActive, mobile, onMenu }) {
         {/* Ponto de status no canto do sino: o aviso discreto que fica mesmo depois de o
             usuário fechar/ignorar a faixa do topo. */}
         {net !== 'online' && (
-          <span title="Sem conexão" style={{ position: 'absolute', bottom: -3, right: -3, width: 14, height: 14, borderRadius: '50%', background: '#dc2626', border: `2px solid ${t.panel}`, display: 'grid', placeItems: 'center' }} />
+          <span
+            title={net === 'semtemporeal' ? 'Sem atualizações em tempo real — tentando reconectar' : 'Sem conexão'}
+            style={{ position: 'absolute', bottom: -3, right: -3, width: 14, height: 14, borderRadius: '50%', background: net === 'semtemporeal' ? '#d97706' : '#dc2626', border: `2px solid ${t.panel}`, display: 'grid', placeItems: 'center' }}
+          />
         )}
       </div>
       <FrNetBanner t={t} state={net} />
