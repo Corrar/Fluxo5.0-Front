@@ -22,7 +22,52 @@ que só produz 403** vale mais do que manter uma ilusão que já enganava.
 Saída, se a decisão for "cada um cancela o seu": o gate `frSolPodeCancelar()` (pages_admin.jsx)
 ganha o ramo do dono, na MESMA linha do que o backend passar a aceitar — nunca antes.
 
-## Socket morre depois da reconexão esgotada e nada o re-arma — PRIORIDADE ALTA
+## ~~Socket morre depois da reconexão esgotada e nada o re-arma~~ — CONSERTADA em 06/08/2026, COM COBERTURA PARCIAL DECLARADA
+
+**Conserto no commit `1cd54ca` (front).** As três camadas foram implementadas: (a) backoff que
+nunca desiste, (b) re-arme na volta do foco/visibilidade, (c) terceiro estado honesto na faixa. A
+descrição do defeito fica abaixo, preservada, porque é o registro de como ele foi medido.
+
+**Fica FECHADA, não apagada, e com a cobertura declarada** — parte do conserto foi medida, parte
+não. Ver "Pendência de verificação" logo abaixo. Fechar uma dívida escondendo o que não foi medido
+seria trocar um defeito por uma mentira mais cara.
+
+### O que FOI medido, ponta a ponta (smoke de 06/08/2026, 7 provas)
+
+- **Re-arme por backoff**: `reconnect_failed` (no **Manager**, `s.io` — no socket nunca dispararia)
+  às 39,8s; tentativas às 70,4s, 129,1s e 250,1s. Escada 30s → 60s → 120s respeitada, sem martelar.
+- **Reconexão quando o backend volta**: reconectou às 251,1s e o âmbar sumiu.
+- **Identidade respeitada no re-arme** (a prova negativa, a mais importante): com re-arme pendente e
+  token de outro usuário gravado no storage da própria aba, **não abriu socket** — `validarSessao()`
+  devolveu divergente, a sessão caiu com `motivoSaida: 'substituida'`. Reconectar com token
+  divergente seria pior que não reconectar.
+- **Sem listener duplicado e sem timer empilhado**: os listeners de foco/visibilidade são
+  registrados uma vez no módulo; `agendarRearme` tem guarda de um timer pendente por vez.
+- **Timer cancelado no logout**: `disconnect()` cancela o re-arme antes de soltar a referência, e
+  desliga o `reconnect_failed` no **manager** (que `removeAllListeners()` do socket não alcança).
+- **Volta ao foco com socket morto reconecta na hora** — medido com aba genuinamente oculta,
+  backend de volta (HTTP 200 e socket morto no mesmo instante) e o degrau seguinte a 39s de
+  distância: reconectou no instante da volta, não no vencimento do timer. ⚠️ **Este verde é do
+  build ANTERIOR à janela anti-duplo** — ver a pendência.
+
+### ⚠️ PENDÊNCIA DE VERIFICAÇÃO — a janela anti-duplo não foi medida
+
+`JANELA_ANTI_DUPLO` (3s, `socket.js`) **não foi medida de ponta a ponta**. A prova da volta ao foco
+que está verde é do build **anterior** à correção.
+
+O que sustenta a mudança é a **medição do defeito**, não a medição do conserto: no instante da volta
+ao foco saíram **4 notificações**, não 2 — `visibilitychange` e `focus` são a mesma transição e
+disparavam duas tentativas, com a segunda derrubando o socket que a primeira acabara de abrir.
+
+**Por que não foi medido**: o gatilho real de troca de aba nesta máquina só existe por teclado do
+SO. `SetForegroundWindow` foi bloqueado pelo Windows e o atalho vazou para uma janela de terceiro
+(uma planilha do Excel, em Modo de Exibição Protegido). E só há **uma** janela do Chrome na máquina
+— a de trabalho do Bruno. Insistir significaria sequestrar o foco dele. O instrumento foi parado.
+
+**Como fechar, numa sessão com navegador livre**: socket morto, aba oculta, backend no ar, degrau
+longe de vencer; trazer a aba ao foco e **contar as notificações — tem que ser 1, não 2 nem 4**.
+
+### O defeito original, como foi medido
 
 Medido em 06/08/2026, no smoke da fase 3 da dívida (f). **Pré-existente** — o `if (socket) return`
 antigo tinha exatamente o mesmo efeito. Não é regressão da fase 3.
@@ -48,20 +93,22 @@ O defeito é outro, e é mais sutil: a faixa diz **"Sem conexão — verifique a
 que a faixa é frescura da tela e **aprende a ignorá-la**. Um aviso que ensina a ser ignorado é pior
 que a ausência de aviso. E ele não diz a única coisa que resolveria: recarregue a página.
 
-### Consertos candidatos, a decidir
+### Consertos candidatos — os TRÊS foram aplicados
 
-- **(a) Re-arme por evento**: `reconnect_failed` dispara nova tentativa com backoff longo.
+- **(a) Re-arme por evento**: `reconnect_failed` dispara nova tentativa com backoff longo. ✔
 - **(b) Re-arme na volta do foco/visibilidade da aba** — barato e cobre o caso real (o operador
-  volta para a aba depois de um tempo).
+  volta para a aba depois de um tempo). ✔
 - **(c) Texto honesto na faixa** quando o socket desistiu: distinguir "sem rede" de "tempo real
-  parado — recarregue a página", com ação. A faixa já existe e já é do socket; falta o terceiro
-  estado. **É o conserto mais barato dos três e o único que não mexe em ciclo de vida.**
+  parado". ✔ — com uma correção do desenho original: a faixa **não** manda recarregar a página,
+  porque o re-arme já está tentando. Mandar F5 seria empurrar para o operador um trabalho que o
+  código passou a fazer sozinho.
 
-### ⚠️ Cuidado que qualquer conserto precisa respeitar
+### ⚠️ Cuidado que o conserto respeitou
 
 Re-arme tem que passar pelo detector da fase 4: **reconectar com token divergente é pior que não
 reconectar**. Um re-arme cego depois de um segundo login em outra aba abriria socket novo com a
-identidade errada — exatamente a classe (f) que estas fases fecham.
+identidade errada — exatamente a classe (f) que estas fases fecham. `tentarRearme()` chama
+`FRAuth.validarSessao()` antes de tocar no socket, e foi essa a prova negativa do smoke.
 
 ## Permissões v1 — universo do checklist é a união das chaves em uso
 

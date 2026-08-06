@@ -83,6 +83,7 @@ de dado é um erro que o usuário atribui a si mesmo.
 | `2430ac6` | 06/08 | **(f) fase 3**: a sessão nova não herda o socket da antiga |
 | `aaad1ba` | 06/08 | **(f) fase 4/etapa 0**: coerência no `restore()`; token vira marcador de commit |
 | `a387c17` | 06/08 | **(f) fase 4/etapa 1**: detector de divergência — a ação errada não parte |
+| `1cd54ca` | 06/08 | **Re-arme do socket**: backoff que nunca desiste, volta do foco, e a faixa passa a distinguir "sem tempo real" de "sem conexão" |
 
 ---
 
@@ -91,11 +92,14 @@ de dado é um erro que o usuário atribui a si mesmo.
 | | SHA | Onde |
 |---|---|---|
 | Backend | `de0abc0` | `https://fluxo5-0-backend.onrender.com` — Render |
-| Front | `a387c17` | `https://fluxo-royale50.vercel.app` — Vercel, projeto `fluxo-royale5.0` |
+| Front | `1cd54ca` | `https://fluxo-royale50.vercel.app` — Vercel, projeto `fluxo-royale5.0` |
 | Banco | — | Neon, branch **`ep-summer-wave`** (validação) |
 
-**Nada commitado e não pushado.** Os dois repositórios estão em `main`, limpos, com `origin/main`
-igual ao local.
+O SHA do front aponta para o **último commit que muda o bundle**. Commits só de documentação (como
+este) vão junto no mesmo push e viram o `HEAD`, mas não alteram uma linha do que é servido — por
+isso não substituem o SHA da tabela.
+
+**Nada pendente.** Os dois repositórios estão em `main`, limpos, com `origin/main` igual ao local.
 
 Cuidados que já custaram tempo e precisam ficar escritos:
 
@@ -178,7 +182,6 @@ Ver "Fechadas nesta missão", abaixo.)*
 | — | `DELETE /requests/:id` devolve **500** em estado bloqueado | Guard lança `Error` comum e cai no catch genérico; mensagem certa, status errado. O `PUT` faz certo com sentinela | Uma linha | Baixa — a UI usa o `PUT`; a rota é admin-only na prática |
 | — | **Cancelamento sem ownership** | Nem `deleteRequest` nem `updateRequestStatus` olham o dono: exigem cargo admin/almoxarife e nada mais. Qualquer um dos dois cancela o pedido de qualquer pessoa; o solicitante comum não cancela nem o próprio | **Decisão de produto**, não conserto | Aguarda o Bruno |
 | — | `FR_OPS_ATIVAS` / `frClienteDaOP` vêm do seed mock | `pages_clientes.jsx:53` monta os globais do `CLIENTES_SEED`. **Meus Pedidos saiu em `327bb6d`** (usa `useFRClients`); **Conferência e Separações continuam consumindo**. Uma OP criada de verdade não aparece nos dropdowns delas | Trocar pela fonte real ao ligar as telas restantes | Média |
-| — | **Socket morre depois da reconexão esgotada e nada o re-arma** | `reconnectionAttempts: 5` esgota em ~17s de backend fora; depois disso nada re-arma (só transição de autenticação chama `connect()`). A faixa do `FrNetBanner` aparece, mas diz "verifique a rede" com a rede boa — e ensina a ser ignorada | (a) re-arme por `reconnect_failed`, (b) re-arme no foco da aba, ou (c) terceiro estado honesto na faixa | **ALTA** — pré-existente, não é regressão. Qualquer re-arme precisa respeitar o detector da (f) |
 | — | **Vocabulário de status de OP diverge entre 2.0 e 5.0** | 2.0: `pendente` = ativo (18 OPs). 5.0: `em_andamento` = ativo (5), e `pendente` é o DEFAULT de "não começou". Cópia crua na carga esconderia 18 OPs vivas de todo filtro por igualdade | Script de carga + decisão de vocabulário + eventual migration | **ALTA** — não morde hoje, **bloqueia a carga**. Ver §10.8 |
 
 ### Fechadas nesta missão
@@ -189,6 +192,7 @@ Ver "Fechadas nesta missão", abaixo.)*
 | **(l)** | Fallback do CORS autorizava dois apps que não são nossos e **não listava** `fluxo-royale50.vercel.app` — indisponibilidade total a uma variável de ambiente de distância | **`9363d2a`** (06/08) | Só a **convivência dos dois apps** com nomes parecidos: prioridade **média**, **decisão de produto** (aposentar ou renomear o vizinho). O risco de infraestrutura acabou |
 | **(i)** | Falha de impressão silenciosa na Entrada | `3fc809b` (05/08) | Cobertura **parcial**: dois itens herdados seguem na fila da ZD220 (§7) |
 | **(m)** | Etiqueta: nome longo sobrepunha em vez de quebrar | `8d753cd` (05/08) | Dívida de **verificação**, não de código — a prova no papel está na fila da ZD220 (§7) |
+| — | **Socket morre depois da reconexão esgotada e nada o re-arma** — era ALTA. As três camadas entraram: backoff que nunca desiste (30s→1min→2min→5min), re-arme na volta do foco, e terceiro estado honesto na faixa ("sem tempo real" ≠ "sem conexão") | **`1cd54ca`** (06/08) | Cobertura **parcial declarada**: 6 das 7 provas medidas ponta a ponta, inclusive a negativa de identidade. A **janela anti-duplo de 3s não foi medida** — pendência em §7 |
 
 A remoção dos dois domínios do 2.0 no fechamento da (l) foi **verificada, não presumida**: o bundle
 publicado de cada um aponta para backend próprio (`fluxo-royale-backend.onrender.com` e
@@ -239,6 +243,28 @@ BI (`1b35c63`) pegou uma regressão real (cards estourando a tela, `right 455` n
 
 **Medido e verde**, para não confundir: 1920×889 — modal de cancelamento 480px centrado e dropdown
 de OP 480×288 (esq 1391 / dir 1871), os dois dentro da tela, sem overflow horizontal.
+
+### Janela anti-duplo do re-arme do socket — fecha numa sessão com navegador livre
+
+**NÃO MEDIDA.** `JANELA_ANTI_DUPLO` (3s, `socket.js`), do commit `1cd54ca`. A prova da volta ao foco
+que está verde é do build **anterior** à correção.
+
+O que sustenta a mudança é a **medição do defeito, não a do conserto**: no instante da volta ao foco
+saíram **4 notificações**, não 2. `visibilitychange` e `focus` são a mesma transição, e a guarda
+`isConnected` não segura a segunda porque `connect()` é assíncrono — quando o `focus` chega, o
+socket aberto pelo `visibilitychange` ainda está em handshake. A segunda tentativa derrubava o
+socket que a primeira acabara de abrir. Nada quebrava (sobrevivia uma instância só), mas era uma
+conexão desperdiçada e uma sessão órfã no servidor a cada volta de aba.
+
+**O mecanismo do impedimento**, que é o que importa registrar: o gatilho real de troca de aba nesta
+máquina só existe por **teclado do SO**. `SetForegroundWindow` foi bloqueado pelo Windows
+(foreground lock) e o `Ctrl+9` vazou para uma janela de terceiro — uma planilha do Excel, em Modo de
+Exibição Protegido, que bloqueia edição. E existe **uma só** janela do Chrome na máquina: a de
+trabalho do Bruno. Insistir significaria sequestrar o foco dele durante o trabalho. O instrumento
+ganhou uma trava (não digita sem confirmar a janela em primeiro plano) e foi **parado**.
+
+**Como fechar**: socket morto, aba oculta, backend no ar, degrau longe de vencer; trazer a aba ao
+foco e **contar as notificações — tem que ser 1, não 2 nem 4.**
 
 ---
 
@@ -319,6 +345,17 @@ Valem para as próximas sessões, e cada uma custou tempo para ser descoberta.
     comando** — sha no `/health` em vez do push, conteúdo do bundle em vez do nome, porta calada em
     vez do stop aceito.
 
+14. **Instrumento que precisa do FOCO DO SO não é utilizável nesta máquina.** Existe **uma** janela
+    do Chrome aqui, e ela é a de trabalho do Bruno. Medir a volta ao foco de uma aba exige trocar a
+    aba ativa **daquela** janela — e o único gatilho disponível, `SendKeys`, digita em quem estiver
+    em primeiro plano. `SetForegroundWindow` é bloqueado pelo Windows sem aviso: a chamada retorna,
+    a janela não vem, e a tecla vaza para o programa errado (em 06/08 foi um `Ctrl+9` numa planilha
+    do Excel, salva pelo Modo de Exibição Protegido). Duas consequências, as duas obrigatórias:
+    **(i)** todo instrumento que digita precisa **conferir a janela em primeiro plano imediatamente
+    antes de cada tecla e abortar sem digitar** se não for a alvo; **(ii)** medição que exige troca
+    de janela ou de aba fica para **ambiente dedicado** — não se sequestra o foco de quem está
+    trabalhando para fechar uma prova. Registrar a pendência custa menos que atrapalhar o usuário.
+
 ---
 
 ## 9. Incidente — 06/08/2026
@@ -362,13 +399,15 @@ Saldo conferido depois: BOB-4005 `reserved 8.00` (disponível 0), 3.01.0269 `res
 
 1. **Fechar a fila da ZD220** (§7) — quatro itens, uma sessão de impressora. **É o que resta antes
    do piloto.**
-2. **Decidir o re-arme do socket** — a dívida ALTA aberta nesta missão (socket morre depois da
-   reconexão esgotada). Não bloqueia piloto por si, mas o operador perde tempo real sem entender
-   por quê, e a faixa que aparece diz "verifique a rede" quando a rede está boa.
+2. **Contar as notificações da volta ao foco** (§7) — a janela anti-duplo do re-arme do socket, num
+   ambiente com navegador livre. Item de **verificação**, não de código: o re-arme já está no ar em
+   `1cd54ca` e o defeito que a janela corrige é desperdício, não quebra.
 
-*(Esta lista tinha três itens. A **(f)** — a única bloqueante de piloto — **saiu, fechada** em
-quatro fases (06/08); a **(l)** saiu antes, fechada em `9363d2a`. O que restou das duas são
-decisões de produto sem urgência, em "Na mesa, sem data".)*
+*(Esta lista tinha três itens, e depois quatro. A **(f)** — a única bloqueante de piloto — **saiu,
+fechada** em quatro fases (06/08); a **(l)** saiu antes, fechada em `9363d2a`; o **re-arme do
+socket** era decisão pendente e **virou conserto no ar** (`1cd54ca`), deixando para trás só a
+verificação acima. O que restou das duas primeiras são decisões de produto sem urgência, em "Na
+mesa, sem data".)*
 
 ### Na mesa, sem data
 
