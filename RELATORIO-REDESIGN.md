@@ -290,6 +290,15 @@ Valem para as próximas sessões, e cada uma custou tempo para ser descoberta.
 11. **Cleanup de smoke é cirúrgico, por id.** `UPDATE`/`DELETE` global já destruiu o seed de
     validação duas vezes.
 
+12. **`TaskStop` não derruba dev server — matar por PID e CONFERIR a porta.** Terceira aparição do
+    mesmo padrão: parar a tarefa de background mata o wrapper, não o processo filho. O vite
+    continuou respondendo `200` na 8080 depois do stop. **Ambiente só está encerrado quando a porta
+    parou de servir** — verificar (`Get-NetTCPConnection -LocalPort N -State Listen`), nunca
+    presumir. Vale para o backend local (3000) tanto quanto para o front (8080). O padrão comum às
+    três aparições é o mesmo das réguas 1 e 2: **a confirmação tem que medir o efeito, não o
+    comando** — sha no `/health` em vez do push, conteúdo do bundle em vez do nome, porta calada em
+    vez do stop aceito.
+
 ---
 
 ## 9. Incidente — 06/08/2026

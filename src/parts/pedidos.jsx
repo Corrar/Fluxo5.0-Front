@@ -462,11 +462,23 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const confirmar = async () => {
     if (sending) return;                                                // anti duplo-clique
     if (!cart.length || (precisaOP && !opSel) || cartInvalido) return;  // validação de OP/destino já existente (reusada)
-    // Setor do usuário logado (fallback ao que a tela já usava). op_code só se houver OP escolhida.
-    const sector = (window.FRAuth && window.FRAuth.profile && window.FRAuth.profile.sector) || 'Geral';
+    // ⚠️ `sector` NÃO VAI MAIS NO CORPO — dívida (f), fase 2.
+    //
+    // Esta tela mandava `FRAuth.profile.sector` (a identidade em MEMÓRIA) enquanto o interceptor
+    // mandava o token do localStorage. Numa divergência de sessão os dois discordam, e o pedido
+    // nascia com o SETOR de um usuário e o `requester_id` de OUTRO — dado errado GRAVADO, não só
+    // exibido, numa tabela que a auditoria acompanha. Agora o servidor deriva o setor do MESMO
+    // token que identifica o requester: uma fonte, sem como divergir.
+    //
+    // O DOIS SIGNIFICADOS DE `sector`, para quem vier depois: aqui ele é ORIGEM (quem pediu) e por
+    // isso é identidade, proibida no corpo. Em Encomendar 3D (pages_rest.jsx) ele é DESTINO — um
+    // campo que o usuário digita, "para onde vai" — que é dado de negócio legítimo e CONTINUA
+    // sendo enviado. O backend só deriva quando o corpo não manda; por isso o 3D não muda.
+    // Ver a dívida "requests.sector com dois significados no mesmo campo" no DIVIDAS.md do backend.
+    //
+    // op_code só se houver OP escolhida.
     // items: { product_id, quantity, observation? } — observation só quando houver. EPI fica p/ Peça 4.
     const payload = {
-      sector,
       items: cart.map((c) => {
         const it = { product_id: catOf(c.sku).product_id, quantity: c.qtd };  // product_id REAL do useFRProducts (não sku/índice)
         if (c.observation) it.observation = c.observation;
