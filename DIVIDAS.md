@@ -131,6 +131,33 @@ visível que o usuário não tem como resolver.
 
 ## (f) Identidade exibida ≠ identidade que age
 
+> ### ✅ FECHADA em 06/08/2026 — quatro fases, dois repositórios
+>
+> | Fase | SHA | O que cobriu |
+> |---|---|---|
+> | 1 | `efb8273` (front) | A **exibição**. O rodapé deixou de ler o global `USER` (mock mutado em `useEffect`) e passou a ser estado React assinado ao `FRAuth` (`useFRIdentidade`). O chip `"Geral"` chumbado do Meus Pedidos saiu. **Fecha os casos 2 e 4.** |
+> | 2 | `de0abc0` (backend) + `9646900` (front) | O **dado gravado**. `POST /requests` deriva `profiles.sector` do token; Meus Pedidos parou de mandar identidade no corpo. Era a única das quatro que **gravava** errado, não só exibia. |
+> | 3 | `2430ac6` (front) | O **socket**. `connect()` deixou de ser no-op cego (early-return só com o MESMO token), `login()` desconecta antes, e os 3 listeners de segurança comparam com a identidade **corrente**, não a da closure. **Fecha o caso 3.** |
+> | 4 | `aaad1ba` + `a387c17` (front) | A **classe inteira**. Etapa 0: `restore()` confere coerência (`jwt.id` × `user_data` × `user_profile` + `exp`) e o token virou o **último** write do `login()`, como marcador de commit. Etapa 1: o **detector** — interceptor (garantia: a request divergente não parte) + listener de `storage` (imediatez: as abas obsoletas caem na hora). **Fecha o caso 1.** |
+>
+> **Provado em nuvem** (06/08, `fluxo-royale50.vercel.app` + Render `de0abc0`): login e F5 não derrubam
+> nada e o console fica mudo; com duas abas e atores diferentes, a primeira cai com
+> `FR_SESSAO_DIVERGENTE`, `status: null` (a request **não virou tráfego**) e a mensagem nomeada na
+> tela. A aba legítima segue intacta.
+>
+> **NOTA — limitação conhecida, e é nota, não dívida nova:** o detector compara por `jwt.id`. Dois
+> tokens do MESMO usuário não disparam divergência — isso é **desejado** (é o caminho de renovação
+> legítima). Mas o JWT também carrega `role`: se um dia o cargo puder mudar **sem re-login**, um
+> token antigo do mesmo usuário com role diferente passaria pelo detector. Hoje não morde — trocar
+> cargo emite `role_permissions_updated`/`user_permissions_updated` e o socket força logout. Comparar
+> `role` no detector criaria falso positivo no caminho legítimo, e por isso não foi feito.
+>
+> **O que a mitigação operacional deixa de ser necessária:** "uma aba por operador e logout explícito
+> ao trocar de pessoa" era a regra de contenção enquanto isto não fechava. O segundo login agora
+> derruba a aba antiga sozinho, com aviso.
+>
+> O texto abaixo é o registro original do que foi encontrado, mantido como está.
+
 UMA CLASSE, TRÊS CASOS. O nome que a tela mostra pode divergir de quem a sessão realmente é —
 e quem age é a sessão. Num terminal compartilhado o operador confia no nome que está na tela e
 atribui a ação a quem está escrito.

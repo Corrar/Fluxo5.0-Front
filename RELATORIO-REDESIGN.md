@@ -1,7 +1,7 @@
 # Relatório da missão — redesign do Fluxo Royale 5.0
 
 Consolidado em 06/08/2026. Cobre de `4545586` (front, 31/07) e `7116d03` (backend, 03/08) até
-`327bb6d` (front) / `9363d2a` (backend).
+`a387c17` (front) / `de0abc0` (backend).
 
 Este arquivo é o registro durável da missão: o que ela virou, o que subiu, o que foi recusado, o
 que ficou devendo e o que ainda não foi provado. As dívidas com detalhe técnico continuam em
@@ -48,6 +48,7 @@ de dado é um erro que o usuário atribui a si mesmo.
 | `7b6298d` | 06/08 | Libera reserva ao cancelar solicitação **conferida** (+ comentário falso da rota corrigido) |
 | `22c636e` | 06/08 | Dívida registrada: `DELETE /requests/:id` devolve 500 em estado bloqueado |
 | `9363d2a` | 06/08 | **Fecha a (l)**: fallback do CORS passa a listar o front real; domínios do 2.0 saem |
+| `de0abc0` | 06/08 | **(f) fase 2**: `POST /requests` deriva o setor do token em vez de aceitá-lo do corpo |
 
 ### Front — `Corrar/Fluxo5.0-Front`
 
@@ -76,6 +77,12 @@ de dado é um erro que o usuário atribui a si mesmo.
 | `d8e22c6` | 06/08 | Liga o cancelamento de solicitação com confirmação e toast |
 | `d1e2a1b` | 06/08 | Este relatório |
 | `327bb6d` | 06/08 | Seletor de OP lê do banco (`useFRClients`) e esconde as concluídas; `OPS_FALLBACK` morto |
+| `706d8fe` | 06/08 | docs: 390 com diagnóstico preciso, (l) fechada, régua do marcador único |
+| `efb8273` | 06/08 | **(f) fase 1**: rodapé lê da sessão, não do mock global (`useFRIdentidade`) |
+| `9646900` | 06/08 | **(f) fase 2**: Meus Pedidos para de enviar `sector` no corpo |
+| `2430ac6` | 06/08 | **(f) fase 3**: a sessão nova não herda o socket da antiga |
+| `aaad1ba` | 06/08 | **(f) fase 4/etapa 0**: coerência no `restore()`; token vira marcador de commit |
+| `a387c17` | 06/08 | **(f) fase 4/etapa 1**: detector de divergência — a ação errada não parte |
 
 ---
 
@@ -83,8 +90,8 @@ de dado é um erro que o usuário atribui a si mesmo.
 
 | | SHA | Onde |
 |---|---|---|
-| Backend | `9363d2a` | `https://fluxo5-0-backend.onrender.com` — Render |
-| Front | `327bb6d` | `https://fluxo-royale50.vercel.app` — Vercel, projeto `fluxo-royale5.0` |
+| Backend | `de0abc0` | `https://fluxo5-0-backend.onrender.com` — Render |
+| Front | `a387c17` | `https://fluxo-royale50.vercel.app` — Vercel, projeto `fluxo-royale5.0` |
 | Banco | — | Neon, branch **`ep-summer-wave`** (validação) |
 
 **Nada commitado e não pushado.** Os dois repositórios estão em `main`, limpos, com `origin/main`
@@ -145,7 +152,9 @@ o reabriria.
 
 | # | Dívida | Causa | Escopo | Prioridade |
 |---|---|---|---|---|
-| **(f)** | **Identidade exibida ≠ identidade que age** | Três casos, uma causa: token por ORIGEM (2ª aba sobrescreve), rodapé lendo global `USER` mutado, e token/socket divergindo **dentro da mesma sessão** (medido ao vivo em 04/08, confirmado por 3 fontes). `audit_logs` grava o ator do **token** — a ação pode ficar atribuída a outro no livro, e o livro é append-only | Missão própria. Consertar só o rodapé deixa os outros dois de pé | **BLOQUEANTE DE PILOTO** em terminal compartilhado. Mitigação mínima: uma aba por operador + logout explícito |
+*(A dívida **(f)** — identidade exibida ≠ identidade que age — estava aqui e **foi FECHADA em
+06/08/2026**, em quatro fases: `efb8273`, `de0abc0`+`9646900`, `2430ac6`, `aaad1ba`+`a387c17`.
+Ver "Fechadas nesta missão", abaixo.)*
 | **(m)** | **Etiqueta 3 linhas no ar sem prova no papel** | Consertada em `8d753cd`, mas os ~53 chars/linha do `^A0N,26,26` são estimativa de fonte proporcional | Dívida de **verificação**, não de código | **ALTA** até a prova sair. Ver §7 |
 *(A dívida **(l)** — fallback do CORS sem o front real — estava aqui e **foi fechada em `9363d2a`**,
 06/08/2026. Ver "Fechadas nesta missão", abaixo.)*
@@ -169,12 +178,14 @@ o reabriria.
 | — | `DELETE /requests/:id` devolve **500** em estado bloqueado | Guard lança `Error` comum e cai no catch genérico; mensagem certa, status errado. O `PUT` faz certo com sentinela | Uma linha | Baixa — a UI usa o `PUT`; a rota é admin-only na prática |
 | — | **Cancelamento sem ownership** | Nem `deleteRequest` nem `updateRequestStatus` olham o dono: exigem cargo admin/almoxarife e nada mais. Qualquer um dos dois cancela o pedido de qualquer pessoa; o solicitante comum não cancela nem o próprio | **Decisão de produto**, não conserto | Aguarda o Bruno |
 | — | `FR_OPS_ATIVAS` / `frClienteDaOP` vêm do seed mock | `pages_clientes.jsx:53` monta os globais do `CLIENTES_SEED`. **Meus Pedidos saiu em `327bb6d`** (usa `useFRClients`); **Conferência e Separações continuam consumindo**. Uma OP criada de verdade não aparece nos dropdowns delas | Trocar pela fonte real ao ligar as telas restantes | Média |
+| — | **Socket morre depois da reconexão esgotada e nada o re-arma** | `reconnectionAttempts: 5` esgota em ~17s de backend fora; depois disso nada re-arma (só transição de autenticação chama `connect()`). A faixa do `FrNetBanner` aparece, mas diz "verifique a rede" com a rede boa — e ensina a ser ignorada | (a) re-arme por `reconnect_failed`, (b) re-arme no foco da aba, ou (c) terceiro estado honesto na faixa | **ALTA** — pré-existente, não é regressão. Qualquer re-arme precisa respeitar o detector da (f) |
 | — | **Vocabulário de status de OP diverge entre 2.0 e 5.0** | 2.0: `pendente` = ativo (18 OPs). 5.0: `em_andamento` = ativo (5), e `pendente` é o DEFAULT de "não começou". Cópia crua na carga esconderia 18 OPs vivas de todo filtro por igualdade | Script de carga + decisão de vocabulário + eventual migration | **ALTA** — não morde hoje, **bloqueia a carga**. Ver §10.8 |
 
 ### Fechadas nesta missão
 
 | # | Dívida | Fechada em | O que sobrou |
 |---|---|---|---|
+| **(f)** | **Identidade exibida ≠ identidade que age** — a única bloqueante de piloto. Três casos, uma causa; `audit_logs` gravava o ator do token, num livro append-only | **`efb8273`** (exibição) · **`de0abc0`+`9646900`** (dado gravado) · **`2430ac6`** (socket) · **`aaad1ba`+`a387c17`** (coerência + detector), todos 06/08 | Uma **nota** dentro da dívida: o detector compara por `jwt.id`, então token antigo do mesmo usuário com role diferente passaria — hoje inofensivo, porque troca de cargo força logout pelo socket. **A mitigação operacional (uma aba por operador) deixou de ser necessária** |
 | **(l)** | Fallback do CORS autorizava dois apps que não são nossos e **não listava** `fluxo-royale50.vercel.app` — indisponibilidade total a uma variável de ambiente de distância | **`9363d2a`** (06/08) | Só a **convivência dos dois apps** com nomes parecidos: prioridade **média**, **decisão de produto** (aposentar ou renomear o vizinho). O risco de infraestrutura acabou |
 | **(i)** | Falha de impressão silenciosa na Entrada | `3fc809b` (05/08) | Cobertura **parcial**: dois itens herdados seguem na fila da ZD220 (§7) |
 | **(m)** | Etiqueta: nome longo sobrepunha em vez de quebrar | `8d753cd` (05/08) | Dívida de **verificação**, não de código — a prova no papel está na fila da ZD220 (§7) |
@@ -349,14 +360,15 @@ Saldo conferido depois: BOB-4005 `reserved 8.00` (disponível 0), 3.01.0269 `res
 
 ### Antes do piloto
 
-1. **Fechar a (f)** — identidade exibida ≠ identidade que age. É a única bloqueante de piloto, e a
-   consequência é atribuição errada no livro de auditoria. Enquanto não fecha: uma aba por
-   operador e logout explícito, o que hoje **não é imposto nem avisado por nada na tela**.
-2. **Fechar a fila da ZD220** (§7) — quatro itens, uma sessão de impressora.
+1. **Fechar a fila da ZD220** (§7) — quatro itens, uma sessão de impressora. **É o que resta antes
+   do piloto.**
+2. **Decidir o re-arme do socket** — a dívida ALTA aberta nesta missão (socket morre depois da
+   reconexão esgotada). Não bloqueia piloto por si, mas o operador perde tempo real sem entender
+   por quê, e a faixa que aparece diz "verifique a rede" quando a rede está boa.
 
-*(A **(l)** era o item 3 desta lista e **saiu**: fechada em `9363d2a`. O que restou dela —
-a convivência dos dois apps de nome parecido — é decisão de produto de prioridade média e
-migrou para "Na mesa, sem data".)*
+*(Esta lista tinha três itens. A **(f)** — a única bloqueante de piloto — **saiu, fechada** em
+quatro fases (06/08); a **(l)** saiu antes, fechada em `9363d2a`. O que restou das duas são
+decisões de produto sem urgência, em "Na mesa, sem data".)*
 
 ### Na mesa, sem data
 
