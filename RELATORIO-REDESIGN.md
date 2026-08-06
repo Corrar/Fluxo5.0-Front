@@ -1,7 +1,7 @@
 # Relatório da missão — redesign do Fluxo Royale 5.0
 
 Consolidado em 06/08/2026. Cobre de `4545586` (front, 31/07) e `7116d03` (backend, 03/08) até
-`d8e22c6` / `22c636e`.
+`327bb6d` (front) / `9363d2a` (backend).
 
 Este arquivo é o registro durável da missão: o que ela virou, o que subiu, o que foi recusado, o
 que ficou devendo e o que ainda não foi provado. As dívidas com detalhe técnico continuam em
@@ -47,6 +47,7 @@ de dado é um erro que o usuário atribui a si mesmo.
 | `4b4483b` | 05/08 | `register` só aceita `NNN@fluxoroyale.local`, três dígitos, 001–999 |
 | `7b6298d` | 06/08 | Libera reserva ao cancelar solicitação **conferida** (+ comentário falso da rota corrigido) |
 | `22c636e` | 06/08 | Dívida registrada: `DELETE /requests/:id` devolve 500 em estado bloqueado |
+| `9363d2a` | 06/08 | **Fecha a (l)**: fallback do CORS passa a listar o front real; domínios do 2.0 saem |
 
 ### Front — `Corrar/Fluxo5.0-Front`
 
@@ -73,6 +74,8 @@ de dado é um erro que o usuário atribui a si mesmo.
 | `6ae1554` | 05/08 | Cadastro por **código** de acesso e login sem porta lateral |
 | `822ee41` | 05/08 | docs: (o) vira fato medido; régua do smoke com login |
 | `d8e22c6` | 06/08 | Liga o cancelamento de solicitação com confirmação e toast |
+| `d1e2a1b` | 06/08 | Este relatório |
+| `327bb6d` | 06/08 | Seletor de OP lê do banco (`useFRClients`) e esconde as concluídas; `OPS_FALLBACK` morto |
 
 ---
 
@@ -80,19 +83,21 @@ de dado é um erro que o usuário atribui a si mesmo.
 
 | | SHA | Onde |
 |---|---|---|
-| Backend | `22c636e` (código validado: `7b6298d`) | `https://fluxo5-0-backend.onrender.com` — Render |
-| Front | `d8e22c6` | `https://fluxo-royale50.vercel.app` — Vercel, projeto `fluxo-royale5.0` |
+| Backend | `9363d2a` | `https://fluxo5-0-backend.onrender.com` — Render |
+| Front | `327bb6d` | `https://fluxo-royale50.vercel.app` — Vercel, projeto `fluxo-royale5.0` |
 | Banco | — | Neon, branch **`ep-summer-wave`** (validação) |
 
 **Nada commitado e não pushado.** Os dois repositórios estão em `main`, limpos, com `origin/main`
 igual ao local.
 
-Dois cuidados que já custaram tempo e precisam ficar escritos:
+Cuidados que já custaram tempo e precisam ficar escritos:
 
 - **O domínio do front é `fluxo-royale50.vercel.app`.** `fluxo-royale.vercel.app` é OUTRO
   aplicativo (`Frontend-5.0-App`) e já produziu falso negativo de deploy. Ver dívida (l).
-- **`22c636e` é commit só de documentação.** O código no ar é o de `7b6298d`, que é o que o smoke
-  de 06/08 validou. Nenhuma linha executável mudou entre os dois.
+- **Confirmação de deploy é por CONTEÚDO.** O nome do bundle que a Vercel gera **não** bate com o
+  do build local para o mesmo commit, e a CDN responde `HIT` mesmo com cache-buster. A prova é o
+  par: string nova presente + string velha ausente, com marcadores **exclusivos** do trecho
+  alterado (§8, régua 2).
 - **Produção é outro banco** (`ep-mute-feather`). Tudo neste relatório foi medido contra
   validação. Conferir o host antes de qualquer SQL.
 
@@ -142,7 +147,8 @@ o reabriria.
 |---|---|---|---|---|
 | **(f)** | **Identidade exibida ≠ identidade que age** | Três casos, uma causa: token por ORIGEM (2ª aba sobrescreve), rodapé lendo global `USER` mutado, e token/socket divergindo **dentro da mesma sessão** (medido ao vivo em 04/08, confirmado por 3 fontes). `audit_logs` grava o ator do **token** — a ação pode ficar atribuída a outro no livro, e o livro é append-only | Missão própria. Consertar só o rodapé deixa os outros dois de pé | **BLOQUEANTE DE PILOTO** em terminal compartilhado. Mitigação mínima: uma aba por operador + logout explícito |
 | **(m)** | **Etiqueta 3 linhas no ar sem prova no papel** | Consertada em `8d753cd`, mas os ~53 chars/linha do `^A0N,26,26` são estimativa de fonte proporcional | Dívida de **verificação**, não de código | **ALTA** até a prova sair. Ver §7 |
-| **(l)** | **Fallback do CORS autoriza os fronts errados** | `src/config/cors.ts:17-20` lista dois domínios que não são nossos e **não lista** `fluxo-royale50.vercel.app`. Só funciona porque a env `CORS_ORIGINS` supre | Uma linha | **MÉDIA-ALTA** — se a env sumir num redeploy, o front real perde o backend: indisponibilidade total |
+*(A dívida **(l)** — fallback do CORS sem o front real — estava aqui e **foi fechada em `9363d2a`**,
+06/08/2026. Ver "Fechadas nesta missão", abaixo.)*
 
 ### Não bloqueiam nada hoje
 
@@ -162,7 +168,20 @@ o reabriria.
 | (p) | `login` não normaliza e-mail no servidor | Query com valor cru; quem normaliza é o front | Uma linha | Baixa |
 | — | `DELETE /requests/:id` devolve **500** em estado bloqueado | Guard lança `Error` comum e cai no catch genérico; mensagem certa, status errado. O `PUT` faz certo com sentinela | Uma linha | Baixa — a UI usa o `PUT`; a rota é admin-only na prática |
 | — | **Cancelamento sem ownership** | Nem `deleteRequest` nem `updateRequestStatus` olham o dono: exigem cargo admin/almoxarife e nada mais. Qualquer um dos dois cancela o pedido de qualquer pessoa; o solicitante comum não cancela nem o próprio | **Decisão de produto**, não conserto | Aguarda o Bruno |
-| — | `FR_OPS_ATIVAS` / `frClienteDaOP` vêm do seed mock | `pages_clientes.jsx:53` monta os globais do `CLIENTES_SEED`; Meus Pedidos, Conferência, Montagem e Separações consomem. Uma OP criada de verdade **não aparece** nesses dropdowns | Trocar pela fonte real ao ligar as 4 telas | Média |
+| — | `FR_OPS_ATIVAS` / `frClienteDaOP` vêm do seed mock | `pages_clientes.jsx:53` monta os globais do `CLIENTES_SEED`. **Meus Pedidos saiu em `327bb6d`** (usa `useFRClients`); **Conferência e Separações continuam consumindo**. Uma OP criada de verdade não aparece nos dropdowns delas | Trocar pela fonte real ao ligar as telas restantes | Média |
+| — | **Vocabulário de status de OP diverge entre 2.0 e 5.0** | 2.0: `pendente` = ativo (18 OPs). 5.0: `em_andamento` = ativo (5), e `pendente` é o DEFAULT de "não começou". Cópia crua na carga esconderia 18 OPs vivas de todo filtro por igualdade | Script de carga + decisão de vocabulário + eventual migration | **ALTA** — não morde hoje, **bloqueia a carga**. Ver §10.8 |
+
+### Fechadas nesta missão
+
+| # | Dívida | Fechada em | O que sobrou |
+|---|---|---|---|
+| **(l)** | Fallback do CORS autorizava dois apps que não são nossos e **não listava** `fluxo-royale50.vercel.app` — indisponibilidade total a uma variável de ambiente de distância | **`9363d2a`** (06/08) | Só a **convivência dos dois apps** com nomes parecidos: prioridade **média**, **decisão de produto** (aposentar ou renomear o vizinho). O risco de infraestrutura acabou |
+| **(i)** | Falha de impressão silenciosa na Entrada | `3fc809b` (05/08) | Cobertura **parcial**: dois itens herdados seguem na fila da ZD220 (§7) |
+| **(m)** | Etiqueta: nome longo sobrepunha em vez de quebrar | `8d753cd` (05/08) | Dívida de **verificação**, não de código — a prova no papel está na fila da ZD220 (§7) |
+
+A remoção dos dois domínios do 2.0 no fechamento da (l) foi **verificada, não presumida**: o bundle
+publicado de cada um aponta para backend próprio (`fluxo-royale-backend.onrender.com` e
+`fluxo-royale-backend2-1.onrender.com`) e nenhum contém a string `fluxo5-0-backend`.
 | — | Permissões v1: universo do checklist é a união das chaves em uso | Chave que perde o último papel some da UI e só volta por SQL | Registro estático de chaves | Média |
 
 ---
@@ -185,18 +204,30 @@ negativo) — **não** reposicionar campo. As posições saem de uma conta com 4
 lado do barcode e 7 dots entre o banner e a borda. O alerta está no código, no ponto onde alguém
 com pressa iria mexer.
 
-### Viewport 390 do modal de cancelamento
+### Viewport 390 — modal de cancelamento e seletor de OP
 
-**NÃO MEDIDO.** Na sessão de 06/08 o device mode não engatou pelo teclado da extensão,
-`resize_window` reportou sucesso com o viewport imóvel em 1920×889, e popup dimensionado foi
-bloqueado sem gesto do usuário. O que existe é análise estática — a caixa é `min(480px,96vw)` sem
-largura mínima — e **isso não é medição**.
+**NÃO MEDIDO** — e o mecanismo do impedimento está nomeado, que é diferente de "não deu".
 
-Precedente que mostra que é possível: a medição em 391 do painel BI (`1b35c63`) pegou uma
-regressão real (cards estourando a tela, `right 455` num viewport de 391). Fecha quando o device
-mode engatar.
+**Não é que 390 seja inalcançável.** Com um botão injetado e **clique de mouse real** (gesto do
+usuário, que é o que o bloqueio de popup exige), `window.open(…, 'width=390,height=844')` abre uma
+janela em **390×787 de verdade** — medido em 06/08/2026.
 
-**Medido e verde**, para não confundir: 1920×889, modal 480px centrado, sem overflow horizontal.
+**O que impede é a simultaneidade**: a janela vai a segundo plano assim que a extensão age na
+aba-mãe, e nesse estado o Chrome reporta `visibilityState: "hidden"` com `innerWidth`,
+`clientWidth` e `outerWidth` todos **0** — janela ocluída não tem layout computado. Ou a janela
+está visível e eu não consigo medi-la, ou eu meço e ela já não está. **Qualquer número lido dali
+seria ficção**, e é por isso que nenhum foi registrado.
+
+As outras duas vias, testadas e descartadas na mesma sessão: o device mode não engata pelo teclado
+da extensão (`F12` + `Ctrl+Shift+M` não chegam ao chrome do navegador, só à página), e
+`resize_window` **reporta sucesso com o viewport imóvel** em 1920×889 — o no-op já documentado.
+
+O que existe hoje é análise estática — a caixa é `min(480px,96vw)` sem largura mínima —, e isso
+**não é medição**. Precedente de que a medição é possível por outra via: a medição em 391 do painel
+BI (`1b35c63`) pegou uma regressão real (cards estourando a tela, `right 455` num viewport de 391).
+
+**Medido e verde**, para não confundir: 1920×889 — modal de cancelamento 480px centrado e dropdown
+de OP 480×288 (esq 1391 / dir 1871), os dois dentro da tela, sem overflow horizontal.
 
 ---
 
@@ -211,37 +242,52 @@ Valem para as próximas sessões, e cada uma custou tempo para ser descoberta.
    presença de uma string que só existe naquele commit. Em 05/08 a mesma classe de erro tinha
    custado um falso negativo pelo domínio errado (dívida (l)).
 
-2. **Probe de rota sem token não prova que a rota existe.** Um 401 vem do middleware de
+2. **Marcador de verificação precisa ser ÚNICO — e a prova é um PAR.** Terceira aparição da mesma
+   classe de erro em um único dia, o que a promove de tropeço a régua. Ao confirmar a remoção do
+   mock de OPs, usei `"Metalúrgica Andrade"` como marcador — e ele continuou aparecendo no bundle,
+   porque vive em `compras.jsx` como **fornecedor de outra tela**. A presença não provava nada: o
+   marcador não era exclusivo do que eu removi. O método correto é sempre o par —
+   **string nova PRESENTE + string velha AUSENTE** —, e a string velha tem que existir **só** no
+   trecho que morreu. Vale para bundle publicado, para `grep` em código e para qualquer prova por
+   marcador. As duas aparições anteriores: o hash de arquivo que a Vercel gera diferente do build
+   local, e o domínio vizinho que carregava o mesmo termo por conta própria.
+
+3. **Probe de rota sem token não prova que a rota existe.** Um 401 vem do middleware de
    autenticação, antes do roteamento — responde igual para rota existente e inexistente.
 
-3. **Instrumento que discorda do resto é suspeito ANTES do fenômeno.** Os screenshots chegam
+4. **Instrumento que discorda do resto é suspeito ANTES do fenômeno.** Os screenshots chegam
    reduzidos a 1568 enquanto o viewport real é 1920 — quase virou um "1568 medido" no relatório.
    Confirmar QUE tela se está medindo antes de reportar qualquer número de viewport.
 
-4. **Smoke que exige provar login deixa resíduo PERMANENTE, por construção.** O login grava
+5. **Smoke que exige provar login deixa resíduo PERMANENTE, por construção.** O login grava
    `audit_logs` com o `user_id` novo e a FK é `NO ACTION` — o hard-delete devolve 409. O cleanup
    correto é **suspensão** (`is_active = false`), não exclusão.
 
-5. **`audit_logs` é append-only e não se edita por conveniência de limpeza.** Apagar o LOGIN para
+6. **`audit_logs` é append-only e não se edita por conveniência de limpeza.** Apagar o LOGIN para
    viabilizar um hard-delete seria destruir a trilha para esconder o rastro de um teste —
    exatamente o que a auditoria existe para impedir.
 
-6. **Medição de viewport móvel neste ambiente é só por device mode.** `resize_window` reporta
-   sucesso e não mexe no viewport. Sob emulação o CDP de input trava — dirigir por JS.
+7. **Medir viewport móvel neste ambiente esbarra em SIMULTANEIDADE, não em alcance.** `resize_window`
+   reporta sucesso e não mexe no viewport; o device mode não engata pelo teclado da extensão;
+   `window.open` com **gesto real de mouse** chega a 390×787 de verdade — mas a janela vai a
+   segundo plano quando a extensão age na aba-mãe, e janela `hidden` devolve `innerWidth`,
+   `clientWidth` e `outerWidth` **zerados**, sem layout computado. Ou está visível e não dá para
+   medir, ou mede-se o zero. Não reportar número de viewport sem antes confirmar **qual tela** está
+   sendo medida (§7).
 
-7. **Contrato de hardware não se decide por captura de tela.** Layout de etiqueta se decide com a
+8. **Contrato de hardware não se decide por captura de tela.** Layout de etiqueta se decide com a
    etiqueta impressa na mão.
 
-8. **Gate de front espelha o backend letra por letra, e segue o ENDPOINT.** `canAccess` libera por
+9. **Gate de front espelha o backend letra por letra, e segue o ENDPOINT.** `canAccess` libera por
    prefixo; quem tem `x:view` passa em `canAccess('x')` e toma 403 na rota que exige a chave exata.
    E quando o endpoint muda, a chave do gate muda junto: no cancelamento, gatear por
    `minhas_solicitacoes:delete` (a chave do `DELETE`) teria escondido o botão **de quem pode agir**
    — medido: o almoxarife tem `solicitacoes:edit` e não tem a outra.
 
-9. **Componente do handoff só substitui o nosso por EVIDÊNCIA.** `DvBars` foi recusado com defeito
+10. **Componente do handoff só substitui o nosso por EVIDÊNCIA.** `DvBars` foi recusado com defeito
    provado, não por gosto.
 
-10. **Cleanup de smoke é cirúrgico, por id.** `UPDATE`/`DELETE` global já destruiu o seed de
+11. **Cleanup de smoke é cirúrgico, por id.** `UPDATE`/`DELETE` global já destruiu o seed de
     validação duas vezes.
 
 ---
@@ -289,11 +335,18 @@ Saldo conferido depois: BOB-4005 `reserved 8.00` (disponível 0), 3.01.0269 `res
    consequência é atribuição errada no livro de auditoria. Enquanto não fecha: uma aba por
    operador e logout explícito, o que hoje **não é imposto nem avisado por nada na tela**.
 2. **Fechar a fila da ZD220** (§7) — quatro itens, uma sessão de impressora.
-3. **Fechar a (l)** — `fluxo-royale50.vercel.app` entra no fallback do CORS. Uma linha que evita
-   indisponibilidade total do front.
+
+*(A **(l)** era o item 3 desta lista e **saiu**: fechada em `9363d2a`. O que restou dela —
+a convivência dos dois apps de nome parecido — é decisão de produto de prioridade média e
+migrou para "Na mesa, sem data".)*
 
 ### Na mesa, sem data
 
+3. **Convivência dos dois apps de nome parecido** — o que sobrou da (l) depois do conserto do CORS.
+   `fluxo-royale.vercel.app` (`Frontend-5.0-App`) e `fluxoroyale21.vercel.app` seguem no ar, com
+   backend próprio, e já causaram um falso negativo de deploy. **Prioridade média, decisão de
+   produto**: aposentar, renomear, ou documentar em ambos os READMEs qual domínio serve qual repo.
+   O risco de infraestrutura acabou; sobrou o risco humano.
 4. **prod-montagem** — a peça que falta do módulo Produção.
 5. **Módulos bloqueados: 4, não 5** — `rh`, `compras`, `assistencia`, `financeiro` estão com
    `locked: true` em `data.jsx`. Aparecem no seletor com cadeado e não abrem.

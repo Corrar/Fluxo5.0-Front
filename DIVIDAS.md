@@ -245,6 +245,23 @@ tela que mente é o que esta lista aprendeu a não tolerar na (i).
 
 ## (l) Dois fronts diferentes no ar com nomes parecidos e domínios cruzados no CORS
 
+> ### ✅ PARTE PERIGOSA FECHADA em `9363d2a` (backend, 06/08/2026)
+>
+> O **agravante do CORS acabou**: `https://fluxo-royale50.vercel.app` entrou no fallback e os dois
+> domínios do 2.0 saíram. Não depende mais da env `CORS_ORIGINS` para o front real funcionar —
+> o cenário "a env some num redeploy e o sistema fica indisponível" deixou de existir.
+>
+> A remoção dos dois vizinhos foi **verificada, não presumida**: o bundle publicado de cada um
+> aponta para backend próprio (`fluxo-royale-backend.onrender.com` e
+> `fluxo-royale-backend2-1.onrender.com`) e **nenhum contém a string `fluxo5-0-backend`**.
+>
+> **O QUE RESTA** é só a convivência dos dois apps de nome parecido, descrita em "Consequência do
+> lado humano" abaixo: **prioridade MÉDIA, decisão de produto** (aposentar, renomear, ou documentar
+> em ambos os READMEs qual domínio serve qual repo). Risco de infraestrutura: zero. Risco humano:
+> o mesmo de sempre — alguém abre o app errado e reporta bug fantasma.
+>
+> O texto abaixo é mantido como estava, para registro do que foi encontrado e por quê.
+
 **Causa**: `https://fluxo-royale.vercel.app` NÃO serve este repositório. O bundle publicado ali é
 React + Tailwind + TSX com biblioteca de toast (`_e.success("Entrada registrada com sucesso!")`,
 `className="absolute inset-0 bg-[url(...)]"`) — é o **`Frontend-5.0-App`**, outra aplicação, com
@@ -272,10 +289,12 @@ redeploy, o backend cai para o fallback: o front real perde acesso ao backend �
 TOTAL, todo request bloqueado pelo navegador — enquanto os dois fronts estranhos seguem
 autorizados.** É uma variável de ambiente de distância.
 
-**Conserto**: `https://fluxo-royale50.vercel.app` entra no fallback; os dois domínios do 2.0 saem,
-se não houver razão para estarem lá.
-**Escopo**: uma linha.
-**Prioridade**: MÉDIA-ALTA — uma linha que evita indisponibilidade total do front.
+**Conserto**: ~~`https://fluxo-royale50.vercel.app` entra no fallback; os dois domínios do 2.0 saem,
+se não houver razão para estarem lá.~~ **FEITO em `9363d2a`** — a "razão para estarem lá" foi
+investigada e não existia (cada vizinho tem backend próprio). O trecho de código citado acima é o
+estado ANTIGO do `cors.ts`, preservado para explicar o que se encontrou; o arquivo atual já lista
+o front real.
+**Escopo**: uma linha. **Prioridade**: ~~MÉDIA-ALTA~~ — **resolvido**.
 
 ### Consequência do lado humano
 
