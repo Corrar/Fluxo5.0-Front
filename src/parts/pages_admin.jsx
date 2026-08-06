@@ -1457,6 +1457,73 @@ function PagePlaceholder({ t, title }) {
   );
 }
 
+// ===== Painel "Conferência de Envio" — lateral ESQUERDO, sobre o mesmo overlay do drawer =====
+//
+// POR QUE EXISTE: "Conferir & aprovar" submetia direto. Conferir quantidade é a decisão que
+// desconta estoque de verdade — ela ganha um passo próprio, com o número na frente de quem
+// aprova, em vez de acontecer como efeito colateral de um clique cujo rótulo fala de aprovação.
+//
+// ESTE COMPONENTE É SÓ SUPERFÍCIE. O estado dos valores (`conf`) mora no `SolicitacaoDetail`, de
+// propósito: fechar o painel pelo "Voltar" não pode perder o que já foi digitado. Aqui só chegam
+// os leitores/escritores (`confRaw`/`setConfVal`/`confVal`), que já trazem o clamp 0..pedida.
+function ConferenciaEnvioPanel({ t, itens, pedidaOf, confRaw, setConfVal, confVal, enviando, erro, onVoltar, onConfirmar }) {
+  const passo = (it, i, delta) => () => {
+    if (enviando) return;
+    // Math.max(0, …) ANTES de virar string: `setConfVal` limpa não-dígitos, então "-1" viraria
+    // "1" e um decremento no zero SUBIRIA o número. O teto (pedida) continua sendo dele.
+    setConfVal(it, i)(String(Math.max(0, confVal(it, i) + delta)));
+  };
+  const btnPasso = { all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', border: `1px solid ${t.border}`, background: t.elevated, color: t.text, opacity: enviando ? 0.6 : 1 };
+  return (
+    // `position: fixed` aqui é ancorado no OVERLAY, não no viewport: o `backdropFilter` do overlay
+    // cria bloco contentor para descendentes fixos. Como o overlay é `inset: 0`, dá no mesmo — e
+    // continua correto se o navegador não suportar backdrop-filter. O `zIndex` sobe acima do
+    // drawer da direita, que é filho normal do mesmo flex.
+    <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 2, width: 'min(480px,100%)', display: 'flex', flexDirection: 'column', background: t.panel, borderRight: `1px solid ${t.borderStrong}`, boxShadow: t.shadow, animation: 'solConfIn .28s cubic-bezier(.22,1,.36,1)' }}>
+      <style>{`@keyframes solConfIn{from{transform:translateX(-70px);opacity:0}to{transform:none;opacity:1}}`}</style>
+
+      <div style={{ flexShrink: 0, padding: '20px 24px 18px', borderBottom: `1px solid ${t.border}` }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 20, fontWeight: 850, letterSpacing: '-.02em', color: t.text }}>Conferência de Envio</div>
+            <div style={{ fontSize: 12.5, color: t.muted, marginTop: 6, lineHeight: 1.45 }}>Ajuste as quantidades reais de acordo com a embalagem que será enviada. O estoque descontará este valor.</div>
+          </div>
+          <button onClick={onVoltar} disabled={enviando} title="Fechar conferência"
+            style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flexShrink: 0, width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', background: t.elevated, color: t.text, border: `1px solid ${t.border}`, opacity: enviando ? 0.6 : 1 }}><Icon name="x" size={15} /></button>
+        </div>
+      </div>
+
+      <div className="fr-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {itens.map((it, i) => (
+          <div key={i} style={{ borderRadius: 14, border: `1px solid ${t.border}`, padding: '14px 16px' }}>
+            <div style={{ fontSize: 13.5, fontWeight: 850, color: t.text, textTransform: 'uppercase' }}>{it.nome}</div>
+            <div style={{ fontSize: 11.5, color: t.muted, marginTop: 4 }}>Solicitado: {pedidaOf(it)} {it.un || 'un'}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10, fontWeight: 850, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>Qtd a enviar:</span>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button onClick={passo(it, i, -1)} disabled={enviando} title="Diminuir" style={btnPasso}><Icon name="minus" size={15} /></button>
+                <input value={confRaw(it, i)} onChange={(e) => setConfVal(it, i)(e.target.value)} inputMode="numeric" disabled={enviando}
+                  style={{ width: 68, height: 38, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 16, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
+                <button onClick={passo(it, i, 1)} disabled={enviando} title="Aumentar" style={btnPasso}><Icon name="plus" size={15} /></button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flexShrink: 0, padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* Erro do PUT mora AQUI: quem errou foi a ação deste painel, e ele não fecha — o operador
+            precisa ver a mensagem do backend com os números que digitou ainda na tela. */}
+        {erro && <div style={{ fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg, padding: '9px 12px', borderRadius: 10 }}>{erro}</div>}
+        <div style={{ display: 'flex', gap: 12 }}>
+          <button onClick={onVoltar} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: t.text, border: `1.5px solid ${t.borderStrong}`, opacity: enviando ? 0.6 : 1 }}>Voltar</button>
+          <button onClick={onConfirmar} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1.6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 8px 20px ${frHexToRgba(t.accent, 0.35)}`, opacity: enviando ? 0.7 : 1 }}><Icon name="check" size={17} /> {enviando ? 'Aprovando…' : 'Confirmar e Aprovar'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel }) {
   const m = SOL_STATUS[s.status];
   const [h1, h2] = SOL_HEAD[m.kind];
@@ -1467,6 +1534,7 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
   const [conf, setConf] = useStateA(() => { const m = {}; s.itens.forEach((it, i) => { m[it.id != null ? it.id : i] = String(pedidaOf(it)); }); return m; });
   const [motivo, setMotivo] = useStateA('');
   const [rejectOpen, setRejectOpen] = useStateA(false);
+  const [confOpen, setConfOpen] = useStateA(false);   // painel de Conferência de Envio (esquerdo)
   const [enviando, setEnviando] = useStateA(false);
   const [erro, setErro] = useStateA('');
   const confRaw = (it, i) => { const k = it.id != null ? it.id : i; return conf[k] != null ? conf[k] : String(pedidaOf(it)); };
@@ -1480,6 +1548,10 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
     try { await onApprove(adjusted); }
     catch (e) { const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage; setErro(gm ? gm(e) : 'Não foi possível aprovar.'); setEnviando(false); }
   };
+  // Fechar o painel LIMPA o erro, sempre — pelos três caminhos (Voltar, X e clique fora). Sem
+  // isto o erro da aprovação sobrevivia no estado e reaparecia no rodapé do drawer, sem o painel
+  // que lhe dava contexto: uma mensagem sobre quantidades flutuando ao lado do botão de recusa.
+  const fecharPainel = () => { if (enviando) return; setConfOpen(false); setErro(''); };
   const handleReject = async () => {
     if (enviando) return;
     if (!motivo.trim()) { setErro('Informe o motivo da recusa.'); return; }   // feedback imediato, não envia
@@ -1507,7 +1579,11 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
   const chipDark = { display: 'inline-flex', alignItems: 'center', fontSize: 10.5, fontWeight: 850, letterSpacing: '.04em', padding: '5px 11px', borderRadius: 8, background: t.text, color: t.panel, fontFamily: 'ui-monospace, monospace' };
   const temOp = !!s.op && s.op !== '—';   // pedido isento (EPI/ferramenta/insumo) não tem OP: o chip some, nada de "OP-—"
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.5)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
+    // Clique fora com o painel de conferência aberto fecha SÓ o painel. Fechar o drawer inteiro
+    // levaria junto as quantidades digitadas — trabalho perdido por um clique impreciso.
+    // Durante o envio `fecharPainel` é no-op E o `return` continua valendo: clique fora no meio do
+    // PUT não fecha nada, nem painel nem drawer.
+    <div onClick={() => { if (confOpen) { fecharPainel(); return; } onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.5)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px,100%)', height: '100%', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: t.shadow, animation: 'solDrawerIn .28s cubic-bezier(.22,1,.36,1)' }}>
         <style>{`@keyframes solDrawerIn{from{transform:translateX(70px);opacity:0}to{transform:none;opacity:1}}`}</style>
 
@@ -1589,17 +1665,10 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                     {temOp && <span style={{ fontSize: 10, fontWeight: 850, padding: '3px 9px', borderRadius: 7, background: t.accentSoft, color: t.accentText, fontFamily: 'ui-monospace, monospace' }}>OP {s.op}</span>}
                   </div>
                 </div>
-                {canConfer ? (
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: t.faint }}>PEDIDO: {pedidaOf(it)} {(it.un || 'un').toUpperCase()}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7, marginTop: 7 }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.06em', textTransform: 'uppercase', color: t.accentText }}>Conferido</span>
-                      <input value={confRaw(it, i)} onChange={(e) => setConfVal(it, i)(e.target.value)} inputMode="numeric" disabled={enviando}
-                        style={{ width: 64, height: 36, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 16, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
-                      <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span>
-                    </div>
-                  </div>
-                ) : (() => {
+                {/* O corpo do item é SÓ LEITURA, inclusive em conferência: os campos editáveis
+                    saíram daqui e viraram o painel "Conferência de Envio". Editar quantidade no
+                    meio do histórico misturava consulta com decisão, e a decisão desconta estoque. */}
+                {(() => {
                   const posConf = s.status === 'em-transito' || s.status === 'concluido';   // pós-conferência (backend conferido/entregue)
                   const enviada = it.enviada;                          // null/undefined = sem ajuste (integral) | número (incl. 0)
                   const showEnviado = posConf && enviada != null;      // != null cobre null E undefined (mock/'mine')
@@ -1646,7 +1715,9 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                       style={{ boxSizing: 'border-box', width: '100%', borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '11px 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none', resize: 'vertical' }} />
                   </div>
                 )}
-                {erro && <div style={{ fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg, padding: '9px 12px', borderRadius: 10 }}>{erro}</div>}
+                {/* `!confOpen`: com o painel aberto o erro é DELE e é lá que aparece. Sem isto a
+                    mesma mensagem sairia duplicada, no painel e atrás dele. */}
+                {erro && !confOpen && <div style={{ fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg, padding: '9px 12px', borderRadius: 10 }}>{erro}</div>}
                 <div style={{ display: 'flex', gap: 12 }}>
                   {rejectOpen ? (
                     <React.Fragment>
@@ -1655,9 +1726,15 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                     </React.Fragment>
                   ) : (
                     <React.Fragment>
-                      <button onClick={() => { if (!enviando) { setErro(''); setRejectOpen(true); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: uiTone(t, 'red').fg, border: `1.5px solid ${frHexToRgba('#ef4444', .4)}`, opacity: enviando ? 0.6 : 1 }}
+                      {/* EXCLUSÃO MÚTUA com o painel: recusa e aprovação disputam o MESMO `erro`.
+                          Com os dois abertos, um erro de recusa apareceria dentro do painel de
+                          aprovação — mensagem certa, lugar errado. Quem abre um, fecha o outro. */}
+                      <button onClick={() => { if (!enviando) { setErro(''); setConfOpen(false); setRejectOpen(true); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: uiTone(t, 'red').fg, border: `1.5px solid ${frHexToRgba('#ef4444', .4)}`, opacity: enviando ? 0.6 : 1 }}
                         onMouseEnter={(e) => { if (!enviando) e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /> Recusar</button>
-                      <button onClick={handleApprove} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1.6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 8px 20px ${frHexToRgba(t.accent, 0.35)}`, opacity: enviando ? 0.7 : 1 }}><Icon name="check" size={17} /> {enviando ? 'Aprovando…' : 'Conferir & aprovar'}</button>
+                      {/* Deixou de submeter: agora ABRE a conferência. O rótulo sempre disse
+                          "Conferir & aprovar" — o que mudou é que ele passou a cumprir a primeira
+                          metade antes da segunda. Quem faz o PUT é o "Confirmar e Aprovar". */}
+                      <button onClick={() => { if (!enviando) { setErro(''); setRejectOpen(false); setConfOpen(true); } }} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', flex: 1.6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', background: t.accent, color: t.onAccent, boxShadow: `0 8px 20px ${frHexToRgba(t.accent, 0.35)}`, opacity: enviando ? 0.7 : 1 }}><Icon name="check" size={17} /> {enviando ? 'Aprovando…' : 'Conferir & aprovar'}</button>
                     </React.Fragment>
                   )}
                 </div>
@@ -1666,6 +1743,13 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
           </div>
         )}
       </div>
+
+      {/* `canConfer &&` é a mesma trava do rodapé: em Meus Pedidos (`mine`) e fora do estado
+          pendente o painel sequer existe no DOM. */}
+      {canConfer && confOpen && (
+        <ConferenciaEnvioPanel t={t} itens={s.itens} pedidaOf={pedidaOf} confRaw={confRaw} setConfVal={setConfVal} confVal={confVal}
+          enviando={enviando} erro={erro} onVoltar={fecharPainel} onConfirmar={handleApprove} />
+      )}
     </div>
   );
 }
