@@ -18,6 +18,13 @@ export const AUTH_KEYS = {
   permissions: 'user_permissions',
 };
 
+// LIMPA AS QUATRO, SEMPRE — e isso é carga estrutural, não detalhe.
+//
+// Verificado em 06/08/2026 (dívida (f), fase 4 / etapa 0): é `Object.values(AUTH_KEYS)`, então
+// nenhuma chave de sessão sobra órfã por aqui, e os dois caminhos de saída (logout e o 401 do
+// interceptor) usam esta função. **Limpeza parcial seria a outra porta de entrada da
+// inconsistência** — token de uma sessão convivendo com profile de outra. Se alguém precisar um
+// dia limpar só um pedaço, que seja outra função com outro nome: esta é tudo-ou-nada de propósito.
 export function clearAuthStorage() {
   Object.values(AUTH_KEYS).forEach((k) => localStorage.removeItem(k));
 }

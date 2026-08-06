@@ -25,6 +25,46 @@ function readJson(key) {
   }
 }
 
+// ===== COERÊNCIA DA SESSÃO GRAVADA — dívida (f), fase 4 / etapa 0 =====
+//
+// ⚠️ LEITURA DO PAYLOAD, NÃO AUTENTICAÇÃO. Não validamos assinatura nem confiamos no conteúdo:
+// o SERVIDOR continua sendo a única autoridade sobre quem é quem (todo endpoint deriva o ator do
+// token, e `authenticate` confere is_active a cada request). O que se faz aqui é COERÊNCIA LOCAL —
+// perguntar "as quatro chaves gravadas neste navegador falam do mesmo usuário?". Um token forjado
+// passaria nesta checagem e morreria no backend, como sempre morreu.
+//
+// POR QUE ISTO EXISTE: `login()` gravava as quatro chaves em quatro `setItem` separados. Um crash
+// ou fechamento de aba no meio deixava token de um usuário com profile de outro — PERMANENTE,
+// porque nada revisava depois. Medido em 06/08/2026 forjando o estado: o app bootava sem queixa,
+// exibindo "Marina / almoxarife" com 2 módulos, AGINDO como admin, com o socket nas salas de admin
+// e o GET /tickets/my devolvendo os chamados do outro. A causa raiz foi fechada na ordem dos
+// writes (ver login()); esta checagem é a rede para o que já está gravado por aí.
+function lerPayloadJwt(token) {
+  try {
+    const parte = String(token || '').split('.')[1];
+    if (!parte) return null;
+    let b64 = parte.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';                       // base64url vem sem padding
+    const bruto = atob(b64);
+    // Percent-decoding para não corromper acento em nome/e-mail dentro do payload.
+    const json = decodeURIComponent(bruto.split('').map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    return JSON.parse(json);
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Retorna null se coerente; senão, o MOTIVO (string curta, para o console). */
+function motivoDeIncoerencia(token, savedUser, savedProfile) {
+  const p = lerPayloadJwt(token);
+  if (!p || !p.id) return 'token ilegível ou sem id no payload';
+  // exp vem em SEGUNDOS (padrão JWT), Date.now() em ms.
+  if (p.exp && p.exp * 1000 <= Date.now()) return 'token expirado';
+  if (savedUser.id !== p.id) return 'user_data é de outro usuário';
+  if (savedProfile.id !== p.id) return 'user_profile é de outro usuário';
+  return null;
+}
+
 // ---- estado do módulo ----
 let _user = null;        // { id, email } | null   (encrypted_password NUNCA entra aqui)
 let _profile = null;     // { id, name, role, sector } | null
@@ -142,10 +182,19 @@ async function login(codigo, senha) {
     // socket nunca ter subido — o app funciona sem tempo real, e isso não pode travar o login.
     try { window.FRSocket?.disconnect(); } catch (e) { /* socket é best-effort; nunca trava login */ }
 
-    localStorage.setItem(AUTH_KEYS.token, data.token);
+    // ⚠️ O TOKEN É GRAVADO POR ÚLTIMO, E A ORDEM É A CORREÇÃO — não a estética.
+    //
+    // localStorage não tem transação: são quatro writes independentes. Com o token PRIMEIRO (como
+    // era), um crash ou fechamento de aba no meio deixava token novo + profile velho, gravado e
+    // PERMANENTE — sessão que exibe um usuário e age como outro. Com o token por ÚLTIMO ele vira
+    // MARCADOR DE COMMIT: interrompeu antes, sobra storage sem token, que o app já trata como
+    // deslogado. Troca estado inconsistente permanente por estado limpo recuperável.
+    //
+    // NÃO "ORGANIZE" ESTE BLOCO. Reordenar reintroduz a janela.
     localStorage.setItem(AUTH_KEYS.user, JSON.stringify(safeUser));
     localStorage.setItem(AUTH_KEYS.profile, JSON.stringify(data.profile));
     localStorage.setItem(AUTH_KEYS.permissions, JSON.stringify(perms));
+    localStorage.setItem(AUTH_KEYS.token, data.token);   // ← commit da sessão
 
     _user = safeUser;
     _profile = data.profile;
@@ -214,10 +263,21 @@ function restore() {
   const savedProfile = readJson(AUTH_KEYS.profile);
   const savedPerms = readJson(AUTH_KEYS.permissions);
   if (token && savedUser && savedProfile) {
-    _user = savedUser;
-    _profile = savedProfile;
-    _permissions = savedPerms ?? [];
-    applyAuthedSideEffects();
+    // As três chaves estão presentes — mas presença não é correspondência. Ver o bloco de
+    // coerência no topo do arquivo.
+    const motivo = motivoDeIncoerencia(token, savedUser, savedProfile);
+    if (motivo) {
+      // SESSÃO INVÁLIDA, não "sessão substituída": não houve segundo login, houve storage
+      // corrompido (ou token vencido). Limpa e segue deslogado — o app já sabe lidar com isso, e
+      // é o caminho de MENOR alarde. Culpar um "outro usuário" aqui seria mentir sobre a causa.
+      console.info(`Sessão gravada descartada (${motivo}). Faça login novamente.`);
+      clearAuthStorage();
+    } else {
+      _user = savedUser;
+      _profile = savedProfile;
+      _permissions = savedPerms ?? [];
+      applyAuthedSideEffects();
+    }
   }
   _loading = false;
   notify();
