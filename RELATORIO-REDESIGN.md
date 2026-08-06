@@ -304,8 +304,16 @@ Saldo conferido depois: BOB-4005 `reserved 8.00` (disponível 0), 3.01.0269 `res
    responder se trocar o rolo 60↔30 exige recalibrar a ZD220 a cada troca. Se exigir, o controle na
    tela não é "escolha o que quer", é **"declare o que está carregado"** — desenho diferente, não
    só texto de botão diferente. Os dois ZPL de teste já estão prontos.
-8. **Carga de dados 2.0 → 5.0** — migração do sistema antigo. Sem recon feito neste ciclo; nada no
-   repositório sustenta estimativa hoje.
+8. **Carga de dados 2.0 → 5.0** — migração do sistema antigo. **Já existe um item concreto e ele
+   não é trivial: o vocabulário de status de OP diverge entre os dois bancos.** Medido em
+   06/08/2026 — no 2.0 o estado ativo se chama `pendente` (18 OPs) e no 5.0 se chama
+   `em_andamento` (5); `concluido` é comum aos dois. A carga exige **tradução
+   `pendente` → `em_andamento`**: cópia crua traria 18 OPs vivas marcadas com a palavra que, no
+   5.0, é o DEFAULT de "não começou" — e todo filtro por igualdade passaria a ignorá-las, sem erro
+   e sem log. Fica de pé a decisão de produto: `pendente` continua no vocabulário do 5.0 ou sai?
+   Detalhe completo em `Backend-Fluxo2.0/DIVIDAS.md` → "Vocabulário de status de OP divergente
+   entre 2.0 e 5.0" (prioridade ALTA, bloqueia a carga). O seletor de OP já está imune por filtrar
+   `!frIsOpConcluida`, mas isso protege a tela, não o dado.
 9. **Ownership do cancelamento** — decisão de produto pendente (§6). É intencional que o
    almoxarifado cancele o pedido de qualquer um, ou é furo?
 10. **`FR_OPS_ATIVAS` sai do seed** — junto com o wiring de Conferência, Montagem, Meus Pedidos e

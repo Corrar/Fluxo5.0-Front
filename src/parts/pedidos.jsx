@@ -51,14 +51,11 @@ function PedCatalogoSkeleton({ t }) {
   );
 }
 const FILTROS = ['3D', 'ANTIGO', 'BOBINA', 'CAMISETA', 'EPI', 'FEIRA', 'FERRAMENTAS', 'INSUMOS', 'PROTOTIPO', 'REFORMA', 'USINAGEM'];
-const OPS_FALLBACK = [
-  { cliente: 'Metalúrgica Andrade', ops: ['00021'] },
-  { cliente: 'Tecno Plásticos S.A.', ops: ['00018'] },
-  { cliente: 'Indústria Veloz', ops: ['901001', '901002'] },
-  { cliente: 'Usinagem Premium', ops: ['73001'] },
-  { cliente: 'Esteira Log', ops: ['12010'] },
-  { cliente: 'Auto Peças Norte', ops: ['00009'] },
-];
+// OPS_FALLBACK MORREU (06/08/2026). Era o segundo mock desta tela — seis clientes que não existem
+// no banco ("Metalúrgica Andrade", "Tecno Plásticos S.A.", …), usados quando o seed global estava
+// vazio. Com a fonte real ligada ele não tem para que servir: se o GET /clients falhar, o certo é
+// dizer que falhou (o dropdown tem estado de erro próprio), não oferecer OP inventada que o backend
+// rejeitaria com 404 no envio. Vazio honesto no lugar de lista falsa.
 
 // ── Paginação do catálogo — CÓPIA VERBATIM do padrão validado em pages_main.jsx
 // (frPageList + Paginacao, PAGE_SIZE=48). Recriada aqui com nomes próprios porque
@@ -379,7 +376,31 @@ function PageMeusPedidos({ t: tBase, theme }) {
   }, [q, fil, disp]);
   // Grava a página do catálogo sempre que ela muda (troca de página OU reset de filtro).
   React.useEffect(function () { frSavePedidosCatPage(catPage); }, [catPage]);
-  const OPS = (window.FR_OPS_ATIVAS && window.FR_OPS_ATIVAS.length) ? window.FR_OPS_ATIVAS : OPS_FALLBACK;
+  // ===== OPs do seletor: FONTE REAL (GET /clients), não mais o seed =====
+  //
+  // Antes daqui saía `window.FR_OPS_ATIVAS`, montado no load de pages_clientes.jsx a partir do
+  // CLIENTES_SEED — um array ESTÁTICO. O operador escolhia OP de uma lista que não era a do
+  // sistema: OP criada de verdade não aparecia, e OP do seed que não existe no banco aparecia
+  // (o POST então tomava 404 OP_NAO_ENCONTRADA). Coincidiam só onde os números batiam por acaso.
+  // Esta tela passa a beber da mesma fonte de Apontamentos/Armazém (producaoger) e Devolução.
+  //
+  // "DISPONÍVEL" = NÃO CONCLUÍDA, pelo normalizador compartilhado `frIsOpConcluida`
+  // (pages_clientes.jsx) — nunca por igualdade com 'em_andamento'. O motivo é de DADO, não de
+  // estilo: no 2.0 o estado ATIVO se chama `pendente` (18 OPs em produção, medido em 06/08/2026),
+  // e no 5.0 se chama `em_andamento`. Filtrar pela string literal esconderia as 18 no dia da carga.
+  // Excluir o que acabou mantém o ativo dos DOIS vocabulários. Ver a dívida "Vocabulário de status
+  // de OP divergente entre 2.0 e 5.0" no DIVIDAS.md do backend.
+  //
+  // O SHAPE É O MESMO de antes ([{ cliente, ops: ['73001', ...] }]) de propósito: só a fonte muda,
+  // a renderização do dropdown fica intacta.
+  const { items: opClientes, loading: opsLoading, error: opsError } = window.useFRClients();
+  const OPS = React.useMemo(() => {
+    const concluida = window.frIsOpConcluida || function () { return false; };
+    return (opClientes || [])
+      .map((c) => ({ cliente: c.nome, ops: (c.ops || []).filter((o) => o.op_code && !concluida(o.s)).map((o) => o.op_code) }))
+      .filter((c) => c.ops.length > 0)
+      .sort((a, b) => String(a.cliente).localeCompare(String(b.cliente)));
+  }, [opClientes]);
   const opsView = OPS.map((c) => {
     const s = opQ.trim().toLowerCase();
     if (!s) return c;
@@ -705,8 +726,24 @@ function PageMeusPedidos({ t: tBase, theme }) {
                         <input autoFocus value={opQ} onChange={(e) => setOpQ(e.target.value)} placeholder="Buscar cliente ou OP…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 12.5, fontFamily: 'inherit' }} />
                       </label>
                     </div>
-                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.1em', color: t.faint, padding: '7px 10px 5px' }}>OPs EM ANDAMENTO · CLIENTES E OPS</div>
-                    {opsView.length === 0 && <div style={{ padding: '14px 10px', textAlign: 'center', fontSize: 12.5, color: t.muted }}>Nenhuma OP encontrada.</div>}
+                    {/* "ABERTAS", não "EM ANDAMENTO": o critério é NÃO CONCLUÍDA, e depois da carga
+                        do 2.0 a lista inclui OPs ativas gravadas como 'pendente'. Rótulo que promete
+                        um status literal mentiria sobre o que está logo abaixo dele. */}
+                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.1em', color: t.faint, padding: '7px 10px 5px' }}>OPs ABERTAS · CLIENTES E OPS</div>
+                    {/* Três vazios diferentes, porque são três fatos diferentes. Com fonte real,
+                        "Nenhuma OP encontrada" cobrindo carregamento e falha de rede seria mentira. */}
+                    {opsLoading && <div style={{ padding: '14px 10px', textAlign: 'center', fontSize: 12.5, color: t.muted }}>Carregando OPs…</div>}
+                    {!opsLoading && opsError && (
+                      <div style={{ padding: '12px 10px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>Não foi possível carregar as OPs</div>
+                        <div style={{ fontSize: 11.5, color: t.muted, marginTop: 3 }}>{opsError}</div>
+                      </div>
+                    )}
+                    {!opsLoading && !opsError && opsView.length === 0 && (
+                      <div style={{ padding: '14px 10px', textAlign: 'center', fontSize: 12.5, color: t.muted }}>
+                        {OPS.length === 0 ? 'Nenhuma OP aberta no sistema.' : 'Nenhuma OP encontrada para esta busca.'}
+                      </div>
+                    )}
                     {opsView.map((c) => {
                       const single = c.ops.length === 1;
                       if (single) {
