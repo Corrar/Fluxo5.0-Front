@@ -344,6 +344,14 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const [filter, setFilter] = useStateP('todas');
   const [openId, setOpenId] = useStateP(null);
   const [cancelando, setCancelando] = useStateP(null);   // pedido em confirmação de cancelamento
+  // Identidade EXIBIDA no chip do cabeçalho — mesma assinatura do rodapé da sidebar, uma
+  // implementação só (window.useFRIdentidade). Dívida (f), fase 1.
+  //
+  // CHAMADA INCONDICIONAL de propósito: `window.useFRIdentidade ? …() : …` seria hook condicional,
+  // e hook condicional é armadilha que só aparece no dia em que a condição varia. O global é
+  // definido por sidebar.jsx, que main.jsx carrega ANTES desta tela e antes de o React montar —
+  // se sumir, esta tela quebra alto, junto com o rodapé, em vez de exibir setor errado calada.
+  const setorDoPerfil = window.useFRIdentidade().setor;
   const [toast, setToast] = useStateP(false);
   const [opSel, setOpSel] = useStateP(null);
   const [opOpen, setOpOpen] = useStateP(false);
@@ -528,8 +536,11 @@ function PageMeusPedidos({ t: tBase, theme }) {
           <h1 style={{ margin: 0, fontSize: 25, fontWeight: 850, letterSpacing: '-.02em' }}>Meus Pedidos</h1>
           <div style={{ fontSize: 13, color: 'rgba(255,255,255,.88)', marginTop: 5 }}>Monte sua solicitação e acompanhe o andamento dos seus materiais.</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)' }}>Setor</span>
-            <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}>Geral</span>
+            {/* O chip dizia "Geral" CHUMBADO — literal, igual para todo usuário, sem relação
+                com quem estava logado nem com o `sector` que o POST envia. Dívida (f), fase 1:
+                agora sai do perfil real, e SOME quando não há setor, em vez de inventar um. */}
+            {setorDoPerfil && <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)' }}>Setor</span>}
+            {setorDoPerfil && <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}>{setorDoPerfil}</span>}
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="cart" size={13} /> {cart.length} no carrinho</span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="clock" size={13} /> {emAndamento} em andamento</span>
           </div>

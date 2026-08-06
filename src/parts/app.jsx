@@ -89,7 +89,11 @@ function App() {
   const [user, setUser] = useStateApp(bootAuthed ? frUserFromAuth() : null);
   const [startMod, setStartMod] = useStateApp(bootMod);
 
-  // F5 logado: sincroniza o global USER (topbar/telas) a partir do profile real.
+  // F5 logado: sincroniza o global USER a partir do profile real.
+  //
+  // NÃO alimenta mais o rodapé da sidebar — ele passou a assinar o FRAuth (dívida (f), fase 1).
+  // O que ainda depende desta sincronia são as telas MOCK de módulos locked (compras, rh). Some
+  // junto com elas; enquanto existir, sincronizar é melhor que deixar o mock com "Bruno" fixo.
   useEffectApp(() => {
     if (bootAuthed) syncGlobalUser(frUserFromAuth());
   }, []);

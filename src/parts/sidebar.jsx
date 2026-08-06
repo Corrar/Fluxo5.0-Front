@@ -226,7 +226,53 @@ function ThemeToggle({ t, theme, setTheme, collapsed }) {
 }
 
 // ---------- Sidebar shell ----------
+// ===== IDENTIDADE EXIBIDA — dívida (f), fase 1 =====
+//
+// O rodapé lia o global `USER` (data.jsx), um objeto MOCK ({name:'Bruno', role:'ADMIN'}) que o
+// `syncGlobalUser` (app.jsx) MUTAVA dentro de um useEffect. Mutação não re-renderiza e o efeito
+// roda DEPOIS do primeiro render: num F5 dentro de um módulo, o rodapé mostrava "Bruno / ADMIN"
+// para qualquer usuário logado. Reproduzido quatro vezes, a última em nuvem com a Marina
+// (almoxarife) aparecendo como "Bruno ADMIN".
+//
+// Agora a identidade exibida é ESTADO REACT derivado do FRAuth, com assinatura: mudou a sessão,
+// re-renderiza. Não há mais cópia global no caminho da exibição.
+//
+// POR QUE NÃO useSyncExternalStore: `FRAuth.getSnapshot()` devolve objeto NOVO a cada chamada
+// (faz `_permissions.slice()`), e o hook exige snapshot referencialmente estável — cairia em
+// laço infinito. Guardamos só os três campos primitivos que a tela usa, comparados por valor.
+//
+// ESCOPO DESTA FASE: exibição. O detector de divergência (token do interceptor × token da
+// sessão em memória) é a fase 4 — enquanto ele não existe, este rodapé mostra fielmente a
+// identidade que o FRAuth tem em memória, que ainda pode divergir do token que age.
+function useIdentidadeExibida() {
+  const A = (typeof window !== 'undefined' && window.FRAuth) || null;
+  const ler = () => {
+    const p = (A && A.profile) || {};
+    return { nome: p.name || '', cargo: p.role || '', setor: p.sector || '' };
+  };
+  const [id, setId] = useState(ler);
+  useEffect(() => {
+    if (!A || typeof A.subscribe !== 'function') return undefined;
+    // Lê de novo no mount: entre o primeiro render e o efeito a sessão pode ter sido restaurada.
+    setId(ler());
+    return A.subscribe(() => {
+      const novo = ler();
+      // Só troca o estado se algum campo MUDOU — evita re-render a cada notify do FRAuth
+      // (o heartbeat e o updatePermissions também notificam).
+      setId((ant) => (ant.nome === novo.nome && ant.cargo === novo.cargo && ant.setor === novo.setor) ? ant : novo);
+    });
+  }, []);
+  return id;
+}
+
 function Sidebar({ theme, setTheme, collapsed, setCollapsed, accent, accentText, modules, onLogout, onSwitchModule, mod, setMod, active, setActive, expanded, setExpanded, dropOpen, setDropOpen }) {
+  const eu = useIdentidadeExibida();
+  // Rótulo do cargo pelo MESMO helper que o seletor de módulos usa (auth.jsx) — 'almoxarife'
+  // vira "Almoxarife" nos dois lugares, em vez de a sidebar inventar a própria grafia.
+  const euCargo = (window.FRAccess && window.FRAccess.roleLabel) ? window.FRAccess.roleLabel(eu.cargo) : eu.cargo;
+  // Vazio HONESTO: sessão sem nome não vira "Bruno", vira "—" e "Conta".
+  const euNome = eu.nome || '—';
+  const euInicial = euNome.trim().charAt(0).toUpperCase() || '—';
   const t = tokens(theme, accent, accentText);
   const W = collapsed ? 80 : 288;
   const switcherRef = useRef(null);
@@ -286,10 +332,10 @@ function Sidebar({ theme, setTheme, collapsed, setCollapsed, accent, accentText,
             }}
             onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-              <div style={{ width: 36, height: 36, borderRadius: '50%', background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{USER.name[0]}</div>
+              <div style={{ width: 36, height: 36, borderRadius: '50%', background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{euInicial}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 680, color: t.text }}>{USER.name}</div>
-                <div style={{ fontSize: 11.5, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{USER.role || USER.funcao || 'Conta'}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 680, color: t.text }}>{euNome}</div>
+                <div style={{ fontSize: 11.5, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{euCargo || 'Conta'}</div>
               </div>
             </button>
             <button title="Sair da conta" onClick={onLogout} style={{
@@ -302,7 +348,7 @@ function Sidebar({ theme, setTheme, collapsed, setCollapsed, accent, accentText,
             </button>
           </div>
         ) : (
-          <div title={USER.name} style={{ width: 38, height: 38, margin: '0 auto', borderRadius: '50%', background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 14 }}>{USER.name[0]}</div>
+          <div title={euCargo ? `${euNome} · ${euCargo}` : euNome} style={{ width: 38, height: 38, margin: '0 auto', borderRadius: '50%', background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 14 }}>{euInicial}</div>
         )}
       </div>
     </div>
@@ -312,3 +358,7 @@ function Sidebar({ theme, setTheme, collapsed, setCollapsed, accent, accentText,
 window.Sidebar = Sidebar;
 window.frTokens = tokens;
 window.frHexToRgba = hexToRgba;
+// Exposto para as telas que exibem identidade não precisarem duplicar a assinatura do FRAuth.
+// UMA implementação: duas cópias da mesma leitura é como um lado passa a mostrar o que o outro
+// já corrigiu. sidebar.jsx carrega antes das telas (main.jsx), então o global existe no render.
+window.useFRIdentidade = useIdentidadeExibida;

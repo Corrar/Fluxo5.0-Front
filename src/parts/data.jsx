@@ -74,6 +74,22 @@ const NAV = [
   },
 ];
 
+// ⚠️ LÁPIDE (06/08/2026, dívida (f) fase 1) — `USER` NÃO É MAIS FONTE DE EXIBIÇÃO DE IDENTIDADE.
+//
+// Este objeto é MOCK. Ele era lido pelo rodapé da sidebar e mutado por `syncGlobalUser`
+// (app.jsx) dentro de um useEffect — mutação não re-renderiza e o efeito roda depois do primeiro
+// render, então num F5 dentro de um módulo o rodapé mostrava "Bruno / ADMIN" para QUALQUER
+// usuário logado. Num terminal compartilhado, o operador confia no nome da tela e atribui a ação
+// a quem está escrito. O rodapé agora usa `window.useFRIdentidade()` (sidebar.jsx), que é estado
+// React assinado ao FRAuth.
+//
+// NÃO FOI REMOVIDO nesta fase por escopo, não por necessidade: sobraram três leituras, todas em
+// telas MOCK de módulos com `locked: true` — compras.jsx (166, 716, 724) e rh.jsx (1286). O recon
+// provou que nenhuma delas depende de MUTAÇÃO (leem no render ou no evento), então o objeto pode
+// virar constante morta ou sumir junto com esses mocks, sem cerimônia.
+//
+// REGRA: nenhuma tela nova lê `USER`. Identidade exibida vem de `window.useFRIdentidade()` ou de
+// `FRAuth.profile` direto — nunca de cópia global mutada.
 const USER = { name: 'Bruno', role: 'ADMIN', setor: 'Diretoria', funcao: 'Administrador', email: 'bruno@fluxoroyale.com' };
 
 // Demo accounts + per-credential module access. modules:'all' = full access.
