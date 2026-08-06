@@ -1488,6 +1488,11 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
     catch (e) { const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage; setErro(gm ? gm(e) : 'Não foi possível recusar.'); setEnviando(false); }
   };
   const totalUn = s.itens.reduce((a, it) => a + pedidaOf(it), 0);
+  // Rodapé do MEUS PEDIDOS ('mine'): o "Cancelar pedido" só existe onde o backend aceita cancelar
+  // (estado CRU) e para quem ele deixa agir (permissão). NÃO se pendura em `pending`: esse é o
+  // vocabulário DA TELA ('em-analise'), e o backend também aceita cancelar 'aprovado' e 'conferido'.
+  // Sem `beStatus` (cards de mock, ex.: o PageMeusPedidosLegacy não roteado) o botão não nasce.
+  const podeCancelarMine = !!mine && frSolPodeCancelar() && frSolEstadoCancelavel(s.beStatus);
   const light = t.panel === '#ffffff';
   const titleCor = light ? h1 : h2;
   const steps = (s.status === 'recusado'
@@ -1627,7 +1632,7 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
             </div>
           </div>
         </div>
-        {pending && (
+        {(mine ? podeCancelarMine : pending) && (
           <div style={{ flexShrink: 0, padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {mine ? (
               <button onClick={onCancel} style={{ all: 'unset', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: 14, fontSize: 14, fontWeight: 800, color: uiTone(t, 'red').fg, border: `1.5px solid ${frHexToRgba('#ef4444', .4)}` }}
@@ -1700,6 +1705,9 @@ function frRequestToCard(r) {
     setor: r.sector || '—',
     op: r.op_code || '—',                    // null = isento (EPI/ferramenta/insumo)
     status: frMapReqStatusLocal(r.status),
+    beStatus: r.status,                      // status CRU do backend — o gate de cancelamento decide por ele,
+                                             // nunca pelo vocabulário da tela (o mapa é de exibição e agrupa
+                                             // 'entregue' e 'devolvido' no mesmo 'concluido').
     time: frRelTimeLocal(r.created_at),      // corrige o {s.time} do card (relógio ficava sem texto)
     itens: its.map((ri) => ({
       id: ri.id,                             // ri.id REAL — adjusted_items chaveia por ele
@@ -1781,14 +1789,130 @@ function useFRRequests() {
   return { items: items, loading: loading, error: error, reload: load };
 }
 
+// ===== CANCELAMENTO REAL DE SOLICITAÇÃO — compartilhado pelas DUAS portas =====
+//
+// As duas portas de "excluir solicitação" eram FALSAS: a lixeira das Solicitações escondia o card
+// num Set local (`dismissed`) e o "Cancelar pedido" de Meus Pedidos dava filter no estado da tela.
+// Nenhuma chamava a API. O card voltava no F5 e o usuário achava que tinha excluído.
+//
+// ENDPOINT: PUT /requests/:id/status { status: 'rejeitado', rejection_reason } — NÃO o
+// DELETE /requests/:id. Os dois cancelam (o DELETE também só faz UPDATE para 'rejeitado'), mas o
+// PUT libera a reserva de estoque nos TRÊS estados canceláveis; o DELETE deixava a reserva presa
+// no 'conferido' (corrigido no mesmo lote, no backend — a rota não podia ficar de pé corrompendo
+// saldo só porque a UI parou de usá-la). O PUT já era o caminho da recusa nesta mesma tela.
+//
+// MOTIVO ENLATADO, e isso é decisão: `rejection_reason` é OBRIGATÓRIO no backend para 'rejeitado'
+// (400 sem ele). A recusa com motivo escrito continua existindo, separada, no drawer de detalhe —
+// ela é um julgamento do almoxarifado. O cancelamento pela lixeira é outra coisa: é retirar da
+// fila. Pedir texto livre aqui transformaria o modal na tela de recusa. O modal DIZ qual motivo
+// vai ficar gravado, para ninguém descobrir depois no histórico.
+const FR_SOL_MOTIVO_CANCELAMENTO = 'Cancelado pelo almoxarifado.';
+
+// Estados que o backend aceita cancelar. Espelha o TRANSICOES de updateRequestStatus
+// (aberto/aprovado/conferido → rejeitado) — 'entregue' e 'devolvido' já saíram do estoque e
+// 'rejeitado' já está cancelado. Botão que só produz 400 é ruído: nesses estados ele NÃO nasce.
+const FR_SOL_CANCELAVEL = ['aberto', 'aprovado', 'conferido'];
+function frSolEstadoCancelavel(beStatus) { return FR_SOL_CANCELAVEL.indexOf(beStatus) !== -1; }
+
+// Gate de permissão do CANCELAMENTO — mesmo teste do backend, letra por letra, para o PUT:
+//   requests.routes.ts  → requirePermission('solicitacoes:edit')  (admin passa por bypass)
+//   requests.controller → role admin OU almoxarife, lido do banco
+// Logo: admin passa; almoxarife passa SE tiver a chave exata; qualquer outro cargo NÃO passa.
+//
+// POR QUE NÃO canAccess: ele libera por prefixo ('solicitacoes' casa com quem só tem
+// 'solicitacoes:view'), e quem tem só view toma 403 no PUT. Front liberando o que o backend nega
+// é a pior das duas negações — mesma régua do P3TemProducao3D.
+//
+// POR QUE NÃO 'minhas_solicitacoes:delete': essa é a chave do DELETE, e o DELETE não é o caminho
+// escolhido. Gatear por uma chave que a rota chamada não confere reproduz o furo que o gate existe
+// para fechar. A chave segue o endpoint.
+function frSolPodeCancelar() {
+  const A = window.FRAuth;
+  if (!A || typeof A.hasRole !== 'function') return false;
+  if (A.hasRole(['admin'])) return true;                    // mesmo bypass do requirePermission
+  if (!A.hasRole(['almoxarife'])) return false;             // trava de cargo do controller
+  return Array.isArray(A.permissions) && A.permissions.indexOf('solicitacoes:edit') !== -1;
+}
+
+// Modal de confirmação — padrão da casa (o mesmo esqueleto do confirm de Usuários: overlay que
+// não fecha durante o envio, ícone tonal, botão perigoso vermelho, "Cancelando…"). Autônomo de
+// propósito: os helpers modalShell/modalTitulo/modalBotoes são fechados dentro do PageUsuarios
+// (dependem do `agindo` de lá) e o modal precisa rodar também no Meus Pedidos, outro arquivo.
+//
+// O TEXTO DIZ A CONSEQUÊNCIA, não "tem certeza?": o que acontece com a solicitação, o que acontece
+// com o estoque, o que fica gravado e o que a tela não consegue desfazer.
+function SolCancelModal({ t, s, onClose, onDone }) {
+  const [enviando, setEnviando] = useStateA(false);
+  const [erro, setErro] = useStateA('');
+  const red = uiTone(t, 'red');
+  const qtdDe = (it) => (it.qtdPedida != null ? it.qtdPedida : it.qtd) || 0;
+  const itens = Array.isArray(s.itens) ? s.itens : [];
+  const totalUn = itens.reduce((a, it) => a + qtdDe(it), 0);
+  const confirmar = async () => {
+    if (enviando) return;
+    setEnviando(true); setErro('');
+    try {
+      await window.FRApi.put(`/requests/${s.id}/status`, { status: 'rejeitado', rejection_reason: FR_SOL_MOTIVO_CANCELAMENTO });
+      if (window.frNotify) window.frNotify({ icon: 'trash', tone: 'amber', titulo: 'Solicitação cancelada', txt: `${s.req} · reserva de estoque liberada` });
+      onDone();   // quem chamou recarrega DO SERVIDOR e fecha. Nada some otimista.
+    } catch (e) {
+      // Falha FICA NO MODAL: ele não fecha, a linha não some, e a mensagem é a do backend.
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setErro(gm ? gm(e) : 'Não foi possível cancelar a solicitação.');
+      setEnviando(false);
+    }
+  };
+  return (
+    <div onClick={() => !enviando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(480px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: red.bg, color: red.fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={20} /></span>
+          <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>Cancelar solicitação</div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 14 }}>
+          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, fontWeight: 800, color: t.text }}>{s.req}</span>
+          <span style={{ fontSize: 12.5, color: t.muted, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {s.sol}{s.setor && s.setor !== '—' ? ` · ${s.setor}` : ''}{s.op && s.op !== '—' ? ` · OP ${s.op}` : ''}
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: t.muted, flexShrink: 0 }}>{itens.length} {itens.length === 1 ? 'item' : 'itens'} · {totalUn} un</span>
+        </div>
+
+        <div style={{ fontSize: 13.5, color: t.muted, lineHeight: 1.6 }}>
+          <div>Ela <b style={{ color: t.text }}>não é apagada</b>: sai desta lista e fica no histórico como <b style={{ color: t.text }}>Recusada</b>.</div>
+          <div style={{ marginTop: 7 }}>A <b style={{ color: t.text }}>reserva de estoque</b> destes itens é <b style={{ color: t.text }}>liberada na hora</b> — o saldo disponível volta a contar com eles.</div>
+          <div style={{ marginTop: 7 }}>Fica gravado o motivo <span style={{ color: t.text, fontWeight: 700 }}>“{FR_SOL_MOTIVO_CANCELAMENTO}”</span> e quem cancelou.</div>
+          <div style={{ marginTop: 7, color: red.fg, fontWeight: 700 }}>Não dá para desfazer por esta tela.</div>
+        </div>
+
+        {erro && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, background: red.bg, color: red.fg, fontSize: 12.5, fontWeight: 600, lineHeight: 1.45 }}>
+            <Icon name="alert" size={15} style={{ flexShrink: 0, marginTop: 1 }} /> <span>{erro}</span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+          <Btn t={t} kind="ghost" onClick={() => !enviando && onClose()}>Voltar</Btn>
+          <button onClick={confirmar} disabled={enviando} style={{ all: 'unset', boxSizing: 'border-box', cursor: enviando ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: red.fg, color: '#fff', opacity: enviando ? 0.6 : 1 }}>
+            <Icon name="trash" size={16} /> {enviando ? 'Cancelando…' : 'Cancelar solicitação'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PageSolicitacoes({ t }) {
   const { items, loading, error, reload } = useFRRequests();
   const [filter, setFilter] = useStateA('todas');
   const [search, setSearch] = useStateA('');
   const [openId, setOpenId] = useStateA(null);
   const [tipo, setTipo] = useStateA('todos');
-  const [dismissed, setDismissed] = useStateA(() => new Set());   // dispensa LOCAL do botão "Remover" (sem endpoint de exclusão no escopo)
-  const remove = (id) => setDismissed((h) => { const n = new Set(h); n.add(id); return n; });
+  const [cancelando, setCancelando] = useStateA(null);   // card em confirmação de cancelamento (o modal manda)
+  // A dispensa LOCAL (Set `dismissed` + `remove`) MORREU aqui. Ela escondia o card sem chamar
+  // nada: no F5 ele voltava. Agora a lixeira abre o modal, o modal faz o PUT, e a lista recarrega
+  // DO SERVIDOR — a solicitação some porque o backend a tirou dos status carregados, não porque
+  // a tela decidiu escondê-la.
   const setStatus = () => {};   // no-op: bloco de Devoluções é mock e não renderiza com dados reais (/requests não traz tipo devolução)
   // Passo D — ENVIO REAL (conferido → entregue → consume/baixa física no backend). Guard anti-duplo-clique OBRIGATÓRIO (estoque físico).
   const [enviandoId, setEnviandoId] = useStateA(null);
@@ -1805,10 +1929,11 @@ function PageSolicitacoes({ t }) {
       setEnvioErro(gm ? gm(e) : 'Não foi possível confirmar o envio.');   // NÃO baixou; card permanece em trânsito
     } finally { setEnviandoId(null); }
   };
+  const podeCancelar = frSolPodeCancelar();   // gate de PERMISSÃO (o de ESTADO é por card, no beStatus)
   const tabs = [['todas', 'Todas'], ['em-analise', 'Em Análise'], ['a-separar', 'A Separar'], ['em-transito', 'Em Trânsito'], ['concluido', 'Concluído'], ['recusado', 'Recusado']];
   const count = (k) => (k === 'todas' ? items.length : items.filter((x) => x.status === k).length);
   const q = search.trim().toLowerCase();
-  const view = items.filter((x) => !dismissed.has(x.id) && (tipo === 'todos' || (tipo === 'devolucao' ? x.tipo === 'devolucao' : x.tipo !== 'devolucao')) && (filter === 'todas' || x.status === filter) && (!q || x.sol.toLowerCase().includes(q) || x.setor.toLowerCase().includes(q) || x.op.includes(q) || x.itens.some((it) => it.sku.includes(q) || it.nome.toLowerCase().includes(q))));
+  const view = items.filter((x) => (tipo === 'todos' || (tipo === 'devolucao' ? x.tipo === 'devolucao' : x.tipo !== 'devolucao')) && (filter === 'todas' || x.status === filter) && (!q || x.sol.toLowerCase().includes(q) || x.setor.toLowerCase().includes(q) || x.op.includes(q) || x.itens.some((it) => it.sku.includes(q) || it.nome.toLowerCase().includes(q))));
   const cur = items.find((x) => x.id === openId);
 
   const Pill = ({ status }) => {
@@ -1962,9 +2087,13 @@ function PageSolicitacoes({ t }) {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, paddingTop: 13, borderTop: `1px solid ${t.border}` }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: t.muted }}><Icon name={s.tipo === 'devolucao' ? 'exchange' : 'box'} size={15} /> {s.itens.length} {s.tipo === 'devolucao' ? (s.itens.length === 1 ? 'item devolvido' : 'itens devolvidos') : (s.itens.length === 1 ? 'item solicitado' : 'itens solicitados')}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <button onClick={(e) => { e.stopPropagation(); remove(s.id); }} title="Remover" style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = '#ef4444'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={16} /></button>
+                  {/* Lixeira = CANCELAR de verdade. Só nasce onde o backend aceita (estado) e para
+                      quem ele deixa agir (permissão) — nos demais casos ela simplesmente não existe. */}
+                  {podeCancelar && frSolEstadoCancelavel(s.beStatus) && (
+                    <button onClick={(e) => { e.stopPropagation(); setCancelando(s); }} title="Cancelar solicitação" style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = '#ef4444'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={16} /></button>
+                  )}
                   <button onClick={() => setOpenId(s.id)} title="Ver detalhes" style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="chevronRight" size={16} /></button>
                 </div>
               </div>
@@ -1984,6 +2113,9 @@ function PageSolicitacoes({ t }) {
           await window.FRApi.put(`/requests/${cur.id}/status`, { status: 'rejeitado', rejection_reason: motivo });
           setOpenId(null); reload();
         }} />}
+
+      {cancelando && <SolCancelModal t={t} s={cancelando} onClose={() => setCancelando(null)}
+        onDone={() => { setCancelando(null); setOpenId(null); reload(); }} />}
     </div>
   );
 }
@@ -2220,3 +2352,6 @@ function renderPage(active, props) {
 // definida em pedidos.jsx, que carrega depois). MEUS_PEDIDOS/SOL_STATUS/SolicitacaoDetail passam a ser
 // globais para a elaborada conseguir lê-las em tempo de render (eram privadas deste módulo).
 Object.assign(window, { PageEntradas, PageSaidas, PageUsuarios, PageRelatorios, PageEntradaNova, PageSolicitacoes, PagePlaceholder, renderPage, MEUS_PEDIDOS, SOL_STATUS, SolicitacaoDetail });
+// Cancelamento de solicitação — exposto porque o Meus Pedidos (pedidos.jsx, carregado DEPOIS
+// deste arquivo) é a segunda porta e usa exatamente o mesmo modal, o mesmo gate e o mesmo PUT.
+Object.assign(window, { SolCancelModal, frSolPodeCancelar, frSolEstadoCancelavel });

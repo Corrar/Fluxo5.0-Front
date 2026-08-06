@@ -240,8 +240,11 @@ function EpiDestinoModal({ t, items, catOf, onFunc, onJust, onFoto, isEarly, onC
 // arquivo nem tocar no main.jsx — só pedidos.jsx. Adapta cada pedido ao shape que a tela já
 // consome (idêntico ao mock MEUS_PEDIDOS): { id, req, sol, setor, op, status, time, itens:[{nome,sku,qtd}] }.
 
-// Backend → vocabulário da tela (SOL_STATUS). Status real de requests: aberto/aprovado/entregue/rejeitado/devolvido.
-const FR_REQ_STATUS_MAP = { aberto: 'em-analise', aprovado: 'a-separar', entregue: 'concluido', rejeitado: 'recusado', devolvido: 'concluido' };
+// Backend → vocabulário da tela (SOL_STATUS). Status real de requests: aberto/aprovado/conferido/
+// entregue/rejeitado/devolvido. 'conferido' FALTAVA e caía no fallback: um pedido já conferido,
+// pronto para sair, aparecia aqui como "Em Análise". Agora bate 1:1 com o mapa gêmeo do
+// pages_admin (FR_REQ_STATUS_MAP_ADMIN), que é o que o comentário de lá sempre prometeu.
+const FR_REQ_STATUS_MAP = { aberto: 'em-analise', aprovado: 'a-separar', conferido: 'em-transito', entregue: 'concluido', rejeitado: 'recusado', devolvido: 'concluido' };
 function frMapReqStatus(be) { return FR_REQ_STATUS_MAP[be] || 'em-analise'; } // fallback neutro (chave válida em SOL_STATUS)
 
 // created_at → tempo relativo pt-BR, sem libs.
@@ -272,6 +275,7 @@ function frMyRequestToCard(r, solNome) {
     setor: r.sector || '—',
     op: r.op_code || '—',                   // null = isento (EPI/ferramenta/insumo)
     status: frMapReqStatus(r.status),
+    beStatus: r.status,                     // status CRU — quem decide se dá pra cancelar é ele, não o rótulo
     time: frRelTime(r.created_at),
     itens: its.map((it) => ({
       nome: (it.products && it.products.name) || it.custom_product_name || 'Item',
@@ -342,6 +346,7 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const [pedidos, setPedidos] = useStateP([]);
   const [filter, setFilter] = useStateP('todas');
   const [openId, setOpenId] = useStateP(null);
+  const [cancelando, setCancelando] = useStateP(null);   // pedido em confirmação de cancelamento
   const [toast, setToast] = useStateP(false);
   const [opSel, setOpSel] = useStateP(null);
   const [opOpen, setOpOpen] = useStateP(false);
@@ -829,7 +834,13 @@ function PageMeusPedidos({ t: tBase, theme }) {
             })}
           </div>
           )}
-          {cur && <SolicitacaoDetail t={t} s={cur} mine onClose={() => setOpenId(null)} onCancel={() => { setPedidos((xs) => xs.filter((x) => x.id !== cur.id)); setOpenId(null); }} />}
+          {/* "Cancelar pedido" ERA um filter no estado local — o card sumia da tela e voltava no F5,
+              sem nada ter acontecido no servidor. Agora abre o MESMO modal da lixeira das
+              Solicitações (window.SolCancelModal), que faz o PUT e recarrega DO SERVIDOR.
+              O botão que abre isto já nasce gateado dentro do SolicitacaoDetail (estado + permissão). */}
+          {cur && <SolicitacaoDetail t={t} s={cur} mine onClose={() => setOpenId(null)} onCancel={() => setCancelando(cur)} />}
+          {cancelando && <window.SolCancelModal t={t} s={cancelando} onClose={() => setCancelando(null)}
+            onDone={() => { setCancelando(null); setOpenId(null); histReload(); }} />}
         </div>
       )}
 

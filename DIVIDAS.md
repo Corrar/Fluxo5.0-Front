@@ -4,6 +4,24 @@ Registro nomeado das dívidas aceitas conscientemente, com o porquê e o caminho
 (Dívidas menores vivem como comentários no ponto exato do código; aqui ficam as que precisam
 de decisão ou de trabalho estrutural futuro.)
 
+## "Cancelar pedido" do Meus Pedidos só existe para admin/almoxarife — DECISÃO DE PRODUTO
+
+Registrada em 06/08/2026, ao ligar o cancelamento real nas duas portas (Solicitações e Meus
+Pedidos). **Não é regressão: é a primeira vez que o botão diz a verdade.**
+
+Antes ele era falso — dava `filter` no estado da tela, o card sumia e voltava no F5, sem nada ter
+acontecido no servidor. Ligado de verdade, ele passou a obedecer ao backend, e o backend NÃO
+deixa o solicitante comum cancelar: `updateRequestStatus` e `deleteRequest` exigem cargo `admin`
+ou `almoxarife`, sem nenhuma checagem de dono. Logo, o botão agora **não nasce** para quem levaria
+403 — que é a maioria de quem usa a tela.
+
+O buraco de produto é do backend e está registrado lá ("Cancelamento de solicitação não tem
+ownership"). Enquanto o Bruno não decidir, o front fica assim de propósito: **não mostrar botão
+que só produz 403** vale mais do que manter uma ilusão que já enganava.
+
+Saída, se a decisão for "cada um cancela o seu": o gate `frSolPodeCancelar()` (pages_admin.jsx)
+ganha o ramo do dono, na MESMA linha do que o backend passar a aceitar — nunca antes.
+
 ## Permissões v1 — universo do checklist é a união das chaves em uso
 
 Universo do checklist de Permissões = união das chaves em uso: chave que perder o último
