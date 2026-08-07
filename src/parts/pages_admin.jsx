@@ -1499,7 +1499,7 @@ function ConferenciaEnvioPanel({ t, itens, pedidaOf, confRaw, setConfVal, confVa
             <div style={{ fontSize: 13.5, fontWeight: 850, color: t.text, textTransform: 'uppercase' }}>{it.nome}</div>
             <div style={{ fontSize: 11.5, color: t.muted, marginTop: 4 }}>Solicitado: {pedidaOf(it)} {it.un || 'un'}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 10, fontWeight: 850, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>Qtd a enviar:</span>
+              <span style={{ fontSize: 10, fontWeight: 850, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>QTD A ENVIAR:</span>
               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <button onClick={passo(it, i, -1)} disabled={enviando} title="Diminuir" style={btnPasso}><Icon name="minus" size={15} /></button>
                 <input value={confRaw(it, i)} onChange={(e) => setConfVal(it, i)(e.target.value)} inputMode="numeric" disabled={enviando}
@@ -1507,6 +1507,15 @@ function ConferenciaEnvioPanel({ t, itens, pedidaOf, confRaw, setConfVal, confVa
                 <button onClick={passo(it, i, 1)} disabled={enviando} title="Aumentar" style={btnPasso}><Icon name="plus" size={15} /></button>
               </div>
             </div>
+            {/* Eco do corte, AO VIVO, ao lado do número que o operador está digitando: ele vê a
+                consequência antes de confirmar, e não só depois no drawer. Nasce e some conforme
+                o valor desce ou volta à pedida — o teto do stepper É a pedida, então `<` já é
+                todo o universo de ajuste possível aqui. */}
+            {confVal(it, i) < pedidaOf(it) && (
+              <div style={{ marginTop: 10, fontSize: 11.5, fontWeight: 700, color: uiTone(t, 'amber').fg }}>
+                Quantidade ajustada: {pedidaOf(it)} → {confVal(it, i)} {it.un || 'un'}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1559,7 +1568,10 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
     try { await onReject(motivo.trim()); }
     catch (e) { const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage; setErro(gm ? gm(e) : 'Não foi possível recusar.'); setEnviando(false); }
   };
-  const totalUn = s.itens.reduce((a, it) => a + pedidaOf(it), 0);
+  // Total do que o pedido REALMENTE vale depois do ajuste — senão o rodapé desmente item por
+  // item a linha logo acima dele ("6̶ → 1" e "30̶ → 10" somando 36). `enviada` só entra quando
+  // existe; sem ajuste o total continua sendo o pedido.
+  const totalUn = s.itens.reduce((a, it) => a + (it.enviada != null ? Number(it.enviada) : pedidaOf(it)), 0);
   // Rodapé do MEUS PEDIDOS ('mine'): o "Cancelar pedido" só existe onde o backend aceita cancelar
   // (estado CRU) e para quem ele deixa agir (permissão). NÃO se pendura em `pending`: esse é o
   // vocabulário DA TELA ('em-analise'), e o backend também aceita cancelar 'aprovado' e 'conferido'.
@@ -1669,26 +1681,48 @@ function SolicitacaoDetail({ t, s, onClose, onApprove, onReject, mine, onCancel 
                     saíram daqui e viraram o painel "Conferência de Envio". Editar quantidade no
                     meio do histórico misturava consulta com decisão, e a decisão desconta estoque. */}
                 {(() => {
-                  const posConf = s.status === 'em-transito' || s.status === 'concluido';   // pós-conferência (backend conferido/entregue)
+                  // QUEM MANDA É O DADO, NÃO O STATUS. Aqui havia um `posConf` (em-transito ||
+                  // concluido) que só deixava o ajuste aparecer DEPOIS da conferência — resquício
+                  // da era em que a quantidade era editada no meio deste histórico. A conferência
+                  // mudou de lugar: acontece na APROVAÇÃO, e o ajuste passou a NASCER em
+                  // 'a-separar' — exatamente o status que aquele gate escondia. O Bruno ajustou
+                  // 6→1, o backend gravou e reservou certo, e a tela seguiu mostrando 6.
+                  // Regra nova, por item e sem status nenhum: veio quantidade enviada e ela
+                  // difere da pedida ⇒ houve ajuste ⇒ ele se mostra. ('em-analise' tem `enviada`
+                  // null por construção; se um dia vier preenchida, exibir É o certo.)
                   const enviada = it.enviada;                          // null/undefined = sem ajuste (integral) | número (incl. 0)
-                  const showEnviado = posConf && enviada != null;      // != null cobre null E undefined (mock/'mine')
-                  const falta = showEnviado && enviada < pedidaOf(it);
+                  const pedida = pedidaOf(it);
+                  const temAjuste = enviada != null && Number(enviada) !== pedida;
+                  const falta = temAjuste && Number(enviada) < pedida;
                   const amber = uiTone(t, 'amber');
                   return (
                     <div style={{ textAlign: 'right', flexShrink: 0, maxWidth: 260 }}>
-                      <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: t.faint }}>QTD PEDIDA</div>
-                      <div style={{ fontSize: 20, fontWeight: 850, color: t.text }}>{pedidaOf(it)} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
-                      {showEnviado && (
+                      {temAjuste ? (
+                        // SUBSTITUI o par empilhado QTD PEDIDA/ENVIADO: o número que vale é um só,
+                        // e o pedido original vira contexto riscado atrás da seta.
                         <React.Fragment>
-                          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: falta ? amber.fg : t.faint, marginTop: 7 }}>ENVIADO</div>
-                          <div style={{ fontSize: 16, fontWeight: 850, color: falta ? amber.fg : t.text }}>{enviada} <span style={{ fontSize: 11, fontWeight: 600, color: falta ? amber.fg : t.muted }}>{it.un || 'un'}</span></div>
-                          {falta && (
-                            <div style={{ marginTop: 7, display: 'inline-flex', alignItems: 'flex-start', gap: 5, textAlign: 'left', background: amber.bg, color: amber.fg, borderRadius: 8, padding: '6px 9px', maxWidth: 240 }}>
-                              <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                              <span style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.35 }}>{it.justificativa || 'Sem justificativa'}</span>
-                            </div>
-                          )}
+                          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: amber.fg }}>QTD AJUSTADA</div>
+                          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 7, marginTop: 1 }}>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: t.muted, textDecoration: 'line-through' }}>{pedida}</span>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: t.faint }}>→</span>
+                            <span style={{ fontSize: 20, fontWeight: 850, color: amber.fg }}>{enviada} <span style={{ fontSize: 11, fontWeight: 600, color: amber.fg }}>{it.un || 'un'}</span></span>
+                          </div>
                         </React.Fragment>
+                      ) : (
+                        <React.Fragment>
+                          <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.08em', color: t.faint }}>QTD PEDIDA</div>
+                          <div style={{ fontSize: 20, fontWeight: 850, color: t.text }}>{pedida} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{it.un || 'un'}</span></div>
+                        </React.Fragment>
+                      )}
+                      {/* A justificativa só sai QUANDO EXISTE. O fallback "Sem justificativa" foi
+                          embora junto com o `posConf`: o painel da aprovação não coleta nota, então
+                          ele carimbaria uma acusação em cima de todo ajuste recém-aprovado por uma
+                          nota que o fluxo nunca pediu. O riscado já grita que houve corte. */}
+                      {falta && it.justificativa && (
+                        <div style={{ marginTop: 7, display: 'inline-flex', alignItems: 'flex-start', gap: 5, textAlign: 'left', background: amber.bg, color: amber.fg, borderRadius: 8, padding: '6px 9px', maxWidth: 240 }}>
+                          <Icon name="alert" size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                          <span style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.35 }}>{it.justificativa}</span>
+                        </div>
                       )}
                     </div>
                   );
