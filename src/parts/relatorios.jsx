@@ -127,14 +127,20 @@ function RelatoriosBIReal({ t }) {
     return { from: rlYmd(ini), to: rlYmd(fim), label: def[1] };
   }, [per]);
 
-  R.useEffect(function () {
-    let vivo = true;
+  // Extraído do useEffect para virar chamável (mount E stock_updated usam a mesma função).
+  // O `vivo` do fecho antigo virou a checagem do ref: sem ela, uma recarga disparada pelo
+  // socket poderia setar estado depois da tela sair.
+  const montado = R.useRef(true);
+  R.useEffect(function () { montado.current = true; return function () { montado.current = false; }; }, []);
+  const carregarBI = R.useCallback(function () {
     setLoading(true); setErro(null);
     window.FRApi.get(`/reports/bi?from=${intervalo.from}&to=${intervalo.to}`, { skipLoading: true })
-      .then(function (r) { if (vivo) { setD(r.data || null); setLoading(false); } })
-      .catch(function (e) { if (vivo) { setErro(rlErr(e)); setLoading(false); } });
-    return function () { vivo = false; };
+      .then(function (r) { if (montado.current) { setD(r.data || null); setLoading(false); } })
+      .catch(function (e) { if (montado.current) { setErro(rlErr(e)); setLoading(false); } });
   }, [intervalo.from, intervalo.to]);
+  R.useEffect(function () { carregarBI(); }, [carregarBI]);
+  // O BI agrega movimento de estoque: entrada, saída e consumo entram nos números daqui.
+  window.frUseStockReload(carregarBI);
 
   const filtro = (
     <div style={{ display: 'inline-flex', gap: 3, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}` }}>

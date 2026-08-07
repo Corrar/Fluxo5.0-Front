@@ -622,6 +622,9 @@ function useFRReplenishments() {
       .catch((e) => { if (!mounted.current) return; setError(repErr(e)); setLoading(false); });
   }, []);
   R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  // Cada item da reposição carrega `stock_available` (backend: GREATEST(0, on_hand - reserved)).
+  // Uma entrada de NF ou uma saída em outra tela muda esse número aqui. Ver lib/stock-refresh.js.
+  window.frUseStockReload(load);
   return { items, loading, error, reload: load };
 }
 
@@ -889,13 +892,18 @@ function PageReposicoes({ t }) {
   const [produtos, setProdutos] = useStateR([]);
   React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
   // Catálogo de materiais do modal (GET /products, com stock agregado pooled).
-  React.useEffect(() => {
+  // Fetch extraído do useEffect para virar uma função CHAMÁVEL: o mount continua chamando-a, e
+  // agora o `stock_updated` também. `disponivel` daqui é on_hand - reserved — o número que
+  // qualquer movimento em qualquer tela invalida.
+  const carregarProdutos = React.useCallback(() => {
     window.FRApi.get('/products', { skipLoading: true })
       .then((r) => setProdutos((Array.isArray(r.data) ? r.data : []).map((p) => ({
         product_id: p.id, sku: p.sku || '—', nome: p.name || '—', preco: repNum(p.unit_price),
         disponivel: Math.max(0, repNum(p.stock && p.stock.quantity_on_hand) - repNum(p.stock && p.stock.quantity_reserved)),
       })))).catch(() => setProdutos([]));
   }, []);
+  React.useEffect(() => { carregarProdutos(); }, [carregarProdutos]);
+  window.frUseStockReload(carregarProdutos);
 
   const cur = reps.find((r) => r.id === openId) || null;
   const tabs = [['pendente', 'Pendentes'], ['em_preparo', 'Em preparo'], ['concluido', 'Concluídos'], ['cancelada', 'Cancelados']];
@@ -1524,13 +1532,18 @@ function PageConfronto({ t }) {
   const [produtos, setProdutos] = useStateR([]);
   React.useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 4200); return () => clearTimeout(id); }, [toast]);
   // Catálogo real (GET /products): preço = unit_price; livre = on_hand - reserved (agregado pooled).
-  React.useEffect(() => {
+  // Fetch extraído do useEffect para virar uma função CHAMÁVEL: o mount continua chamando-a, e
+  // agora o `stock_updated` também. `disponivel` daqui é on_hand - reserved — o número que
+  // qualquer movimento em qualquer tela invalida.
+  const carregarProdutos = React.useCallback(() => {
     window.FRApi.get('/products', { skipLoading: true })
       .then((r) => setProdutos((Array.isArray(r.data) ? r.data : []).map((p) => ({
         product_id: p.id, sku: p.sku || '—', nome: p.name || '—', preco: repNum(p.unit_price),
         disponivel: Math.max(0, repNum(p.stock && p.stock.quantity_on_hand) - repNum(p.stock && p.stock.quantity_reserved)),
       })))).catch(() => setProdutos([]));
   }, []);
+  React.useEffect(() => { carregarProdutos(); }, [carregarProdutos]);
+  window.frUseStockReload(carregarProdutos);
 
   const cur = trips.find((x) => x.id === openId) || null;
   const confrontoTrip = trips.find((x) => x.id === confrontoId) || null;
@@ -1680,6 +1693,9 @@ function useFRLowStock() {
       .catch(function (e) { if (!mounted.current) return; setError(crtErr(e)); setLoading(false); });
   }, []);
   R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  // Ruptura é derivada do disponível: um recebimento tira o item da lista, um consumo o coloca.
+  // Sem isto, a tela de Críticos podia mostrar ruptura de algo que acabou de entrar.
+  window.frUseStockReload(load);
   return { items: items, loading: loading, error: error, reload: load };
 }
 

@@ -1237,13 +1237,32 @@ function PageRelatorios({ t }) {
   }, []);
 
   // /reports/general exige startDate/endDate (400 sem) -> só dispara quando há período.
-  R.useEffect(() => {
-    if (!periodo) return;
+  const carregarGeral = R.useCallback((p) => {
+    if (!p) return;
     setCarregandoPeriodo(true);
-    window.FRApi.get(`/reports/general?startDate=${periodo.start}&endDate=${periodo.end}`, { skipLoading: true })
+    window.FRApi.get(`/reports/general?startDate=${p.start}&endDate=${p.end}`, { skipLoading: true })
       .then((r) => { if (mounted.current) { setGeral(r.data); setCarregandoPeriodo(false); } })
       .catch((e) => { if (mounted.current) { setErro(relErr(e)); setCarregandoPeriodo(false); } });
-  }, [periodo && periodo.start, periodo && periodo.end]);
+  }, []);
+  R.useEffect(() => { carregarGeral(periodo); }, [periodo && periodo.start, periodo && periodo.end, carregarGeral]);
+
+  // Recarga por MOVIMENTO DE SALDO. Refaz só o que depende de estoque e NÃO reexecuta o efeito
+  // de 1ª carga: aquele lê `/reports/available-dates` e chama setPeriodo — reexecutá-lo jogaria
+  // fora o intervalo que o usuário acabou de escolher. Aqui o período é preservado e reusado.
+  // Uma função só (painel + período) porque a assinatura é UMA: dois eventos na mesma janela,
+  // ou os dois formatos de payload, produzem um único ciclo de recarga.
+  const recarregarPorSaldo = R.useCallback(() => {
+    Promise.all([
+      window.FRApi.get('/dashboard/stats', { skipLoading: true }),
+      window.FRApi.get('/reports/managerial', { skipLoading: true }),
+      window.FRApi.get('/transactions/recent', { skipLoading: true }),
+    ]).then(([a, b, c]) => {
+      if (!mounted.current) return;
+      setStats(a.data); setGer(b.data); setExtrato(Array.isArray(c.data) ? c.data : []);
+    }).catch((e) => { if (mounted.current) setErro(relErr(e)); });
+    carregarGeral(periodo);
+  }, [carregarGeral, periodo && periodo.start, periodo && periodo.end]);
+  window.frUseStockReload(recarregarPorSaldo);
 
   // ---- derivações (só do que os endpoints realmente dão) ----
   const saidas = R.useMemo(() => {
@@ -1865,7 +1884,11 @@ function useFRRequests() {
   }, []);
   React.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
 
-  // Tempo real: nova solicitação ('new_request') ou mudança de status ('request_updated') → recarrega.
+  // Tempo real: nova solicitação ('new_request'), mudança de status ('request_updated') ou
+  // MOVIMENTO DE SALDO ('stock_updated') → recarrega. Os três entram no MESMO scheduleReload de
+  // propósito: uma aprovação emite request_updated E stock_updated quase juntos, e uma janela só
+  // de debounce transforma os dois num único GET. Duas assinaturas dariam dois reloads.
+  // O handler ignora o payload (o evento vem com e sem `changedProducts`) — ver lib/stock-refresh.js.
   // FRSocket pode estar null no mount (conecta async) e trocar de instância em reconexão — por isso
   // usamos subscribe() p/ (re)anexar os listeners ao socket vigente. Sem socket, app segue por F5.
   React.useEffect(function () {
@@ -1889,9 +1912,9 @@ function useFRRequests() {
     let attached = null;   // socket que está com os listeners no momento
     const attach = function (sock) {
       if (sock === attached) return;
-      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); attached.off('stock_updated', scheduleReload); }
       attached = sock || null;
-      if (attached) { attached.on('new_request', scheduleReload); attached.on('request_updated', scheduleReload); }
+      if (attached) { attached.on('new_request', scheduleReload); attached.on('request_updated', scheduleReload); attached.on('stock_updated', scheduleReload); }
     };
 
     attach(FRS.socket);   // socket já conectado (ex.: sessão restaurada no F5)
@@ -1899,7 +1922,7 @@ function useFRRequests() {
 
     return function () {
       if (timer) clearTimeout(timer);
-      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); attached.off('stock_updated', scheduleReload); }
       if (typeof unsub === 'function') unsub();
     };
   }, [load]);

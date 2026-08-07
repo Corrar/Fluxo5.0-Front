@@ -54,6 +54,10 @@
       return function () { mounted.current = false; };
     }, [load]);
 
+    // Saldo mudou em QUALQUER lugar do sistema → esta lista está velha. É a busca do Estoque ERP:
+    // a tela onde o almoxarife confere disponível antes de decidir. Ver lib/stock-refresh.js.
+    window.frUseStockReload(load);
+
     return { items: items, loading: loading, error: error, reload: load };
   }
 

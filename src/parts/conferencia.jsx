@@ -125,7 +125,10 @@ function useFRConferencia() {
       });
   }, []);
   useEffectCf(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
-  // Tempo real: 'request_updated'/'new_request' → recarrega (aprovado novo aparece, concluído sai).
+  // Tempo real: 'request_updated'/'new_request' → recarrega (aprovado novo aparece, concluído sai);
+  // e 'stock_updated', porque o ALVO da conferência é a quantidade aprovada e ela vive no saldo.
+  // Os três no MESMO scheduleReload: janela única de debounce = 1 GET mesmo quando chegam juntos.
+  // O handler ignora o payload (vem com e sem `changedProducts`) — ver lib/stock-refresh.js.
   useEffectCf(function () {
     const FRS = window.FRSocket;
     if (!FRS) return undefined;
@@ -139,15 +142,15 @@ function useFRConferencia() {
     let attached = null;
     const attach = function (sock) {
       if (sock === attached) return;
-      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); attached.off('stock_updated', scheduleReload); }
       attached = sock || null;
-      if (attached) { attached.on('new_request', scheduleReload); attached.on('request_updated', scheduleReload); }
+      if (attached) { attached.on('new_request', scheduleReload); attached.on('request_updated', scheduleReload); attached.on('stock_updated', scheduleReload); }
     };
     attach(FRS.socket);
     const unsub = FRS.subscribe(function (snap) { attach(snap && snap.socket); });
     return function () {
       if (timer) clearTimeout(timer);
-      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); }
+      if (attached) { attached.off('new_request', scheduleReload); attached.off('request_updated', scheduleReload); attached.off('stock_updated', scheduleReload); }
       if (typeof unsub === 'function') unsub();
     };
   }, [load]);
