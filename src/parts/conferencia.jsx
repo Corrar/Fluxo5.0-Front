@@ -10,7 +10,10 @@ const CF_ACCENT = '#2563eb';
 // (default seguro p/ unidades novas/desconhecidas). Espelha DECIMAL_UNITS do backend (requests.controller.ts).
 const DECIMAL_UNITS = new Set(['M', 'MT', 'L', 'KG']);
 const isDecimalUnit = (un) => DECIMAL_UNITS.has(String(un || '').trim().toUpperCase());
-const pedidaOf = (it) => Number(it && it.qtd) || 0;   // teto da qtd conferida = pedido
+// Alvo da conferência = quantidade APROVADA (delivered ?? requested), já resolvida em `it.qtd`
+// pelo adapter. O nome antigo (`pedidaOf`) passou a mentir quando a conferência virou passo da
+// aprovação: o teto do conferente é o que foi aprovado, não o que o setor pediu.
+const alvoOf = (it) => Number(it && it.qtd) || 0;
 
 // Ordens de separação aprovadas (status a-separar), com armazém de destino.
 const CONF_SEED = [
@@ -71,13 +74,31 @@ function frConfRequestToCard(r) {
     cliente: r.client_name || 'Sem cliente',   // real: getRequests JOIN clients (NULL → 'Sem cliente')
     armazem: '',                       // /requests não fornece o nome do armazém por ora
     status: FR_CONF_STATUS_MAP[r.status] || 'a-separar',   // aprovado→a-separar (pend); conferido→em-transito (Enviadas/Passo D)
-    itens: its.map((ri) => ({
-      id: ri.id,                       // ri.id REAL — chave do conference_notes
-      nome: (ri.products && ri.products.name) || ri.custom_product_name || 'Item',
-      sku: (ri.products && ri.products.sku) || '',
-      qtd: Number(ri.quantity_requested) || 0,
-      un: (ri.products && ri.products.unit) || 'un',
-    })),
+    itens: its.map((ri) => {
+      const qtdPedida = Number(ri.quantity_requested) || 0;
+      // Guarda de finitude que o adapter irmão (pages_admin) não precisa ter: LÁ o `enviada` só
+      // pinta texto; AQUI ele vira o TETO do clamp de digitação. Um NaN escapando faria
+      // Math.min(NaN, n) devolver NaN e o teto sumir. Valor não-numérico → trata como sem ajuste
+      // (comportamento de hoje), nunca como zero.
+      const dRaw = ri.quantity_delivered;
+      const enviada = (dRaw == null || !Number.isFinite(Number(dRaw))) ? null : Number(dRaw);
+      return {
+        id: ri.id,                       // ri.id REAL — chave do conference_notes
+        nome: (ri.products && ri.products.name) || ri.custom_product_name || 'Item',
+        sku: (ri.products && ri.products.sku) || '',
+        qtdPedida,                       // o que o setor pediu — só contexto, não é mais o alvo
+        enviada,                         // null = aprovado integral | número (incl. 0) = cortado na aprovação
+        // ALVO DA CONFERÊNCIA. Continua se chamando `qtd` de propósito: TODOS os consumidores
+        // desta tela já leem deste campo (teto do clamp, parcial/completo, feed, exibição e o
+        // fillAll das etiquetas), então passam a operar sobre a quantidade APROVADA por cascata,
+        // sem uma linha de lógica editada.
+        // Ler `quantity_requested` aqui era o bug: pedido cortado 4→2 na aprovação chegava na
+        // bipagem pedindo 4; o conferente digitava 4 de boa-fé e o concluir regravava
+        // delivered=4, RE-RESERVANDO o que a aprovação tinha acabado de liberar.
+        qtd: enviada != null ? enviada : qtdPedida,
+        un: (ri.products && ri.products.unit) || 'un',
+      };
+    }),
   };
 }
 
@@ -203,10 +224,11 @@ function ConferenciaEnvioTab({ t, setActive }) {
 
   const enviadas = solic.filter((o) => o.status === 'em-transito' || o.status === 'concluido');
 
-  // Qtd conferida: clampa 0 ≤ n ≤ pedido; unidade decimal (M/MT/L/KG) aceita até 2 casas, resto é inteiro.
-  // O backend revalida (fonte da verdade), mas aqui já bloqueamos na UX. Vazio é permitido (item não tocado).
+  // Qtd conferida: clampa 0 ≤ n ≤ ALVO (quantidade aprovada); unidade decimal (M/MT/L/KG) aceita até 2
+  // casas, resto é inteiro. O backend revalida (fonte da verdade), mas aqui já bloqueamos na UX.
+  // Vazio é permitido (item não tocado) — e é ele que impede o item de entrar em adjusted_items.
   const setConfQtd = (key, raw, it) => {
-    const max = pedidaOf(it);
+    const max = alvoOf(it);
     let s = String(raw);
     if (isDecimalUnit(it.un)) {
       s = s.replace(',', '.').replace(/[^0-9.]/g, '');
@@ -440,7 +462,15 @@ function ConferenciaEnvioTab({ t, setActive }) {
                             <span style={{ width: 30, height: 30, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', background: stateColor || 'transparent', border: stateColor ? 'none' : `2px solid ${t.faint}`, color: '#fff' }}>{it.completo ? <Icon name="check" size={17} /> : it.parcial ? <Icon name="alert" size={16} /> : <span style={{ fontSize: 13, fontWeight: 800, color: t.faint }}>{idx + 1}</span>}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 15, fontWeight: 800, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div>
-                              <div style={{ fontSize: 12.5, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>{it.sku} · pedido {it.qtd} {it.un}</div>
+                              {/* "pedido" virou "a enviar": o número é o APROVADO, e chamá-lo de
+                                  pedido é justamente o que fazia o conferente digitar o valor
+                                  antigo. Quando houve corte, o pedido original vira hint âmbar. */}
+                              <div style={{ fontSize: 12.5, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>
+                                {it.sku} · a enviar {it.qtd} {it.un}
+                                {it.enviada != null && it.enviada !== it.qtdPedida && (
+                                  <span style={{ color: '#b45309', fontWeight: 700 }}> (ajustado de {it.qtdPedida})</span>
+                                )}
+                              </div>
                             </div>
                             {it.bipado ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -457,7 +487,7 @@ function ConferenciaEnvioTab({ t, setActive }) {
                           </div>
                           {it.parcial && (
                             <div style={{ padding: '0 15px 13px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: '#b45309', marginBottom: 6 }}><Icon name="alert" size={13} /> Quantidade abaixo do solicitado ({it.confQtd} de {it.qtd}). Justifique:</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: '#b45309', marginBottom: 6 }}><Icon name="alert" size={13} /> Quantidade abaixo da aprovada ({it.confQtd} de {it.qtd}). Justifique:</div>
                               <input value={it.just} onChange={(e) => setJustB(it.key, e.target.value)} placeholder="Motivo (ex: estoque insuficiente, avaria…)"
                                 style={{ boxSizing: 'border-box', width: '100%', height: 38, borderRadius: 9, border: `1px solid ${(it.just || '').trim() ? t.border : '#f59e0b'}`, background: t.panel, color: t.text, fontSize: 13, fontFamily: 'inherit', outline: 'none', padding: '0 12px' }} />
                             </div>
@@ -552,7 +582,25 @@ function ConferenciaEnvioTab({ t, setActive }) {
                             <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div>
                             <div style={{ fontSize: 11, color: t.faint, fontFamily: 'ui-monospace, monospace' }}>{it.sku}</div>
                           </div>
-                          <span style={{ fontSize: 13, fontWeight: 800, color: it.parcial ? '#b45309' : t.text, flexShrink: 0 }}>{it.bipado && it.confQtd !== '' ? `${it.confQtd}/${it.qtd}` : it.qtd} {it.un}</span>
+                          {/* Enquanto NÃO se está conferindo, esta linha é a que o Bruno viu mentir
+                              na validação (mostrava 4 num item cortado para 2). Com ajuste ela vira
+                              o riscado do drawer — mesmo padrão, mesma leitura. Já conferindo,
+                              `{digitado}/{alvo}` continua como hoje. */}
+                          {(() => {
+                            const conferindo = it.bipado && it.confQtd !== '';
+                            const temAjuste = it.enviada != null && it.enviada !== it.qtdPedida;
+                            return (
+                              <span style={{ fontSize: 13, fontWeight: 800, color: it.parcial ? '#b45309' : t.text, flexShrink: 0, display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+                                {conferindo ? `${it.confQtd}/${it.qtd}` : temAjuste ? (
+                                  <React.Fragment>
+                                    <span style={{ fontWeight: 700, color: t.muted, textDecoration: 'line-through' }}>{it.qtdPedida}</span>
+                                    <span style={{ color: t.faint }}>→</span>
+                                    <span style={{ color: '#b45309' }}>{it.qtd}</span>
+                                  </React.Fragment>
+                                ) : it.qtd} {it.un}
+                              </span>
+                            );
+                          })()}
                         </div>
                       ))}
                     </div>
