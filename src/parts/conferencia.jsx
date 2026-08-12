@@ -31,6 +31,62 @@ function cfItemCode(req, idx) {
   return 'FR-' + req.replace(/[^A-Z0-9]/gi, '').slice(-6).toUpperCase() + '-' + String(idx + 1).padStart(2, '0');
 }
 
+// ===== ALERTA DE CONFERIDO PARADO (decisão e=2) ==============================================
+// Ordem em 'conferido' (aqui: 'em-transito') já foi separada e está no balcão esperando o envio.
+// Enquanto ela não sai, SEGURA RESERVA: o material aparece indisponível para todo mundo e
+// ninguém é avisado. Isto é SÓ VISIBILIDADE — não expira nada, não chama backend, não cria ação.
+//
+// ⚠⚠ PROXY DECLARADO — LEIA ANTES DE CONFIAR NO NÚMERO ⚠⚠
+// N é contado a partir de `requests.created_at`, NÃO do momento em que a ordem entrou em
+// 'conferido'. Esse carimbo NÃO EXISTE: `requests` tem exatamente id, requester_id, sector,
+// status, rejection_reason, created_at, op_id, client_service_id, version, warehouse_id
+// (conferido no catálogo da validação em 12/08/2026). Não há `updated_at` nem `conferred_at`.
+// A transição só deixa rastro em `audit_logs`, que esta tela não consome — puxá-lo exigiria
+// endpoint novo e a permissão 'logs', que o almoxarife não tem. Ou seja: backend, fora do lote.
+//
+// A DIREÇÃO DO ERRO É SEGURA, e é por isso que o proxy serve. Toda ordem percorre
+// aberto → aprovado → conferido ANTES de chegar aqui, logo `created_at` <= entrada em conferido,
+// SEMPRE. Então N(proxy) >= N(real): o aviso pode acender CEDO demais, nunca tarde demais. Para
+// um alerta de "isto está parado segurando reserva", falso positivo custa um olhar; falso
+// negativo custa reserva presa sem ninguém saber. O erro está do lado certo de propósito.
+// No dia em que existir carimbo da transição, troca-se SÓ a fonte de `criadaEm` no adapter —
+// nada mais nesta tela precisa mudar.
+//
+// BORDA: "mais de 7 dias" é ESTRITAMENTE MAIOR. 7 dias exatos NÃO alertam; 8 alertam. A escolha
+// é literal ao enunciado da decisão, e está asserida no harness para não virar acidente.
+const CF_DIAS_PARADO = 7;
+
+// Dias inteiros decorridos desde `iso`. `agora` é injetável para o harness poder fixar o relógio
+// (sem isso, uma prova de "8 dias" seria um teste que depende do dia em que roda).
+// Aceita tanto ISO com Z quanto o formato 'YYYY-MM-DD HH:MM:SS' que um `timestamp without time
+// zone` pode chegar cru: sem o tratamento, o segundo vira NaN em parte dos motores.
+// Skew de fuso é IRRELEVANTE aqui e isso é medido, não torcido: o proxy já erra em dias inteiros
+// (created_at vs. transição), então ±3h não move um limiar de 7 dias — mas ainda assim
+// normalizamos para não depender do fuso da máquina de quem abre a tela.
+function cfDiasDesde(iso, agora) {
+  if (!iso) return null;
+  let s = iso;
+  if (typeof s === 'string' && !/[Tt]/.test(s)) s = s.replace(' ', 'T');
+  if (typeof s === 'string' && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+  const t = Date.parse(s);
+  if (!Number.isFinite(t)) return null;
+  const base = (agora == null ? Date.now() : agora);
+  const dias = Math.floor((base - t) / 86400000);
+  // Relógio adiantado no cliente daria negativo; 0 é o piso honesto ("hoje"), nunca um número
+  // negativo aparecendo como "parado há -1 dias".
+  return dias < 0 ? 0 : dias;
+}
+
+// Devolve N (dias) quando a ordem está PARADA, ou null quando não está. Null é o "não alerte":
+// quem renderiza pergunta uma coisa só e não repete a regra.
+// Só 'em-transito' (backend 'conferido') entra: 'a-separar' ainda está na fila de trabalho e
+// 'concluido' já saiu — nenhum dos dois segura reserva no balcão.
+function cfParadoDias(o, agora) {
+  if (!o || o.status !== 'em-transito') return null;
+  const d = cfDiasDesde(o.criadaEm, agora);
+  return (d != null && d > CF_DIAS_PARADO) ? d : null;
+}
+
 // ---- Barcode (Code128-look, CSS bars) ----
 function CfBarcode({ code, height = 56 }) {
   // Padrão denso de barras finas (visual Code 128): ~6 barras por caractere.
@@ -74,6 +130,10 @@ function frConfRequestToCard(r) {
     cliente: r.client_name || 'Sem cliente',   // real: getRequests JOIN clients (NULL → 'Sem cliente')
     armazem: '',                       // /requests não fornece o nome do armazém por ora
     status: FR_CONF_STATUS_MAP[r.status] || 'a-separar',   // aprovado→a-separar (pend); conferido→em-transito (Enviadas/Passo D)
+    // PROXY do "parado desde" — ver o bloco CF_DIAS_PARADO. É `created_at` da solicitação, e não
+    // a entrada em 'conferido', porque esse carimbo não existe no banco. Já vem no payload do
+    // GET /requests (o SELECT é `r.*`), então nada de backend muda por causa disto.
+    criadaEm: r.created_at || null,
     itens: its.map((ri) => {
       const qtdPedida = Number(ri.quantity_requested) || 0;
       // Guarda de finitude que o adapter irmão (pages_admin) não precisa ter: LÁ o `enviada` só
@@ -623,10 +683,28 @@ function ConferenciaEnvioTab({ t, setActive }) {
               <div>
                 <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint, margin: '6px 2px 8px' }}>Enviadas</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {enviadas.map((o) => (
-                    <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 11, background: 'rgba(16,185,129,.07)', border: '1px solid rgba(16,185,129,.3)' }}>
-                      <span style={{ width: 28, height: 28, borderRadius: 8, background: '#10b981', color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="check" size={15} /></span>
+                  {enviadas.map((o) => {
+                  // Um cálculo por linha, respondendo "está parado? há quantos dias?". `null` =
+                  // segue o visual verde de sempre — o alerta é EXCEÇÃO, não estado padrão.
+                  const paradoDias = cfParadoDias(o);
+                  return (
+                    <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 11, flexWrap: 'wrap',
+                      // Âmbar SUBSTITUI o verde: as duas cores juntas na mesma linha diriam
+                      // "concluído" e "atenção" ao mesmo tempo, e a linha perderia as duas leituras.
+                      background: paradoDias != null ? 'rgba(245,158,11,.10)' : 'rgba(16,185,129,.07)',
+                      border: paradoDias != null ? '1px solid rgba(245,158,11,.45)' : '1px solid rgba(16,185,129,.3)' }}>
+                      <span style={{ width: 28, height: 28, borderRadius: 8, background: paradoDias != null ? '#f59e0b' : '#10b981', color: '#fff', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                        <Icon name={paradoDias != null ? 'clock' : 'check'} size={15} />
+                      </span>
                       <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, fontWeight: 800, color: t.text }}>{o.req}</span>
+                      {paradoDias != null && (
+                        // Plural correto: "parado há 1 dia" nunca aparece (o limiar é > 7), mas a
+                        // guarda fica porque o limiar é uma constante e pode mudar sem que ninguém
+                        // volte aqui para revisar a gramática.
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, padding: '0 9px', borderRadius: 999, background: 'rgba(245,158,11,.18)', border: '1px solid rgba(245,158,11,.45)', color: '#b45309', fontSize: 11.5, fontWeight: 800, whiteSpace: 'nowrap' }}>
+                          <Icon name="clock" size={12} /> parado há {paradoDias} {paradoDias === 1 ? 'dia' : 'dias'}
+                        </span>
+                      )}
                       <span style={{ fontSize: 12.5, color: t.muted, marginLeft: 'auto' }}>→ {o.armazem} · OP {o.op}</span>
                       {o.status === 'em-transito' && (
                         <button disabled={enviandoEnvio === o.id} onClick={() => confirmarEnvio(o)} style={{ all: 'unset', cursor: enviandoEnvio === o.id ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 14px', borderRadius: 9, fontWeight: 800, fontSize: 12.5, color: '#fff', background: '#10b981', opacity: enviandoEnvio === o.id ? .6 : 1 }}>
@@ -634,7 +712,8 @@ function ConferenciaEnvioTab({ t, setActive }) {
                         </button>
                       )}
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               </div>
             )}
@@ -1110,4 +1189,9 @@ function PageConferencia({ t, setActive }) {
 
 // cfPrintIdentificacao/frSendZplBrowserPrint/frZplField exportados p/ a Entrada por NF reusar o caminho ZPL
 // (PageEntradaNova em pages_admin.jsx). São module-level: a Conferência continua chamando os locais — sem mudança.
-Object.assign(window, { PageConferencia, cfPrintIdentificacao, frSendZplBrowserPrint, frZplField });
+//
+// cfDiasDesde/cfParadoDias/CF_DIAS_PARADO saem para o WINDOW por um motivo só: são a REGRA do
+// alerta de parado, e regra sem prova é opinião. Expostos, o harness assere a borda (7 não, 8 sim)
+// com o relógio FIXO — o que um teste que dependesse do dia de execução não conseguiria fazer.
+// São funções PURAS e sem estado; nada nesta tela lê do window (a renderização chama as locais).
+Object.assign(window, { PageConferencia, cfPrintIdentificacao, frSendZplBrowserPrint, frZplField, cfDiasDesde, cfParadoDias, CF_DIAS_PARADO });
