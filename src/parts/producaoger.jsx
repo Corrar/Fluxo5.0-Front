@@ -104,9 +104,12 @@ window.PGToast = PGToast;
 // ---------- Seletor de OP (compartilhado por Apontamentos e Armazém) ----------
 // As OPs vêm do GET /clients REAL (decisão C) — NUNCA do window.FR_OPS_ATIVAS, que é montado do
 // seed estático de pages_clientes e está dessincronizado do banco (dívida documentada lá).
-// "OP aberta" = !frIsOpConcluida(status), o MESMO normalizador que a tela Clientes usa. Filtrar
-// pela string literal 'em_andamento' devolveria 1 OP das 17 abertas (16 são legado 'pendente') e
-// contradiria a Clientes, que já as exibe como "Em andamento".
+// "OP aberta" = !frIsOpConcluida(status), o MESMO normalizador que a tela Clientes usa — por
+// EXCLUSÃO do que terminou, nunca por igualdade com 'em_andamento'. (Correção 07/08/2026: o
+// texto antigo aqui falava em "17 abertas, 16 legado 'pendente'"; esse número nunca conferiu
+// com a validação — zero linhas em 'pendente'. A migration 021 fechou o vocabulário do banco
+// em em_andamento|concluido. O filtro por exclusão fica: é o que mantém esta tela e a Clientes
+// concordando, e o que absorve o vocabulário do 2.0 na carga sem sumir com OP viva.)
 function pgOpsAbertas(clientes) {
   const isConcl = window.frIsOpConcluida || function () { return false; };
   const out = [];
@@ -142,8 +145,11 @@ function PGOpPicker({ t, ops, value, onChange, loading, error }) {
 // FICARAM DE FORA por SEM FONTE (decisão de produto 24/07): "concluídas no mês" (não existe
 // concluded_at), lead time (sem timestamps de início/fim), atrasadas (sem coluna de prazo),
 // produtividade mensal (sem série histórica) e eficiência por setor (métrica indefinida — a OP
-// nem tem setor). "Em produção" como recorte separado de "ativas" também: 16/17 das OPs abertas
-// são legado 'pendente' que a Clientes exibe como "Em andamento" — o recorte literal mentiria.
+// nem tem setor). "Em produção" como recorte separado de "ativas" também — e agora por um motivo
+// mais simples que o alegado antes (o texto citava "16/17 das OPs abertas em legado 'pendente'",
+// número que nunca existiu na validação): desde a 021 o vocabulário do banco é em_andamento|
+// concluido, então "ativa" e "em produção" seriam literalmente o mesmo recorte. Separar os dois
+// exigiria um estado que o sistema não tem — e inventá-lo aqui seria número sem fonte.
 function PGPainel({ t, setActive }) {
   const { items: clientes, loading: cliLoading, error: cliError } = window.useFRClients();
   // summary é OBJETO (o pgUseGet é array-only) -> efeito próprio. null = carregando.

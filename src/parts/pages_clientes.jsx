@@ -446,8 +446,12 @@ window.PageClientes = PageClientes;
 // Expostos p/ as telas do módulo Produção (Recebimento/Apontamentos/Armazém), que escolhem a OP
 // pelo GET /clients real — NUNCA pelo FR_OPS_ATIVAS do seed acima (telas novas nascem sem a dívida).
 // isConcluido vai junto de propósito: é o normalizador de status da casa, e é ele que define
-// "OP aberta". O banco tem 16 OPs legadas em 'pendente' + 1 em 'em_andamento'; filtrar pela string
-// literal daria 1 OP e contradiria esta tela, que já exibe as 17 como "Em andamento". Compartilhar
-// o normalizador é o que impede as telas de divergirem.
+// "OP aberta" — por EXCLUSÃO do que terminou, nunca por igualdade com 'em_andamento'.
+// (Correção 07/08/2026: o texto antigo aqui afirmava "16 OPs legadas em 'pendente' + 1 em
+// 'em_andamento'". Esse número nunca conferiu com a validação — medido: 5 em_andamento, 2
+// concluido, ZERO pendente. A migration 021 fechou o vocabulário do banco em em_andamento|
+// concluido, com NOT NULL e CHECK, então 'pendente' não volta. O normalizador continua sendo
+// por exclusão de propósito: é o que mantém as telas concordando entre si e o que absorve o
+// vocabulário do 2.0 no dia da carga sem esconder OP viva.)
 window.useFRClients = useFRClients;
 window.frIsOpConcluida = isConcluido;
