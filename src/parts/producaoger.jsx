@@ -60,6 +60,15 @@ function pgUseGet(path) {
       });
   }, [path]);
   R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  // TUDO que este hook busca é PROJEÇÃO DE MOVIMENTO DE ESTOQUE — o saldo por OP, o razão da OP e
+  // a fila de recebimento são as três leituras de `op_material_events`, e quem escreve nessa tabela
+  // (receive/consume) emite `stock_updated` no mesmo commit. Por isso a assinatura mora AQUI, no
+  // fetcher compartilhado, e não em cada consumidor: um lugar, um evento, todos os três frescos.
+  // Sem OP escolhida (`path` vazio) o `load` já retorna sem HTTP — evento chega e não custa nada.
+  // `load` entra pela ref do hook, não pelas deps: trocar de OP recria a função a cada `path` novo
+  // e o handler passa a chamar a versão nova SEM reassinar — o reqId lá em cima segue descartando
+  // resposta velha. Assinatura única por hook = uma janela de debounce = 1 GET por evento.
+  window.frUseStockReload(load);
   return { items: items, loading: loading, error: error, reload: load };
 }
 

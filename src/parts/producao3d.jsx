@@ -616,8 +616,20 @@ function P3Demandas({ t }) {
   const tabs = [['fila', 'Fila'], ['produzindo', 'Produzindo'], ['historico', 'Histórico']];
   const view = groups[tab];
 
-  // Avançar status. Concluir (produzindo→concluida = 'Concluída' no backend) dispara o CRÍTICO #2:
-  // receive + reserve + request 'aprovado'. Envia o status do BACKEND (capitalizado), não o do front.
+  // Avançar status. Envia o status do BACKEND (capitalizado), não o do front.
+  //
+  // O QUE CONCLUIR (produzindo→concluida = 'Em desenvolvimento'→'Concluída') FAZ HOJE, desde o
+  // lote I-b (backend 679848c) — a descrição antiga ("receive + reserve + request 'aprovado'")
+  // descrevia um caminho que não existe mais:
+  //   • receive SEMPRE. A peça foi impressa, ela é real: entra no físico em qualquer cenário.
+  //   • reserve (+ crédito no item da solicitação) SÓ se a solicitação de origem ainda está VIVA
+  //     ('aberto' | 'aprovado' | 'conferido'). Solicitação morta ⇒ a peça fica em ESTOQUE LIVRE,
+  //     de propósito: reservar para um pedido encerrado é como nascia a reserva órfã.
+  //   • o status da SOLICITAÇÃO fica INTOCADO. A promoção automática a 'aprovado' foi removida —
+  //     ela ressuscitava pedido rejeitado e pulava o gate humano da conferência.
+  // Consequência para a TELA: daqui não dá para saber se houve reserva (depende do estado da
+  // solicitação, que esta tela não lê) nem afirmar status nenhum. Por isso o toast abaixo fala só
+  // do que é sempre verdade — a entrada no estoque.
   const advance = async (d) => {
     if (busyRef.current) return;
     const nextFront = P3_DEMSTATUS[d.status] && P3_DEMSTATUS[d.status].next;
@@ -627,13 +639,21 @@ function P3Demandas({ t }) {
     try {
       await window.FRApi.put('/producao-3d/demands/' + d.id + '/status', { status: backStatus });
       reload();
-      setToast({ kind: 'ok', msg: nextFront === 'concluida' ? 'Peça produzida — estoque creditado e reservado para a solicitação.' : 'Demanda movida para "' + P3_DEMSTATUS[nextFront].label + '".' });
+      setToast({ kind: 'ok', msg: nextFront === 'concluida' ? 'Peça produzida — entrada registrada no estoque.' : 'Demanda movida para "' + P3_DEMSTATUS[nextFront].label + '".' });
     } catch (e) { setToast({ kind: 'err', msg: p3Err(e) }); } // 400 "Demanda já concluída/cancelada" (guard) → msg clara
     finally { setBusy(false); }
   };
-  // Recusar = abre o P3RejectModal p/ coletar o MOTIVO (obrigatório no modal). O endpoint agora
-  // aceita { status, reason } e grava em rejection_reason (coluna própria — migration 010), então o
-  // texto não se perde mais. Antes isto era um window.confirm sem motivo.
+  // Recusar = abre o P3RejectModal p/ coletar o MOTIVO (obrigatório no modal). O endpoint aceita
+  // { status, reason } e grava em rejection_reason (coluna própria — migration 010), então o texto
+  // não se perde mais. Antes isto era um window.confirm sem motivo.
+  //
+  // O botão vive em TODO card não-terminal (:545, `!isHist`) — inclusive na coluna Produzindo, e
+  // isso é sustentado dos dois lados desde o I-b (679848c): a whitelist do backend lista
+  // 'Em desenvolvimento' → 'Rejeitada' como transição válida (peça que falhou na impressão é
+  // recusa legítima, não cancelamento), e a recusa passou a AUDITAR — REJEITAR_DEMANDA_3D com
+  // `status_anterior`, que é o que separa "a fábrica não aceitou o pedido" de "a peça falhou na
+  // impressora". Por isso o caminho de exceção "Excluir demanda" (→ 'Cancelada') NÃO substitui
+  // este: ele não coleta motivo, e o motivo é a razão de a recusa existir.
   const reject = (d) => { if (!busyRef.current) setRejectTarget(d); };
   const confirmReject = async (id, motivo) => {
     if (busyRef.current) return;

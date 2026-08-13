@@ -1128,6 +1128,13 @@ function useFRTravels() {
       .catch((e) => { if (!mounted.current) return; setError(repErr(e)); setLoading(false); });
   }, []);
   R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  // A viagem É uma reserva de estoque: o POST /travel-orders reserva cada item e o reconcile
+  // devolve/baixa o que voltou. NÃO existe evento próprio de viagem no backend — o único sinal que
+  // esses dois caminhos emitem é `stock_updated` (são 2 dos 5 emits legados, os que vêm SEM
+  // payload; ver lib/stock-refresh.js, que ignora o payload por construção). Assinar aqui é o que
+  // faz a saída registrada por um colega, ou o confronto fechado no galpão, aparecerem sem F5.
+  // Assinatura ÚNICA nesta lista (ela não ouve mais nada) = uma janela de debounce = 1 GET.
+  window.frUseStockReload(load);
   return { items, loading, error, reload: load };
 }
 const tripLevado = (tr) => tr.itens.reduce((a, it) => a + it.price * it.levou, 0);

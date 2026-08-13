@@ -132,6 +132,14 @@ function useFRSeparations() {
       });
   }, []);
   R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
+  // Cada item carrega `disp = sep + (on_hand - reserved)` (adaptSepItem) — e `reserved` é o
+  // reservado GLOBAL do produto, então QUALQUER movimento em QUALQUER tela invalida este número.
+  // É o que arma o SepStepper: `maxSep = min(qtd, disp)`. Sem esta assinatura o almoxarife podia
+  // separar contra um teto vencido — e o 400 do backend só apareceria no fim.
+  // Esta tela não ouve nenhum outro evento, então a assinatura é ÚNICA e a janela de debounce
+  // também: um stock_updated = um GET /separations. (O catálogo do modal vem de useFRProducts,
+  // que já se recarrega sozinho desde 8e5daa4 — recurso diferente, GET diferente.)
+  window.frUseStockReload(load);
   return { items: items, loading: loading, error: error, reload: load };
 }
 
