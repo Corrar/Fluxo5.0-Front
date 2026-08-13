@@ -729,12 +729,10 @@ function ConferenciaEnvioTab({ t, setActive }) {
 // chefe responsável por setor (destino da etiqueta)
 const CF_CHEFES = { 'Usinagem': 'Carlos Moura', 'Produção 3D': 'Rafael Souza', 'Elétrica': 'Igor Salles', 'Montagem': 'Ana Paula', 'Desenvolvimento': 'Diego Alves', 'Acabamento': 'Júlia Ramos', 'Almoxarifado': 'Bruno Teixeira' };
 function cfChefe(setor) { return CF_CHEFES[setor] || 'Chefe do setor'; }
-function cfClienteDaOP(op) {
-  if (window.frClienteDaOP) { const c = window.frClienteDaOP(op); if (c) return c; }
-  const ops = window.FR_OPS_ATIVAS || [];
-  const found = ops.find((c) => (c.ops || []).some((o) => String(o) === String(op) || String(o).includes(String(op))));
-  return found ? found.cliente : null;
-}
+// cfClienteDaOP REMOVIDA neste lote. Era a última leitora de window.frClienteDaOP/FR_OPS_ATIVAS
+// aqui dentro e já estava MORTA: nenhuma chamada no arquivo desde que a etiqueta passou a usar
+// `order.cliente` (client_name real, via adapter do GET /requests) — ver o comentário no ponto de
+// uso. Mantê-la era guardar um caminho que resolvia cliente pelo seed de 20 nomes fixos.
 // Teto do NOME na etiqueta de identificação. Ver frZplTeto: o ^FB sobrepõe, não corta.
 const FR_ZPL_NOME_MAX = 150;
 

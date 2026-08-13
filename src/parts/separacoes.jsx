@@ -13,8 +13,9 @@
 // SEM status novo no backend — decisão fechada). "Arquivar" só move o card entre abas locais.
 //
 // CATÁLOGO de materiais = produtos REAIS (window.useFRProducts → GET /products), pois criar/
-// editar itens precisa do product_id (uuid). O picker de OP ainda usa window.FR_OPS_ATIVAS
-// (seed de CLIENTES, dívida já documentada em pages_clientes.jsx — fora do escopo desta tela).
+// editar itens precisa do product_id (uuid). O picker de OP também é REAL desde este lote
+// (window.useFRClients → GET /clients, filtrado por pgOpsAbertas): esta foi a ÚLTIMA tela presa
+// ao CLIENTES_SEED, e com a morte dela o seed saiu do bundle.
 const { useState: useStateSep, useMemo: useMemoSep, useEffect: useEffectSep, useRef: useRefSep } = React;
 
 const SEP_BRL = (n) => 'R$ ' + Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -750,8 +751,22 @@ function SepNovaModal({ t, catalog, busy, onClose, onCreate }) {
   const [opOpen, setOpOpen] = useStateSep(false);
   const [opQuery, setOpQuery] = useStateSep('');
   const ql = q.trim().toLowerCase();
-  const ops = (window.FR_OPS_ATIVAS || []);
-  const opFlat = ops.flatMap((c) => c.ops.map((o) => ({ op: o, cliente: c.cliente })));
+  // ===== OPs do seletor: FONTE REAL (GET /clients) =====
+  //
+  // Antes daqui saía `window.FR_OPS_ATIVAS`, montado no load de pages_clientes.jsx a partir do
+  // CLIENTES_SEED — 20 clientes ESTÁTICOS. O almoxarife escolhia OP de uma lista que não é a do
+  // sistema: OP real não aparecia, e OP do seed que não existe no banco aparecia (a criação então
+  // gravava uma separação amarrada a uma OP fantasma). Esta tela passa a beber da MESMA fonte de
+  // Montagem, Meus Pedidos, Devolução e Produção — `useFRClients` + `pgOpsAbertas`.
+  //
+  // "ATIVA" = NÃO CONCLUÍDA, pelo normalizador compartilhado `frIsOpConcluida` (dentro de
+  // pgOpsAbertas) — nunca por igualdade com 'em_andamento'. O CHECK da migration 021 fechou o
+  // vocabulário em em_andamento|concluido, mas filtrar por EXCLUSÃO do que terminou é o que
+  // mantém esta tela concordando com a de Clientes e absorve o vocabulário do 2.0 na carga.
+  const { items: clientes, loading: cliLoading, error: cliError } = window.useFRClients();
+  const opFlat = useMemoSep(() => (window.pgOpsAbertas ? window.pgOpsAbertas(clientes) : [])
+    .map((o) => ({ op: String(o.op_code || ''), cliente: o.cliente || '' }))
+    .filter((x) => x.op), [clientes]);
   const opl = opQuery.trim().toLowerCase();
   const opView = opFlat.filter((x) => !opl || x.op.toLowerCase().includes(opl) || x.cliente.toLowerCase().includes(opl));
   const disponiveis = catalog.filter((c) => !ql || c.nome.toLowerCase().includes(ql) || c.sku.includes(ql));
@@ -812,7 +827,16 @@ function SepNovaModal({ t, catalog, busy, onClose, onCreate }) {
                             </button>
                           );
                         })}
-                        {opView.length === 0 && <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 12.5, color: t.muted }}>Nenhuma OP encontrada. Você pode digitar a OP manualmente abaixo.</div>}
+                        {/* Três estados DISTINTOS. Com a lista vindo da rede, "nenhuma OP" durante o
+                            carregamento seria mentira — e é justamente quando o operador desiste do
+                            seletor e digita a OP na mão, que é como se cria separação com OP errada. */}
+                        {opView.length === 0 && (
+                          <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 12.5, color: cliError ? uiTone(t, 'red').fg : t.muted }}>
+                            {cliLoading ? 'Carregando OPs…'
+                              : cliError ? cliError
+                              : 'Nenhuma OP encontrada. Você pode digitar a OP manualmente abaixo.'}
+                          </div>
+                        )}
                       </div>
                       <div style={{ padding: 10, borderTop: `1px solid ${t.border}` }}>
                         <input value={op} onChange={(e) => setOp(e.target.value)} placeholder="Ou digite uma OP avulsa…" style={{ boxSizing: 'border-box', width: '100%', height: 36, borderRadius: 9, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 13, fontFamily: 'inherit', outline: 'none' }} />

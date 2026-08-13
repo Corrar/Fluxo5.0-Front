@@ -17,56 +17,23 @@ function opStatusOf(s) {
 }
 function isConcluido(s) { return s === 'concluido' || s === 'finalizada' || s === 'done'; }
 
-// ⚠️ CLIENTES_SEED + os globais abaixo continuam sendo a FONTE MOCK de OUTRAS telas ainda não migradas
-// (Meus Pedidos, Conferência, Montagem, Separações consomem window.FR_OPS_ATIVAS / frClienteDaOP).
-// NÃO remover enquanto essas telas não forem ligadas. A tela de Clientes NÃO usa mais este seed
-// (renderiza 100% do useFRClients -> GET /clients).
+// ☠️ CLIENTES_SEED, window.FR_OPS_ATIVAS, window.FR_OP_CLIENTE e window.frClienteDaOP MORRERAM AQUI.
 //
-// 🧾 DÍVIDA TÉCNICA (documentada): estes globais estão DESSINCRONIZADOS do backend. São montados do
-// seed estático no load do módulo, então uma OP real criada na tela Clientes NÃO aparece nos dropdowns
-// das telas mock acima. AO LIGAR conferencia/montagem/pedidos/separacoes: FR_OPS_ATIVAS / frClienteDaOP
-// têm que passar a vir do backend (GET /clients -> services), não deste seed — e aí este bloco sai.
-const CLIENTES_SEED = [
-  { id: '32401',     nome: 'DERLI JOSE',                ops: [{ n: 'OP 73001', s: 'em-andamento' }] },
-  { id: '000321',    nome: 'FÁBIO BOLDT',               ops: [{ n: 'OP 32101', s: 'em-andamento' }] },
-  { id: '674.408.86',nome: 'WALTER SAAGER',             ops: [{ n: 'OP 67401', s: 'em-andamento' }] },
-  { id: '07591258',  nome: 'GRANJA SÃO JOSÉ',           ops: [{ n: 'OP 75901', s: 'em-andamento' }] },
-  { id: '00004',     nome: 'DENESTER PROTOTIPO',        ops: [{ n: 'OP 00401', s: 'em-andamento' }] },
-  { id: '901001',    nome: 'MANTIQUEIRA CÉU AZUL',      ops: [{ n: 'OP 90101', s: 'em-andamento' }, { n: 'OP 901001', s: 'em-andamento' }] },
-  { id: '882102',    nome: 'GRANJA SANTA RITA',         ops: [{ n: 'OP 88210', s: 'em-andamento' }] },
-  { id: '541203',    nome: 'AVIÁRIO BELA VISTA',        ops: [{ n: 'OP 54120', s: 'em-andamento' }] },
-  { id: '730726',    nome: 'GRANJA PARAISO / JANAÍNA',  ops: [{ n: 'OP 73002', s: 'em-andamento' }] },
-  { id: '48.839.025',nome: 'WILLIAN LEMKE',             ops: [{ n: 'OP 48001', s: 'finalizada' }] },
-  { id: '000278',    nome: 'OVOS DA NONNA',             ops: [{ n: 'OP 27801', s: 'finalizada' }] },
-  { id: '07453746',  nome: 'FLORENCIO AUGUSTO BENTO',   ops: [{ n: 'OP 74501RF', s: 'finalizada' }] },
-  { id: '000262',    nome: '3 AMORES',                  ops: [{ n: 'OP 26202', s: 'finalizada' }, { n: 'OP 26201', s: 'finalizada' }] },
-  { id: '000002',    nome: 'ENGENHARIA',                ops: [{ n: 'OP 00005', s: 'em-andamento' }, { n: 'OP 00007', s: 'em-andamento' }, { n: 'OP 00002', s: 'finalizada' }] },
-  { id: '000003',    nome: 'PRT CLASS',                 ops: [{ n: 'OP 00301', s: 'em-andamento' }, { n: 'OP 00303', s: 'em-andamento' }, { n: 'OP 00302', s: 'finalizada' }] },
-  { id: '000233',    nome: 'BOTELHO',                   ops: [{ n: 'OP 23301', s: 'em-andamento' }] },
-  { id: '000001',    nome: 'OUTROS',                    ops: [{ n: 'OP 00101', s: 'finalizada' }] },
-  { id: '000237',    nome: 'EDSON KAUSS',               ops: [{ n: 'OP 23701', s: 'finalizada' }] },
-  { id: '000236',    nome: 'AVINE',                     ops: [{ n: 'OP 23601', s: 'finalizada' }] },
-  { id: '000229',    nome: 'OVOS UP',                   ops: [{ n: 'OP 22901', s: 'em-andamento' }] },
-];
-
-// OPs ativas (em andamento) agrupadas por cliente — usadas pelo "Meus Pedidos".
-window.FR_OPS_ATIVAS = CLIENTES_SEED
-  .map((c) => ({ cliente: c.nome, ops: c.ops.filter((o) => o.s === 'em-andamento').map((o) => o.n.replace(/^OP\s*/i, '')) }))
-  .filter((c) => c.ops.length > 0);
-
-// Mapa OP → cliente (TODAS as OPs, qualquer status) — busca de cliente por OP nas etiquetas.
-window.FR_OP_CLIENTE = (() => {
-  const m = {};
-  CLIENTES_SEED.forEach((c) => (c.ops || []).forEach((o) => { m[o.n.replace(/^OP\s*/i, '')] = c.nome; }));
-  return m;
-})();
-window.frClienteDaOP = function (op) {
-  const key = String(op).replace(/^OP\s*/i, '');
-  const map = window.FR_OP_CLIENTE || {};
-  if (map[key]) return map[key];
-  const hit = Object.keys(map).find((k) => k === key || k.includes(key) || key.includes(k));
-  return hit ? map[hit] : null;
-};
+// Eram 20 clientes ESTÁTICOS montados no load deste módulo, e a dívida estava documentada desde
+// 24/07: "uma OP real criada na tela Clientes NÃO aparece nos dropdowns das telas mock". Com os
+// 30 clientes / 44 OPs reais que o corte 2.0→5.0 traz, o seed deixaria de ser desatualizado e
+// passaria a ser MENTIRA — nomes de cliente que não existem, OPs que o backend recusa.
+//
+// Quem consumia, e para onde foi (todos para a MESMA fonte, GET /clients):
+//   • Meus Pedidos  -> migrado antes deste lote (useFRClients + frIsOpConcluida)
+//   • Montagem      -> migrado antes deste lote (useFRClients + pgOpsAbertas)
+//   • Produção/Devolução -> nasceram já ligados
+//   • Conferência   -> a leitora (cfClienteDaOP) já estava MORTA; removida neste lote
+//   • Separações    -> o último consumidor vivo; migrado NESTE lote
+//
+// NÃO virou fachada de propósito: sem consumidor, uma fachada seria um segundo caminho para o
+// mesmo dado — e a lição desta dívida é que fonte duplicada diverge. O ponto compartilhado é
+// `window.useFRClients` (hook, aqui embaixo) + `window.pgOpsAbertas` (filtro por frIsOpConcluida).
 
 // ---- Formatação BRL (reusa o adapter dos produtos; fallback simples) ----
 function frBRL(v) {
@@ -443,8 +410,9 @@ function PageClientes({ t, readOnly }) {
 
 window.PageClientes = PageClientes;
 
-// Expostos p/ as telas do módulo Produção (Recebimento/Apontamentos/Armazém), que escolhem a OP
-// pelo GET /clients real — NUNCA pelo FR_OPS_ATIVAS do seed acima (telas novas nascem sem a dívida).
+// Expostos p/ TODAS as telas que escolhem OP (Produção, Montagem, Meus Pedidos, Devolução e,
+// desde este lote, Separações). Fonte única: GET /clients. Não há mais alternativa mock — o
+// seed que competia com esta fonte morreu no topo do arquivo.
 // isConcluido vai junto de propósito: é o normalizador de status da casa, e é ele que define
 // "OP aberta" — por EXCLUSÃO do que terminou, nunca por igualdade com 'em_andamento'.
 // (Correção 07/08/2026: o texto antigo aqui afirmava "16 OPs legadas em 'pendente' + 1 em
