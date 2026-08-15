@@ -7,11 +7,9 @@
 import * as XLSX from 'xlsx';   // SheetJS (já usado na Entrada por NF): modelo e parse do inventário
 const { useState: useStateM, useRef: useRefM, useMemo: useMemoM } = React;
 
-// Paginação client-side da galeria de Produtos e da Movimentação.
-// A lista completa fica em memória (busca/filtro operam sobre o TODO); só a página atual é renderizada,
-// evitando travar a tela ao pintar ~2000 cards de uma vez. 48 = múltiplo de 2/3/4/6/8 colunas (fecha a grid auto-fill).
-// Trocar aqui muda quantos itens aparecem por página em ambas as telas.
-const PAGE_SIZE = 48;
+// ⚰️ PAGE_SIZE=48 morreu na fidelidade 21: o Catálogo pagina 24/página no desktop e 10 no
+// celular (ref21), com a barra numerada inline da PageCatalogo. A lista completa segue em
+// memória (busca/filtro operam sobre o TODO); só a página atual é renderizada.
 
 // ⚰️ LÁPIDE — o seed PRODUTOS (26 itens do protótipo) morreu aqui na rodada 16. Ele já não
 // rendia card nenhum (as telas leem useFRProducts desde a leva 1), mas seguia vivo como fonte
@@ -720,60 +718,8 @@ function InventarioModal({ t, onClose, produtos }) {
   );
 }
 
-// Janela de páginas com reticências: 1 … 4 5 [6] 7 8 … 44 — não estoura a barra em muitas páginas.
-function frPageList(current, total) {
-  const delta = 2, range = [];
-  const left = Math.max(2, current - delta);
-  const right = Math.min(total - 1, current + delta);
-  range.push(1);
-  if (left > 2) range.push('…');
-  for (let i = left; i <= right; i++) range.push(i);
-  if (right < total - 1) range.push('…');
-  if (total > 1) range.push(total);
-  return range;
-}
-
-// Controle de paginação — usa os mesmos tokens (navy/gold via t.accent) e o mesmo idioma visual dos botões existentes.
-function Paginacao({ t, page, totalPages, total, start, end, onPage, unidade = 'itens' }) {
-  if (total <= 0) return null;
-  const cell = (extra) => ({ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 40, height: 40, padding: '0 12px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: t.panel, color: t.text, border: `1px solid ${t.border}`, transition: 'background .14s, border-color .14s, filter .14s', ...extra });
-  const step = (n) => { if (n < 1 || n > totalPages || n === page) return; onPage(n); };
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginTop: 22 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: t.muted }}>
-        <b style={{ color: t.text, fontWeight: 800 }}>{start.toLocaleString('pt-BR')}–{end.toLocaleString('pt-BR')}</b> de <b style={{ color: t.text, fontWeight: 800 }}>{total.toLocaleString('pt-BR')}</b> {unidade}
-      </div>
-      {totalPages > 1 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-          <button aria-label="Página anterior" onClick={() => step(page - 1)}
-            style={cell(page <= 1 ? { opacity: .45, cursor: 'not-allowed' } : {})}
-            onMouseEnter={(e) => { if (page > 1) e.currentTarget.style.background = t.hover; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; }}>
-            <Icon name="chevronLeft" size={16} />
-          </button>
-          {frPageList(page, totalPages).map((n, i) => {
-            if (n === '…') return <span key={`gap${i}`} style={{ minWidth: 22, textAlign: 'center', color: t.faint, fontSize: 13, fontWeight: 700 }}>…</span>;
-            const on = n === page;
-            return (
-              <button key={n} aria-current={on ? 'page' : undefined} onClick={() => step(n)}
-                style={cell(on ? { background: t.accent, color: t.onAccent, border: `1px solid ${t.accent}`, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.28)}` } : {})}
-                onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = t.hover; }}
-                onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = t.panel; }}>
-                {n}
-              </button>
-            );
-          })}
-          <button aria-label="Próxima página" onClick={() => step(page + 1)}
-            style={cell(page >= totalPages ? { opacity: .45, cursor: 'not-allowed' } : {})}
-            onMouseEnter={(e) => { if (page < totalPages) e.currentTarget.style.background = t.hover; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; }}>
-            <Icon name="chevronRight" size={16} />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
+// ⚰️ frPageList/Paginacao morreram na fidelidade 21 — a barra numerada da ref21 vive inline na
+// PageCatalogo (pagbar). O Meus Pedidos tem a própria cópia (PedPaginacao, pedidos.jsx), intocada.
 
 // PÁGINA UNIFICADA (rodada 16): a antiga 'Movimentação' + a galeria 'Produtos' numa aba só.
 // Tudo sobre useFRProducts (GET /products real, reload em stock_updated). O que cada peça faz:
@@ -804,13 +750,28 @@ function PageCatalogo({ t, brand }) {
       || (p.sku || '').toLowerCase().includes(ql)
       || (p.tags || []).some((tg) => String(tg).toLowerCase().includes(ql));
   });
+  // Paginação da ref21: 24/página no desktop, 10 no celular (useFRViewport existe no repo).
+  const ps = mobile ? 10 : 24;
   const total = view.length;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / ps));
   const safePage = Math.min(page, totalPages);
-  const start = total === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
-  const end = Math.min(safePage * PAGE_SIZE, total);
-  const pageItems = view.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-  const goToPage = (n) => { setPage(n); if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const start = total === 0 ? 0 : (safePage - 1) * ps + 1;
+  const end = Math.min(safePage * ps, total);
+  const pageItems = view.slice((safePage - 1) * ps, safePage * ps);
+  const goToPage = (n) => { setPage(Math.max(1, Math.min(totalPages, n))); if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  // Barra numerada da ref21 (janela 1 … pg−1 pg pg+1 … N + "X–Y de Z"), adaptada ao page 1-based nosso.
+  const pagbar = !loading && !error && totalPages > 1 && (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 22, flexWrap: 'wrap' }}>
+      <button aria-label="Página anterior" onClick={() => goToPage(safePage - 1)} disabled={safePage === 1} style={{ all: 'unset', cursor: safePage === 1 ? 'not-allowed' : 'pointer', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.muted, opacity: safePage === 1 ? 0.4 : 1 }}><Icon name="chevronLeft" size={16} /></button>
+      {Array.from({ length: totalPages }, (_, i) => i + 1).filter((i) => i === 1 || i === totalPages || Math.abs(i - safePage) <= 1).reduce((acc, i, k, arr) => { if (k > 0 && i - arr[k - 1] > 1) acc.push('…'); acc.push(i); return acc; }, []).map((i, k) => (
+        i === '…'
+          ? <span key={'e' + k} style={{ color: t.faint, fontWeight: 800, padding: '0 2px' }}>…</span>
+          : <button key={i} aria-current={i === safePage ? 'page' : undefined} onClick={() => goToPage(i)} style={{ all: 'unset', cursor: 'pointer', minWidth: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 800, background: i === safePage ? t.accent : t.panel, color: i === safePage ? t.onAccent : t.text, border: `1px solid ${i === safePage ? t.accent : t.border}` }}>{i}</button>
+      ))}
+      <button aria-label="Próxima página" onClick={() => goToPage(safePage + 1)} disabled={safePage === totalPages} style={{ all: 'unset', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.muted, opacity: safePage === totalPages ? 0.4 : 1 }}><Icon name="chevronRight" size={16} /></button>
+      <span style={{ fontSize: 12, color: t.faint, marginLeft: 8 }}>{start}–{end} de {total}</span>
+    </div>
+  );
   // Busca/filtro mudou → página 1 (senão ficaria numa página inexistente no resultado filtrado).
   const onBusca = (e) => { setQ(e.target.value); setPage(1); };
   const onTag = (tg) => { setTagFiltro((cur) => (cur === tg ? null : tg)); setPage(1); };
@@ -828,50 +789,58 @@ function PageCatalogo({ t, brand }) {
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Btn t={t} icon="barChart" kind="ghost" onClick={() => setRel(true)}>Relatório</Btn>
-          <Btn t={t} icon="clipboard" onClick={() => setInv(true)}>Fazer Inventário</Btn>
+          <Btn t={t} icon="clipboard" kind="ghost" onClick={() => setInv(true)}>Fazer Inventário</Btn>
+          {/* ref21: o form saiu da coluna fixa — este botão abre o painel lateral (no celular o FAB abre a folha). */}
+          {!mobile && <Btn t={t} icon="plus" onClick={() => setNovoOpen(true)}>Novo Produto</Btn>}
         </div>
       </div>
       <HeroPatrimonio t={t} brand={brand} produtos={items} />
-      <div style={{ display: 'flex', gap: 20, marginTop: 22, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        {/* No celular o formulário sai do fluxo e vira folha, chamada pelo FAB — ocupando a
-            largura inteira ele empurraria a lista pra baixo da dobra. */}
-        {!mobile && <NovoProdutoForm t={t} brand={brand} onCreated={reload} produtos={items} />}
-        <div style={{ flex: 1, minWidth: 280 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderRadius: 13, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, marginBottom: tagsReais.length ? 10 : 16 }}>
+      {/* ref21: o form saiu da coluna fixa — a grade ocupa a LARGURA TODA e o cadastro vive no
+          painel lateral (desktop) / folha (celular), ambos pelo mesmo novoOpen. */}
+      <div style={{ marginTop: 22 }}>
+        <div className={mobile ? 'fr-noscroll' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: mobile ? 'nowrap' : 'wrap', overflowX: mobile ? 'auto' : 'visible', paddingBottom: mobile ? 4 : 0 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 11, flex: '1 1 260px', maxWidth: 420, minWidth: 200, height: 46, padding: '0 16px', borderRadius: 12, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text', flexShrink: 0 }}>
             <Icon name="search" size={17} />
-            <input value={q} onChange={onBusca} placeholder="Busque por nome, SKU ou tag…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
-          </div>
-          {/* Filtro por etiqueta: chips das tags REAIS carregadas (toggle; some se não há tags). */}
-          {tagsReais.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: t.faint }}>FILTRAR:</span>
-              {tagsReais.map(({ tag, kind }) => {
-                const on = tagFiltro === tag;
-                const c = uiTone(t, kind);
-                return (
-                  <button key={tag} onClick={() => onTag(tag)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, letterSpacing: '.02em', padding: '5px 10px', borderRadius: 8, background: on ? c.fg : c.bg, color: on ? '#fff' : c.fg, border: `1px solid ${on ? c.fg : 'transparent'}` }}>
-                    {on && <Icon name="check" size={11} />}{tag}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {error ? (
-            <ProdutoErro t={t} message={error} onRetry={reload} />
-          ) : (
-            <>
-            <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: mobile ? 14 : 18 }}>
-              {loading
-                ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
-                : total === 0
-                ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql || tagFiltro ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql || tagFiltro ? 'Ajuste a busca ou o filtro de etiqueta.' : 'Nenhum produto ativo no catálogo.'} /></Card></div>
-                : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} />)}
-            </div>
-            {!loading && total > 0 && <Paginacao t={t} page={safePage} totalPages={totalPages} total={total} start={start} end={end} onPage={goToPage} unidade="produtos" />}
-            </>
-          )}
+            <input value={q} onChange={onBusca} placeholder="Busque por nome, SKU ou tag…" style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
+            {q && <button onClick={() => onBusca({ target: { value: '' } })} style={{ all: 'unset', cursor: 'pointer', color: t.muted, display: 'grid', placeItems: 'center' }}><Icon name="x" size={14} /></button>}
+          </label>
+          {/* chips de etiqueta REAIS (frTagsDe) no estilo pill da ref21 */}
+          {tagsReais.map(({ tag }) => {
+            const on = tagFiltro === tag;
+            return <button key={tag} onClick={() => onTag(tag)} style={{ all: 'unset', cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap', fontSize: 11, fontWeight: 800, padding: '8px 14px', borderRadius: 999, background: on ? t.accent : t.panel, color: on ? t.onAccent : t.text, border: `1px solid ${on ? t.accent : t.border}` }}>{tag}</button>;
+          })}
+          <span style={{ marginLeft: 'auto', fontSize: 12.5, color: t.muted, flexShrink: 0 }}>{total} {total === 1 ? 'item' : 'itens'}</span>
         </div>
+        {error ? (
+          <ProdutoErro t={t} message={error} onRetry={reload} />
+        ) : (
+          <>
+          <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: mobile ? 14 : 18 }}>
+            {loading
+              ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
+              : total === 0
+              ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql || tagFiltro ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql || tagFiltro ? 'Ajuste a busca ou o filtro de etiqueta.' : 'Nenhum produto ativo no catálogo.'} /></Card></div>
+              : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} />)}
+          </div>
+          {pagbar}
+          </>
+        )}
       </div>
+      {/* painel lateral do cadastro (desktop) — o form REAL de sempre (POST /products, máscara de
+          SKU, duplicata, feedback) como conteúdo; `flat` tira a moldura de Card, o painel é a moldura. */}
+      {novoOpen && !mobile && (
+        <div onClick={() => setNovoOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 66, background: 'rgba(8,10,16,.55)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(440px, 100vw)', height: '100%', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: '-18px 0 44px rgba(0,0,0,.25)', boxSizing: 'border-box' }}>
+            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '12px 14px 0' }}>
+              <button onClick={() => setNovoOpen(false)} style={{ all: 'unset', cursor: 'pointer', width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', color: t.muted, background: t.elevated, border: `1px solid ${t.border}` }}><Icon name="x" size={16} /></button>
+            </div>
+            <div className="fr-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              <NovoProdutoForm t={t} brand={brand} produtos={items} flat
+                onCreated={() => { reload(); setNovoOpen(false); }} />
+            </div>
+          </div>
+        </div>
+      )}
       {/* FAB + folha de criação (redesign) — VIVOS: o form bate no POST /products real, com
           as validações atuais (SKU C.SS.NNNN, duplicata, guard anti-duplo-clique). Ao criar,
           `reload` recarrega a lista e a folha fecha, então o produto novo aparece atrás dela. */}

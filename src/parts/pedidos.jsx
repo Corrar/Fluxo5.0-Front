@@ -560,9 +560,16 @@ function PedImportModal({ t, catalogo, todos, cart, onClose, onAdd }) {
 }
 
 function PageMeusPedidos({ t: tBase, theme }) {
-  const t = frTokens(theme, '#7c3aed', '#a78bfa');
+  // Accent da referência 21 (o roxo #7c3aed era iteração MORTA do design): índigo tema-aware.
+  // selBg/selFg/selBd = cor de seleção que no claro é o índigo cheio e no escuro vira véu
+  // translúcido — exatamente a lógica pedDark da referência.
+  const t = frTokens(theme, '#2e3192', '#8fa8ff');
+  const pedDark = theme !== 'light';
+  const selBg = pedDark ? frHexToRgba('#8fa8ff', 0.16) : '#2e3192';
+  const selFg = pedDark ? '#aebfff' : '#ffffff';
+  const selBd = pedDark ? frHexToRgba('#8fa8ff', 0.35) : '#2e3192';
   const { mobile: pedMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
-  const ACCENT_DARK = '#4c1d95';
+  const ACCENT_DARK = '#181a54';
   const [view, setView] = useStateP(frReadPedidosView);   // F5: restaura a aba salva ('novo'|'historico'), default 'novo'
   const [q, setQ] = useStateP('');
   const [fil, setFil] = useStateP(null);
@@ -574,14 +581,9 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const [filter, setFilter] = useStateP('todas');
   const [openId, setOpenId] = useStateP(null);
   const [cancelando, setCancelando] = useStateP(null);   // pedido em confirmação de cancelamento
-  // Identidade EXIBIDA no chip do cabeçalho — mesma assinatura do rodapé da sidebar, uma
-  // implementação só (window.useFRIdentidade). Dívida (f), fase 1.
-  //
-  // CHAMADA INCONDICIONAL de propósito: `window.useFRIdentidade ? …() : …` seria hook condicional,
-  // e hook condicional é armadilha que só aparece no dia em que a condição varia. O global é
-  // definido por sidebar.jsx, que main.jsx carrega ANTES desta tela e antes de o React montar —
-  // se sumir, esta tela quebra alto, junto com o rodapé, em vez de exibir setor errado calada.
-  const setorDoPerfil = window.useFRIdentidade().setor;
+  // ⚰️ O chip "Setor" do cabeçalho morreu com o hero roxo (ref21 não o tem) — e com ele a
+  // leitura de useFRIdentidade daqui. Era exibição pura: o POST nunca mandou sector (o servidor
+  // deriva do token — dívida (f), fase 2), então nada de dado muda.
   const [toast, setToast] = useStateP(false);
   const [opSel, setOpSel] = useStateP(null);
   const [opOpen, setOpOpen] = useStateP(false);
@@ -589,6 +591,7 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const [sortOpen, setSortOpen] = useStateP(false);
   const [destinoOpen, setDestinoOpen] = useStateP(false);
   const [importOpen, setImportOpen] = useStateP(false);   // rodada 16: modal Importar do Excel
+  const [cartOpen, setCartOpen] = useStateP(false);        // ref21: carrinho vira drawer lateral (FAB abre)
   const [sending, setSending] = useStateP(false);   // PEÇA 3: envio em andamento (anti duplo-clique)
   const [sendErr, setSendErr] = useStateP(null);    // PEÇA 3: mensagem de erro do envio
   // PEÇA 1: catálogo REAL (GET /products adaptado) — mesmo hook/pattern que a galeria de Produtos usa.
@@ -735,7 +738,7 @@ function PageMeusPedidos({ t: tBase, theme }) {
     setSending(true); setSendErr(null);
     try {
       await window.FRApi.post('/requests', payload);        // 201 { success, id }
-      setCart([]); setOpSel(null);
+      setCart([]); setOpSel(null); setCartOpen(false);       // drawer fecha SÓ no sucesso (erro mantém tudo à vista)
       setToast(true); setTimeout(() => setToast(false), 2600);
       if (typeof histReload === 'function') histReload();    // recarrega histórico → novo pedido aparece
     } catch (e) {
@@ -778,7 +781,7 @@ function PageMeusPedidos({ t: tBase, theme }) {
     const on = view === val;
     return (
       <button onClick={() => { setView(val); frSavePedidosView(val); }} style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7, height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13.5, fontWeight: 700,
-        background: on ? '#fff' : 'transparent', color: on ? ACCENT_DARK : 'rgba(255,255,255,.85)' }}>
+        background: on ? selBg : 'transparent', color: on ? selFg : t.muted }}>
         <Icon name={icon} size={16} /> {label}
       </button>
     );
@@ -786,54 +789,40 @@ function PageMeusPedidos({ t: tBase, theme }) {
 
   return (
     <div style={{ position: 'relative' }}>
-      {/* header */}
-      <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 18, padding: '24px 26px', marginBottom: 24, background: `linear-gradient(135deg, ${ACCENT_DARK}, #7c3aed)`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' }}>
-        <Icon name="cart" size={150} style={{ position: 'absolute', right: -20, top: -32, opacity: 0.12 }} />
-        <div style={{ position: 'relative' }}>
-          <h1 style={{ margin: 0, fontSize: 25, fontWeight: 850, letterSpacing: '-.02em' }}>Meus Pedidos</h1>
-          <div style={{ fontSize: 13, color: 'rgba(255,255,255,.88)', marginTop: 5 }}>Monte sua solicitação e acompanhe o andamento dos seus materiais.</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            {/* O chip dizia "Geral" CHUMBADO — literal, igual para todo usuário, sem relação
-                com quem estava logado nem com o `sector` que o POST envia. Dívida (f), fase 1:
-                agora sai do perfil real, e SOME quando não há setor, em vez de inventar um. */}
-            {setorDoPerfil && <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)' }}>Setor</span>}
-            {setorDoPerfil && <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}>{setorDoPerfil}</span>}
-            {/* pedidos-better: o chip do carrinho só existe quando HÁ carrinho — "0 no carrinho"
-                era ruído permanente; o design final o mostra apenas com N>0. */}
-            {cart.length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="cart" size={13} /> {cart.length} no carrinho</span>}
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="clock" size={13} /> {emAndamento} em andamento</span>
-          </div>
+      {/* topo (ref21): o hero roxo MORREU — card-painel nos tokens da casa. O chip índigo do
+          carrinho é BOTÃO (abre o drawer); em view=novo o painel expande com busca, Excel,
+          segmentos de disponibilidade e ordenação — tudo operando sobre o dado REAL. */}
+      <div style={{ position: 'relative', borderRadius: 18, padding: '18px 22px', marginBottom: 24, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadow, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontSize: 21, fontWeight: 850, letterSpacing: '-.02em', color: t.text }}>Meus Pedidos</h1>
+          <button onClick={() => { setView('novo'); frSavePedidosView('novo'); setCartOpen(true); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 800, padding: '5px 12px', borderRadius: 999, background: selBg, color: selFg, border: `1px solid ${selBd}` }}><Icon name="cart" size={13} /> {cart.length}</button>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: t.faint }}>{emAndamento} em andamento</span>
         </div>
-        <div style={{ position: 'relative', display: 'flex', gap: 4, padding: 4, borderRadius: 999, background: 'rgba(255,255,255,.16)' }}>
+        <div style={{ position: 'relative', display: 'flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}` }}>
           {toggle('novo', 'plus', 'Novo Pedido')}
           {toggle('historico', 'clock', 'Histórico')}
         </div>
-      </div>
-
-      {view === 'novo' ? (
-        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          {/* catálogo */}
-          <Card t={t} style={{ flex: '3 1 460px', minWidth: 300, padding: 18 }}>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 200, height: 46, padding: '0 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${q ? t.accent : t.border}`, color: t.muted, cursor: 'text', transition: 'border-color .15s' }}>
-                <Icon name="search" size={18} />
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Procure por nome, SKU ou palavra-chave…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
-                {q && <button onClick={() => setQ('')} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 22, height: 22, borderRadius: 6, color: t.faint }}><Icon name="x" size={15} /></button>}
+        {view === 'novo' && (
+          <div style={{ position: 'relative', flex: '1 1 100%', minWidth: 0, marginTop: 4, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
+            <div style={{ position: 'relative', display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 220, height: 42, padding: '0 14px', borderRadius: 11, background: t.elevated, border: `1px solid ${q ? t.accent : t.border}`, color: t.muted, cursor: 'text', transition: 'border-color .15s' }}>
+                <Icon name="search" size={16} />
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Procurar por nome, SKU…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
+                {q && <button onClick={() => setQ('')} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 22, height: 22, borderRadius: 6, color: t.muted }}><Icon name="x" size={15} /></button>}
               </label>
-              {/* VIVO (rodada 16): abre o modal de importação — o botão existia morto desde o design. */}
-              <Btn t={t} kind="soft" icon="upload" onClick={() => setImportOpen(true)}>Importar do Excel</Btn>
+              {/* Casca do ref21 no Import EXISTENTE — mesmo modal, mesmo comportamento. */}
+              <button title="Importar do Excel" onClick={() => setImportOpen(true)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 15px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, color: t.text, background: t.elevated, border: `1px solid ${t.border}` }}><Icon name="upload" size={15} /> Excel</button>
             </div>
 
             {/* segmentos de disponibilidade + ordenação */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-              <div style={{ display: 'inline-flex', gap: 3, padding: 3, borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-                {[['todos', 'Todos', null], ['disp', 'Disponíveis', 'check'], ['cart', 'No carrinho', 'cart']].map(([k, label, icon]) => {
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+              <div style={{ display: 'inline-flex', gap: 3, padding: 3, borderRadius: 10, background: t.elevated, border: `1px solid ${t.border}` }}>
+                {[['todos', 'Todos'], ['disp', 'Disponíveis'], ['cart', 'No carrinho']].map(([k, label]) => {
                   const on = disp === k;
                   const n = k === 'disp' ? CATALOGO.filter((c) => c.disp > 0).length : k === 'cart' ? cart.length : CATALOGO.length;
                   return (
-                    <button key={k} onClick={() => setDisp(k)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', borderRadius: 9, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? t.onAccent : t.muted, transition: 'all .14s' }}>
-                      {icon && <Icon name={icon} size={14} />}{label}
-                      <span style={{ fontSize: 10.5, fontWeight: 800, padding: '1px 6px', borderRadius: 6, background: on ? 'rgba(255,255,255,.25)' : t.hover, color: on ? t.onAccent : t.faint }}>{n}</span>
+                    <button key={k} onClick={() => setDisp(k)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 13px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, background: on ? selBg : 'transparent', color: on ? selFg : t.muted, transition: 'all .14s' }}>
+                      {label} <span style={{ fontSize: 11, fontWeight: 800, opacity: .6 }}>{n}</span>
                     </button>
                   );
                 })}
@@ -876,22 +865,27 @@ function PageMeusPedidos({ t: tBase, theme }) {
               </div>
             </div>
 
-            {/* chips de categoria */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>
-              <Icon name="box" size={14} style={{ color: t.muted, flexShrink: 0, marginTop: 7 }} />
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => setFil(null)} style={{ all: 'unset', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: 700, padding: '6px 13px', borderRadius: 9, background: !fil ? t.accent : t.elevated, color: !fil ? t.onAccent : t.muted, border: `1px solid ${!fil ? t.accent : t.border}` }}>Todas</button>
-                {cats.map((f) => {
-                  const on = fil === f;
-                  return <button key={f} onClick={() => setFil(on ? null : f)} style={{ all: 'unset', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: 700, padding: '6px 13px', borderRadius: 9, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}>{f} <span style={{ opacity: .7 }}>· {catCounts[f]}</span></button>;
-                })}
-              </div>
+            {/* chips de categoria — etiquetas REAIS do catálogo carregado */}
+            <div style={{ position: 'relative', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button onClick={() => setFil(null)} style={{ all: 'unset', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: 700, padding: '6px 13px', borderRadius: 999, background: !fil ? selBg : t.elevated, color: !fil ? selFg : t.muted, border: `1px solid ${!fil ? selBd : t.border}` }}>Todas</button>
+              {cats.map((f) => {
+                const on = fil === f;
+                return <button key={f} onClick={() => setFil(on ? null : f)} style={{ all: 'unset', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 11.5, fontWeight: 700, padding: '6px 13px', borderRadius: 999, background: on ? selBg : t.elevated, color: on ? selFg : t.muted, border: `1px solid ${on ? selBd : t.border}` }}>{f} <span style={{ opacity: .55, fontWeight: 800 }}>{catCounts[f]}</span></button>;
+              })}
             </div>
+          </div>
+        )}
+      </div>
+
+      {view === 'novo' ? (
+        <div>
+          {/* catálogo — largura toda (ref21); busca/Excel/segmentos/sort/chips subiram pro painel do topo */}
+          <Card t={t} style={{ padding: 18 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
               <span style={{ fontSize: 12.5, fontWeight: 700, color: t.muted }}>{catLoading ? 'Carregando materiais…' : catError ? 'Falha ao carregar materiais' : `${cat.length} ${cat.length === 1 ? 'material' : 'materiais'}${fil ? ` · ${fil}` : ''}${disp !== 'todos' ? (disp === 'disp' ? ' · disponíveis' : ' · no carrinho') : ''}`}</span>
               {(fil || disp !== 'todos' || q) && <button onClick={() => { setFil(null); setDisp('todos'); setQ(''); }} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: t.accentText, display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="x" size={13} /> Limpar filtros</button>}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: pedMobile ? '1fr' : 'repeat(auto-fill, minmax(228px, 1fr))', gap: pedMobile ? 14 : 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: pedMobile ? '1fr' : 'repeat(auto-fill, minmax(250px, 1fr))', gap: pedMobile ? 14 : 16 }}>
               {catError ? (
                 <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '26px 20px', color: uiTone(t, 'red').fg, fontSize: 13, fontWeight: 600 }}><Icon name="alert" size={17} /> {catError}</div>
               ) : catLoading ? (
@@ -905,11 +899,11 @@ function PageMeusPedidos({ t: tBase, theme }) {
                   <div key={c.sku} style={{ display: 'flex', flexDirection: 'column', borderRadius: 14, padding: 12, background: t.elevated, border: `1px solid ${added ? t.accent : t.border}`, opacity: out ? 0.6 : 1, transition: 'border-color .15s, transform .15s, box-shadow .15s' }}
                     onMouseEnter={(e) => { if (!out) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = t.shadow; } }}
                     onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
-                    <div style={{ position: 'relative', width: '100%', aspectRatio: '4 / 3', borderRadius: 11, overflow: 'hidden', background: c.img ? PED_THUMB_BG : t.hover, border: `1px solid ${t.border}`, display: 'grid', placeItems: 'center', marginBottom: 12 }}>
+                    <div style={{ position: 'relative', width: '100%', aspectRatio: '1.25', borderRadius: 11, overflow: 'hidden', background: c.img ? PED_THUMB_BG : t.hover, border: `1px solid ${t.border}`, display: 'grid', placeItems: 'center', marginBottom: 12 }}>
                       {c.img
                         ? <img loading="lazy" src={window.__asset(c.img)} alt={c.nome} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '10%', boxSizing: 'border-box', filter: out ? 'grayscale(1)' : 'none' }} />
                         : <Icon name="box" size={pedMobile ? 40 : 42} style={{ color: t.faint }} />}
-                      <span style={{ position: 'absolute', top: 8, right: 8, fontSize: 10.5, fontWeight: 800, padding: '4px 9px', borderRadius: 999, background: out ? t.hover : uiTone(t, 'green').bg, color: out ? t.muted : uiTone(t, 'green').fg, whiteSpace: 'nowrap', boxShadow: '0 1px 4px rgba(0,0,0,.08)' }}>{out ? 'Esgotado' : `${c.disp} disp.`}</span>
+                      <span style={{ position: 'absolute', top: 8, right: 8, fontSize: 11, fontWeight: 850, padding: '5px 11px', borderRadius: 999, background: out ? t.hover : uiTone(t, 'green').fg, color: out ? t.muted : '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.18)', letterSpacing: '.02em' }}>{out ? 'Esgotado' : `${c.disp} disp.`}</span>
                       {added && <span style={{ position: 'absolute', top: 8, left: 8, width: 24, height: 24, borderRadius: '50%', background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', boxShadow: '0 2px 6px rgba(0,0,0,.2)' }}><Icon name="check" size={14} /></span>}
                     </div>
                     <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text, marginBottom: 8, lineHeight: 1.3, minHeight: 36 }}>{c.nome}</div>
@@ -929,20 +923,34 @@ function PageMeusPedidos({ t: tBase, theme }) {
             )}
           </Card>
 
-          {/* carrinho */}
-          <Card t={t} style={{ flex: '1 1 320px', minWidth: 280, position: 'sticky', top: 8, display: 'flex', flexDirection: 'column', overflow: 'hidden', alignSelf: 'flex-start' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '18px 20px', borderBottom: `1px solid ${t.border}` }}>
-              <Icon name="cart" size={20} style={{ color: t.accentText }} />
-              <span style={{ fontSize: 16, fontWeight: 800, color: t.text }}>Carrinho</span>
-              {cart.length > 0 && (
-                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <button onClick={() => setCart([])} style={{ all: 'unset', cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: t.muted }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.muted; }}>Limpar</button>
-                  <span style={{ fontSize: 11, fontWeight: 800, padding: '2px 9px', borderRadius: 8, background: t.accentSoft, color: t.accentText }}>{cart.length}</span>
-                </div>
-              )}
+          {/* carrinho flutuante (ref21): a coluna sticky MORREU — FAB gradiente índigo + drawer
+              lateral. SÓ CASCA: itens, clamp, OP real, gates de EPI, envio e erros são os mesmos. */}
+          <button onClick={() => setCartOpen(true)} style={{ all: 'unset', cursor: 'pointer', position: 'fixed', right: 22, bottom: 22, zIndex: 55, display: 'flex', alignItems: 'center', gap: 10, height: 56, padding: '0 20px 0 18px', borderRadius: 999, background: `linear-gradient(135deg, ${ACCENT_DARK}, #2e3192)`, color: '#fff', boxShadow: '0 14px 34px rgba(24,26,84,.5)', border: '1px solid rgba(255,255,255,.18)', transition: 'transform .15s' }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)'; }} onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; }}>
+            <span style={{ position: 'relative', display: 'grid', placeItems: 'center' }}>
+              <Icon name="cart" size={22} />
+              {cart.length > 0 && <span style={{ position: 'absolute', top: -8, right: -10, minWidth: 19, height: 19, borderRadius: 999, background: '#ffd400', color: '#181a54', fontSize: 11, fontWeight: 850, display: 'grid', placeItems: 'center', padding: '0 5px', boxSizing: 'border-box', boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>{cart.length}</span>}
+            </span>
+            <span style={{ fontSize: 14, fontWeight: 800 }}>Carrinho</span>
+            {totalUn > 0 && <span style={{ fontSize: 11.5, fontWeight: 850, padding: '3px 10px', borderRadius: 999, background: 'rgba(255,255,255,.16)' }}>{totalUn} un</span>}
+          </button>
+
+          {/* drawer do carrinho */}
+          {cartOpen && (
+          <div onClick={() => setCartOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 64, background: 'rgba(8,10,16,.55)', backdropFilter: 'blur(2px)', display: 'flex', animation: 'frTripFade .2s ease-out' }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px,100%)', height: '100%', marginLeft: 'auto', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: t.shadow, animation: 'pedDrawerIn .28s cubic-bezier(.22,1,.36,1)' }}>
+            <style>{`@keyframes pedDrawerIn{from{transform:translateX(70px);opacity:0}to{transform:none;opacity:1}}`}</style>
+            <div style={{ position: 'relative', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '18px 22px', background: `linear-gradient(135deg, ${ACCENT_DARK}, #2e3192)`, color: '#fff' }}>
+              <Icon name="cart" size={92} style={{ position: 'absolute', right: 50, top: -20, opacity: 0.12, pointerEvents: 'none' }} />
+              <span style={{ position: 'relative', width: 42, height: 42, borderRadius: 12, background: 'rgba(255,255,255,.16)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="cart" size={20} /></span>
+              <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 17, fontWeight: 850 }}>Carrinho</div>
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,.8)' }}>{cart.length} {cart.length === 1 ? 'item' : 'itens'} · <b style={{ color: '#ffd400' }}>{totalUn} un</b></div>
+              </div>
+              {cart.length > 0 && <button onClick={() => setCart([])} style={{ all: 'unset', cursor: 'pointer', position: 'relative', fontSize: 11.5, fontWeight: 700, color: 'rgba(255,255,255,.85)', padding: '5px 11px', borderRadius: 8, border: '1px solid rgba(255,255,255,.28)' }}>Limpar</button>}
+              <button onClick={() => setCartOpen(false)} style={{ all: 'unset', cursor: 'pointer', position: 'relative', width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.16)' }}><Icon name="x" size={16} /></button>
             </div>
-            <div className="fr-scroll" style={{ padding: cart.length ? 12 : 0, minHeight: 220, maxHeight: 360, overflowY: 'auto' }}>
+            <div className="fr-scroll" style={{ padding: cart.length ? 14 : 0, flex: 1, minHeight: 0, overflowY: 'auto' }}>
               {cart.length === 0 ? (
                 <div style={{ display: 'grid', placeItems: 'center', textAlign: 'center', padding: '46px 20px' }}>
                   <span style={{ width: 70, height: 70, borderRadius: '50%', background: t.elevated, color: t.faint, display: 'grid', placeItems: 'center', marginBottom: 16 }}><Icon name="cart" size={30} /></span>
@@ -1091,7 +1099,9 @@ function PageMeusPedidos({ t: tBase, theme }) {
               {cart.length > 0 && (!precisaOP || opSel) && temDestino && cartInvalido && <div style={{ fontSize: 11.5, color: t.muted, textAlign: 'center', marginTop: 8, fontWeight: 600 }}>Há EPI/ferramentas aguardando destinação.</div>}
               {sendErr && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginTop: 10, padding: '9px 11px', borderRadius: 10, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 11.5, fontWeight: 600, lineHeight: 1.4 }}><Icon name="alert" size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {sendErr}</div>}
             </div>
-          </Card>
+            </div>
+          </div>
+          )}
         </div>
       ) : (
         <div>
