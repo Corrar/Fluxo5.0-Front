@@ -1,4 +1,5 @@
 // pedidos.jsx — "Meus Pedidos": catálogo + carrinho (Novo Pedido) e Histórico.
+import * as XLSX from 'xlsx';   // SheetJS (rodada 16, pedidos-better): modelo e parse do Importar do Excel
 const { useState: useStateP } = React;
 
 // Persistência da navegação interna de "Meus Pedidos" no F5 — MESMO padrão do
@@ -275,9 +276,17 @@ function frMyRequestToCard(r, solNome) {
     beStatus: r.status,                     // status CRU — quem decide se dá pra cancelar é ele, não o rótulo
     time: frRelTime(r.created_at),
     itens: its.map((it) => ({
+      id: it.id,
       nome: (it.products && it.products.name) || it.custom_product_name || 'Item',
       sku: (it.products && it.products.sku) || '',
+      un: (it.products && it.products.unit) || '',
       qtd: Number(it.quantity_requested) || 0,
+      // FURO fechado (rodada 16): o /my SEMPRE mandou quantity_delivered/conference_note e este
+      // adapter os descartava — o drawer 'mine' lê it.enviada/it.justificativa (mesmo contrato do
+      // lado admin, pages_admin) e por isso NUNCA mostrava a QTD AJUSTADA aqui. Mesma semântica
+      // de lá: null = nunca ajustado (foi tudo) | número = ajustado (incl. 0).
+      enviada: it.quantity_delivered == null ? null : Number(it.quantity_delivered),
+      justificativa: it.conference_note || null,
     })),
   };
 }
@@ -329,6 +338,227 @@ function PedHistSkeleton({ t }) {
   );
 }
 
+// SKU canônico d.dd.dddd — MESMO normalizador do import da Entrada por NF e do Inventário do
+// Catálogo: tolera zero à esquerda e segmento curto; sem os 2 pontos devolve cru (não casa →
+// "desconhecido" honesto).
+function pedNormSku(v) {
+  const s = String(v == null ? '' : v).trim();
+  const m = s.match(/^0*(\d)\.0*(\d{1,2})\.0*(\d{1,4})$/);
+  if (!m) return s;
+  return `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(4, '0')}`;
+}
+
+// "Importar do Excel" VIVO (rodada 16, pedidos-better) — padrão do InventarioModal do Catálogo:
+// modelo .xlsx real (SheetJS, colunas SKU/Quantidade, pré-preenchido com o catálogo pedível),
+// drag-drop/parse .xlsx/.csv e PREVIEW com match contra o catálogo REAL carregado. Tudo
+// CLIENT-SIDE: "Adicionar ao carrinho" só mexe no carrinho; o pedido continua saindo pelo
+// MESMO POST /requests de sempre, shape intocado.
+//
+// Regras do preview (lição do lote anterior: NADA em silêncio):
+//   • SKU fora de /products                → "SKU desconhecido", não entra;
+//   • SKU de EPI/Ferramentas               → não entra (categorias neutralizadas nesta tela —
+//     o destino por funcionário ainda não persiste no backend; mesmo motivo de elas não
+//     aparecerem no catálogo);
+//   • esgotado (disp ≤ 0)                  → sinalizado, NÃO entra — é a regra do clique manual:
+//     card esgotado não tem botão Adicionar ("Indisponível");
+//   • duplicata na planilha                → SOMA as quantidades e sinaliza;
+//   • quantidade acima do disponível       → entra CLAMPADA ao disponível e sinaliza (mesmo teto
+//     do stepper do carrinho); item já no carrinho soma com o que está lá, sinalizado;
+//   • quantidade vazia                     → linha não contada (é o contrato do modelo pré-preenchido);
+//     quantidade inválida (≤0 / não-numérica) → sinalizada, não entra.
+function PedImportModal({ t, catalogo, todos, cart, onClose, onAdd }) {
+  const [drag, setDrag] = useStateP(false);
+  const [fileName, setFileName] = useStateP(null);
+  const [linhas, setLinhas] = useStateP(null);   // null = sem arquivo; [] = nada aproveitável
+  const [parseErro, setParseErro] = useStateP(null);
+
+  const baixarModelo = () => {
+    const dados = [['SKU', 'Quantidade'], ...(catalogo || []).map((p) => [p.sku, ''])];
+    const ws = XLSX.utils.aoa_to_sheet(dados);
+    // Blindagem anti-colapso (mesma da Entrada/Inventário): SKU como TEXTO explícito, senão o
+    // Excel reinterpreta "9.99.0238" como número/data e o re-upload não casa mais.
+    (catalogo || []).forEach((p, i) => {
+      const addr = XLSX.utils.encode_cell({ c: 0, r: i + 1 });
+      ws[addr] = { t: 's', v: String(p.sku), z: '@' };
+    });
+    ws['!cols'] = [{ wch: 14 }, { wch: 14 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
+    XLSX.writeFile(wb, 'modelo-pedido.xlsx');
+  };
+
+  const lerArquivo = async (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setParseErro(null);
+    setLinhas(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });   // XLSX.read cobre .xlsx e .csv
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) { setParseErro('Não foi possível ler a planilha (sem abas).'); return; }
+      const matriz = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+      if (!matriz.length) { setParseErro('Planilha vazia.'); return; }
+      // Cabeçalho: 1ª linha sem quantidade numérica na coluna B → pula (mesma heurística da Entrada).
+      const inicio = (matriz[0] && !Number.isFinite(Number(String(matriz[0][1]).replace(',', '.')))) ? 1 : 0;
+      // 1º passe: acumula por SKU normalizado — duplicata SOMA e conta ocorrências.
+      const acc = new Map();
+      const invalidas = [];
+      for (let i = inicio; i < matriz.length; i++) {
+        const linha = matriz[i] || [];
+        const skuRaw = String(linha[0] == null ? '' : linha[0]).trim();
+        if (!skuRaw) continue;                                        // linha vazia
+        const qtdRaw = String(linha[1] == null ? '' : linha[1]).trim();
+        if (qtdRaw === '') continue;                                   // sem quantidade = não pedido (contrato do modelo)
+        const qtd = Number(qtdRaw.replace(',', '.'));
+        const chave = pedNormSku(skuRaw);
+        if (!Number.isFinite(qtd) || qtd <= 0) { invalidas.push({ sku: skuRaw, qtdRaw }); continue; }
+        const cur = acc.get(chave);
+        if (cur) { cur.qtd += qtd; cur.ocorrencias += 1; } else { acc.set(chave, { skuRaw, qtd, ocorrencias: 1 }); }
+      }
+      // 2º passe: match contra o catálogo pedível (e contra /products inteiro para separar
+      // "desconhecido de verdade" de "existe mas é EPI/Ferramenta").
+      const porSkuCat = new Map((catalogo || []).map((p) => [pedNormSku(p.sku), p]));
+      const porSkuTodos = new Map((todos || []).map((p) => [pedNormSku(p.sku), p]));
+      const out = [];
+      acc.forEach((v, chave) => {
+        const noCat = porSkuCat.get(chave) || null;
+        const noTodos = porSkuTodos.get(chave) || null;
+        const base = { sku: noCat ? noCat.sku : v.skuRaw, nome: noCat ? noCat.nome : (noTodos ? noTodos.nome : null), qtd: v.qtd, ocorrencias: v.ocorrencias, somada: v.ocorrencias > 1 };
+        if (!noTodos) { out.push({ ...base, situacao: 'desconhecido', entra: false }); return; }
+        if (!noCat) { out.push({ ...base, situacao: 'neutralizado', entra: false }); return; }
+        if (noCat.disp <= 0) { out.push({ ...base, situacao: 'esgotado', disp: noCat.disp, entra: false }); return; }
+        const noCarrinho = (cart || []).find((c) => c.sku === noCat.sku);
+        const jaTem = noCarrinho ? noCarrinho.qtd : 0;
+        const alvo = jaTem + v.qtd;
+        const qtdFinal = Math.max(1, Math.min(alvo, noCat.disp));      // mesmo clamp do carrinho
+        const ajustada = qtdFinal < alvo;
+        const efetiva = qtdFinal - jaTem;
+        out.push({ ...base, situacao: efetiva > 0 ? 'ok' : 'teto', disp: noCat.disp, jaTem, qtdFinal, ajustada, entra: efetiva > 0 });
+      });
+      invalidas.forEach((x) => out.push({ sku: x.sku, nome: null, qtd: null, qtdRaw: x.qtdRaw, situacao: 'invalida', entra: false }));
+      // Ordem estável: o que entra primeiro, depois os sinalizados.
+      out.sort((a, b) => (a.entra === b.entra ? 0 : a.entra ? -1 : 1));
+      setLinhas(out);
+    } catch (e) {
+      setParseErro('Não foi possível ler a planilha. Confirme que é um .xlsx ou .csv válido.');
+    }
+  };
+
+  const rows = linhas || [];
+  const nEntra = rows.filter((l) => l.entra).length;
+  const nEsgotado = rows.filter((l) => l.situacao === 'esgotado').length;
+  const nDesconhecido = rows.filter((l) => l.situacao === 'desconhecido').length;
+  const nNeutral = rows.filter((l) => l.situacao === 'neutralizado').length;
+  const nSomada = rows.filter((l) => l.somada).length;
+  const nAjust = rows.filter((l) => l.ajustada).length;
+  const nInvalida = rows.filter((l) => l.situacao === 'invalida').length;
+  const nTeto = rows.filter((l) => l.situacao === 'teto').length;
+  const cRed = uiTone(t, 'red');
+  const cAmb = uiTone(t, 'amber');
+  const cVerde = uiTone(t, 'green');
+  const miniBadge = (tone, txt, key) => (
+    <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 7, background: tone.bg, color: tone.fg, whiteSpace: 'nowrap' }}>{txt}</span>
+  );
+  const situacaoDe = (l) => {
+    if (l.situacao === 'desconhecido') return [miniBadge(cRed, 'SKU desconhecido', 'd')];
+    if (l.situacao === 'neutralizado') return [miniBadge(cAmb, 'EPI/Ferramentas — fluxo próprio', 'n')];
+    if (l.situacao === 'esgotado') return [miniBadge(cRed, 'Esgotado — não entra', 'e')];
+    if (l.situacao === 'invalida') return [miniBadge(cRed, `qtd inválida ("${l.qtdRaw}")`, 'i')];
+    const b = [];
+    if (l.situacao === 'teto') b.push(miniBadge(cAmb, 'carrinho já no teto do disponível', 't'));
+    else b.push(miniBadge(cVerde, 'entra no carrinho', 'ok'));
+    if (l.somada) b.push(miniBadge(cAmb, `${l.ocorrencias}× na planilha — somadas`, 's'));
+    if (l.jaTem > 0 && l.situacao !== 'teto') b.push(miniBadge(cAmb, `soma com ${l.jaTem} já no carrinho`, 'c'));
+    if (l.ajustada && l.situacao !== 'teto') b.push(miniBadge(cAmb, `ajustada ao disponível (${l.qtdFinal})`, 'a'));
+    return b;
+  };
+  const confirmar = () => {
+    if (!nEntra) return;
+    onAdd(rows.filter((l) => l.entra).map((l) => ({ sku: l.sku, qtdFinal: l.qtdFinal })));
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 75, background: 'rgba(8,10,16,.62)', backdropFilter: 'blur(3px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(760px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="upload" size={20} /></span>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Importar do Excel</div><div style={{ fontSize: 12.5, color: t.muted }}>Monte o carrinho a partir de uma planilha SKU × Quantidade.</div></div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+        </div>
+        <div className="fr-scroll" style={{ padding: 24, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 14, background: t.accentSoft, border: `1px solid ${frHexToRgba(t.accent, 0.25)}`, marginBottom: 18 }}>
+            <Icon name="sheet" size={22} style={{ color: t.accentText, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Modelo de planilha</div><div style={{ fontSize: 11.5, color: t.muted }}>Colunas: SKU · Quantidade — já vem com os materiais pedíveis; preencha só o que quiser.</div></div>
+            <button onClick={baixarModelo}
+              style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: t.panel, color: t.accentText, border: `1px solid ${t.border}` }}><Icon name="download" size={15} /> Baixar modelo</button>
+          </div>
+          <label onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); lerArquivo(e.dataTransfer.files[0]); }}
+            style={{ display: 'block', cursor: 'pointer', borderRadius: 16, padding: '28px 20px', textAlign: 'center', border: `2px dashed ${drag ? t.accent : t.borderStrong}`, background: drag ? t.accentSoft : t.elevated, transition: 'all .15s' }}>
+            <input type="file" accept=".xlsx,.csv" style={{ display: 'none' }} onChange={(e) => { lerArquivo(e.target.files[0]); e.target.value = ''; }} />
+            <div style={{ width: 52, height: 52, margin: '0 auto 12px', borderRadius: 15, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="upload" size={24} /></div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{fileName || 'Arraste a planilha ou clique para selecionar'}</div>
+            <div style={{ fontSize: 12.5, color: t.muted, marginTop: 5 }}>Formatos aceitos: .xlsx, .csv</div>
+          </label>
+          {parseErro && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg, border: `1px solid ${frHexToRgba(cRed.fg, 0.25)}` }}>
+              <Icon name="alert" size={15} /> {parseErro}
+            </div>
+          )}
+          {linhas && !parseErro && (
+            rows.length === 0 ? (
+              <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>Nenhuma linha com quantidade preenchida na planilha.</div>
+            ) : (
+              <div style={{ marginTop: 18 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <Badge t={t} kind={nEntra ? 'green' : 'amber'} dot>{nEntra} {nEntra === 1 ? 'item entra' : 'itens entram'} no carrinho</Badge>
+                  {nSomada > 0 && <Badge t={t} kind="amber" dot>{nSomada} duplicata{nSomada > 1 ? 's' : ''} somada{nSomada > 1 ? 's' : ''}</Badge>}
+                  {nAjust > 0 && <Badge t={t} kind="amber" dot>{nAjust} ajustada{nAjust > 1 ? 's' : ''} ao disponível</Badge>}
+                  {nTeto > 0 && <Badge t={t} kind="amber" dot>{nTeto} já no teto</Badge>}
+                  {nEsgotado > 0 && <Badge t={t} kind="red" dot>{nEsgotado} esgotado{nEsgotado > 1 ? 's' : ''}</Badge>}
+                  {nDesconhecido > 0 && <Badge t={t} kind="red" dot>{nDesconhecido} SKU desconhecido{nDesconhecido > 1 ? 's' : ''}</Badge>}
+                  {nNeutral > 0 && <Badge t={t} kind="amber" dot>{nNeutral} EPI/Ferramentas</Badge>}
+                  {nInvalida > 0 && <Badge t={t} kind="red" dot>{nInvalida} qtd inválida</Badge>}
+                </div>
+                <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, overflow: 'hidden' }}>
+                  <div style={{ overflowX: 'auto', maxHeight: 260, overflowY: 'auto' }} className="fr-scroll">
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520, fontSize: 13 }}>
+                      <thead><tr>
+                        {['SKU', 'Material', 'Qtd', 'Disp.', 'Situação'].map((h, k) => <th key={h} style={{ position: 'sticky', top: 0, textAlign: k === 2 || k === 3 ? 'right' : 'left', padding: '10px 14px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}`, background: t.elevated, whiteSpace: 'nowrap' }}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {rows.map((l, i) => (
+                          <tr key={`${l.sku}-${i}`} style={{ opacity: l.entra ? 1 : 0.75 }}>
+                            <td style={{ padding: '9px 14px', fontWeight: 700, color: t.text, whiteSpace: 'nowrap', borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sku}</td>
+                            <td style={{ padding: '9px 14px', color: l.nome ? t.text : t.faint, borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.nome || '—'}</td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: t.text, borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.qtd == null ? '—' : l.qtd}</td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', color: t.muted, borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.disp == null ? '—' : l.disp}</td>
+                            <td style={{ padding: '9px 14px', borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}` }}><div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{situacaoDe(l)}</div></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+        </div>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+          <span style={{ marginRight: 'auto', fontSize: 11.5, color: t.faint }}>Nada é enviado ao servidor — o pedido sai só no "Confirmar Solicitação".</span>
+          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
+          <button onClick={confirmar} disabled={!nEntra}
+            style={{ all: 'unset', boxSizing: 'border-box', cursor: nEntra ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: nEntra ? 1 : 0.45 }}>
+            <Icon name="cart" size={16} /> Adicionar ao carrinho{nEntra ? ` (${nEntra})` : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PageMeusPedidos({ t: tBase, theme }) {
   const t = frTokens(theme, '#7c3aed', '#a78bfa');
   const { mobile: pedMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
@@ -358,6 +588,7 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const [opQ, setOpQ] = useStateP('');
   const [sortOpen, setSortOpen] = useStateP(false);
   const [destinoOpen, setDestinoOpen] = useStateP(false);
+  const [importOpen, setImportOpen] = useStateP(false);   // rodada 16: modal Importar do Excel
   const [sending, setSending] = useStateP(false);   // PEÇA 3: envio em andamento (anti duplo-clique)
   const [sendErr, setSendErr] = useStateP(null);    // PEÇA 3: mensagem de erro do envio
   // PEÇA 1: catálogo REAL (GET /products adaptado) — mesmo hook/pattern que a galeria de Produtos usa.
@@ -421,9 +652,11 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const inCart = (sku) => cart.find((c) => c.sku === sku);
   const catCounts = CATALOGO.reduce((a, c) => { if (c.cat) a[c.cat] = (a[c.cat] || 0) + 1; return a; }, {});
   const cats = [...new Set(CATALOGO.map((c) => c.cat))].filter(Boolean).sort();
+  // Busca honra o placeholder ("nome, SKU ou palavra-chave"): a palavra-chave são as etiquetas
+  // REAIS do produto (todas, não só a 1ª) — antes o texto prometia e o filtro só olhava nome/SKU.
   let cat = CATALOGO.filter((c) =>
     (!fil || c.cat === fil) &&
-    (!ql || c.nome.toLowerCase().includes(ql) || c.sku.includes(ql)) &&
+    (!ql || c.nome.toLowerCase().includes(ql) || c.sku.includes(ql) || (c.tags || []).some((tg) => String(tg).toLowerCase().includes(ql))) &&
     (disp === 'todos' || (disp === 'disp' && c.disp > 0) || (disp === 'cart' && cart.some((x) => x.sku === c.sku)))
   );
   cat = cat.slice().sort((a, b) => {
@@ -443,6 +676,18 @@ function PageMeusPedidos({ t: tBase, theme }) {
   const dispOf = (sku) => { const m = CATALOGO.find((c) => c.sku === sku); return m ? m.disp : 0; };
   const clampQ = (sku, n) => Math.max(1, Math.min(n, dispOf(sku) || 1));
   const add = (sku) => setCart((cs) => (cs.some((c) => c.sku === sku) ? cs.map((c) => (c.sku === sku ? { ...c, qtd: clampQ(sku, c.qtd + 1) } : c)) : [...cs, { sku, qtd: 1 }]));
+  // Import do Excel → carrinho (client-side): o preview já calculou o TOTAL final por SKU
+  // (soma com o que estava no carrinho + clamp ao disponível), então aqui é atribuição, não soma
+  // de novo — o que o usuário viu no preview é exatamente o que o carrinho vira.
+  const importarAoCarrinho = (rows) => setCart((cs) => {
+    const next = [...cs];
+    rows.forEach((r) => {
+      const i = next.findIndex((c) => c.sku === r.sku);
+      if (i >= 0) next[i] = { ...next[i], qtd: r.qtdFinal };
+      else next.push({ sku: r.sku, qtd: r.qtdFinal });
+    });
+    return next;
+  });
   const step = (sku, d) => setCart((cs) => cs.map((c) => (c.sku === sku ? { ...c, qtd: clampQ(sku, c.qtd + d) } : c)));
   const del = (sku) => setCart((cs) => cs.filter((c) => c.sku !== sku));
   const setFunc = (sku, f) => setCart((cs) => cs.map((c) => (c.sku === sku ? { ...c, funcionario: f } : c)));
@@ -553,7 +798,9 @@ function PageMeusPedidos({ t: tBase, theme }) {
                 agora sai do perfil real, e SOME quando não há setor, em vez de inventar um. */}
             {setorDoPerfil && <span style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)' }}>Setor</span>}
             {setorDoPerfil && <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}>{setorDoPerfil}</span>}
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="cart" size={13} /> {cart.length} no carrinho</span>
+            {/* pedidos-better: o chip do carrinho só existe quando HÁ carrinho — "0 no carrinho"
+                era ruído permanente; o design final o mostra apenas com N>0. */}
+            {cart.length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="cart" size={13} /> {cart.length} no carrinho</span>}
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name="clock" size={13} /> {emAndamento} em andamento</span>
           </div>
         </div>
@@ -573,7 +820,8 @@ function PageMeusPedidos({ t: tBase, theme }) {
                 <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Procure por nome, SKU ou palavra-chave…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
                 {q && <button onClick={() => setQ('')} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 22, height: 22, borderRadius: 6, color: t.faint }}><Icon name="x" size={15} /></button>}
               </label>
-              <Btn t={t} kind="soft" icon="upload">Importar do Excel</Btn>
+              {/* VIVO (rodada 16): abre o modal de importação — o botão existia morto desde o design. */}
+              <Btn t={t} kind="soft" icon="upload" onClick={() => setImportOpen(true)}>Importar do Excel</Btn>
             </div>
 
             {/* segmentos de disponibilidade + ordenação */}
@@ -907,6 +1155,11 @@ function PageMeusPedidos({ t: tBase, theme }) {
       {destinoOpen && (
         <EpiDestinoModal t={t} items={cart.filter((c) => needsFunc(c.sku))} catOf={catOf} onFunc={setFunc} onJust={setJust} onFoto={setFoto} isEarly={isEarly}
           onClose={() => setDestinoOpen(false)} onConfirm={() => { confirmar(); setDestinoOpen(false); }} />
+      )}
+
+      {importOpen && (
+        <PedImportModal t={t} catalogo={CATALOGO} todos={frProdutos} cart={cart}
+          onClose={() => setImportOpen(false)} onAdd={importarAoCarrinho} />
       )}
 
       {toast && (
