@@ -2459,8 +2459,11 @@ function renderPage(active, props) {
   if (active && active.indexOf('at-') === 0) return renderPageAT(active, props);
   if (active && active.indexOf('fin-') === 0) return renderPageFin(active, props);
   if (active === 'soon') return <PagePlaceholder t={props.t} title={props.mod ? props.mod.name : 'Módulo'} />;
-  const catalogo = ['catalogo', 'cat-categorias', 'cat-etiquetas', 'cat-movimentacao'];
-  if (active === 'cat-produtos') return <PageProdutos {...props} />;
+  // Catálogo UNIFICADO (rodada 16): uma aba só. 'cat-produtos' (galeria morta) e
+  // 'cat-movimentacao' (cadastro), mais os ids mortos 'cat-categorias'/'cat-etiquetas',
+  // são ALIAS → mesma página. Quem chegar por id velho (setActive programático) cai aqui;
+  // fr_active_page antigo o boot do F5 já normaliza pra home 'catalogo' (id fora da nav).
+  const catalogo = ['catalogo', 'cat-produtos', 'cat-movimentacao', 'cat-categorias', 'cat-etiquetas'];
   if (catalogo.includes(active)) return <PageCatalogo {...props} />;
   if (active === 'ent-nfe') return <PageEntradaNova {...props} />;
   if (active === 'ent-reaproveitamento') return <PageEntradaNova {...props} variant="reaproveitamento" />;

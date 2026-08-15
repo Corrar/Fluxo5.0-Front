@@ -37,7 +37,7 @@ import './parts/ui.jsx';             // Card, Btn, Badge, KPI, uiTone, charts...
 import './parts/sidebar.jsx';        // Sidebar, frTokens, frHexToRgba
 
 // --- módulo Estoque ---
-import './parts/pages_main.jsx';     // Catálogo, Dashboard, Produtos
+import './parts/pages_main.jsx';     // Catálogo unificado, Dashboard
 import './parts/pages_admin.jsx';    // Entradas, Saídas, Usuários, Solicitações, roteador
 import './parts/conferencia.jsx';    // Conferência de Envio (bipagem)
 import './parts/pedidos.jsx';        // Meus Pedidos

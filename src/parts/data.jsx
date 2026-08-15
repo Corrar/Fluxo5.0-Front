@@ -22,13 +22,11 @@ const NAV = [
   {
     label: 'Estoque',
     items: [
-      {
-        id: 'catalogo', name: 'Catálogo', icon: 'box',
-        children: [
-          { id: 'cat-produtos',     name: 'Produtos' },
-          { id: 'cat-movimentacao', name: 'Movimentação' },
-        ],
-      },
+      // CATÁLOGO UNIFICADO (rodada 16): as duas sub-abas ('cat-produtos' galeria e
+      // 'cat-movimentacao' cadastro) viraram UMA página. Os ids antigos NÃO somem do
+      // roteador — são alias em renderPage (pages_admin.jsx), então deep-link
+      // programático e fr_active_page salvos continuam abrindo o Catálogo.
+      { id: 'catalogo', name: 'Catálogo', icon: 'box' },
       {
         id: 'entradas', name: 'Entradas', icon: 'entrar',
         children: [
@@ -282,7 +280,7 @@ MODULES[4].nav = NAV_DEV;
 MODULES[5].nav = NAV_PROD;
 MODULES[6].nav = NAV_AT;
 MODULES[7].nav = NAV_FIN;
-MODULES[0].home = 'cat-produtos';
+MODULES[0].home = 'catalogo';   // home do Estoque = Catálogo unificado (era 'cat-produtos', hoje alias)
 MODULES[1].home = 'p3d-dashboard';
 MODULES[2].home = 'rh-painel';
 MODULES[3].home = 'cp-painel';

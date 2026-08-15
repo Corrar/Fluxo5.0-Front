@@ -1,5 +1,11 @@
-// pages_main.jsx — Catálogo (Produtos) and Visão Geral (Dashboard).
-const { useState: useStateM, useRef: useRefM } = React;
+// pages_main.jsx — Catálogo UNIFICADO (rodada 16) e Visão Geral (Dashboard).
+//
+// A galeria 'Produtos' (PageProdutos) e a 'Movimentação' (PageCatalogo) viraram UMA página:
+// hero de patrimônio + form de novo produto + busca/filtro/grid + modais de edição,
+// inventário e relatório — tudo sobre useFRProducts (GET /products real). O seed PRODUTOS
+// do protótipo MORREU: as tags dos chips agora derivam dos produtos carregados.
+import * as XLSX from 'xlsx';   // SheetJS (já usado na Entrada por NF): modelo e parse do inventário
+const { useState: useStateM, useRef: useRefM, useMemo: useMemoM } = React;
 
 // Paginação client-side da galeria de Produtos e da Movimentação.
 // A lista completa fica em memória (busca/filtro operam sobre o TODO); só a página atual é renderizada,
@@ -7,36 +13,24 @@ const { useState: useStateM, useRef: useRefM } = React;
 // Trocar aqui muda quantos itens aparecem por página em ambas as telas.
 const PAGE_SIZE = 48;
 
-const PRODUTOS = [
-  { sku: '9.99.0238', nome: 'Parafuso Sextavado M8', tag: 'HOMOLOG',   kind: 'amber', disp: 320, estoque: 400, un: 'un', preco: 'R$ 0,85', img: 'assets/parafuso-sextavado.png', imgFit: 'contain' },
-  { sku: '1.02.0044', nome: 'Chapa Aço 1020 2mm',    tag: 'USINAGEM',  kind: 'blue',  disp: 12, estoque: 18, un: 'ch', preco: 'R$ 145,00', img: 'assets/chapa-aco.png', imgFit: 'contain' },
-  { sku: '3.00.0101', nome: 'Filamento PLA Azul 1kg', tag: '3D',        kind: 'accent', disp: 8, estoque: 10, un: 'un', preco: 'R$ 89,90' },
-  { sku: '4.10.0233', nome: 'Rolamento 6204ZZ',      tag: 'MECÂNICA',  kind: 'gray',  disp: 54, estoque: 60, un: 'un', preco: 'R$ 12,40' },
-  { sku: '5.20.0099', nome: 'Cabo Flexível 2,5mm',   tag: 'ELÉTRICA',  kind: 'amber', disp: 240, estoque: 300, un: 'm',  preco: 'R$ 3,20' },
-  { sku: '6.30.0012', nome: 'Tinta Epóxi Cinza 3,6L', tag: 'ACABAMENTO', kind: 'green', disp: 5, estoque: 12, un: 'lt', preco: 'R$ 210,00' },
-  { sku: '2.11.0080', nome: 'Porca Sextavada M8',    tag: 'HOMOLOG',   kind: 'amber', disp: 410, estoque: 500, un: 'un', preco: 'R$ 0,40', img: 'assets/porca-m8.png', imgFit: 'contain' },
-  { sku: '7.40.0150', nome: 'Arruela Lisa 8mm',      tag: 'HOMOLOG',   kind: 'amber', disp: 880, estoque: 1000, un: 'un', preco: 'R$ 0,20', img: 'assets/arruela-8mm.png', imgFit: 'contain' },
-  { sku: '5.31.0022', nome: 'Conector RJ45',         tag: 'ELÉTRICA',  kind: 'amber', disp: 0, estoque: 0, un: 'un', preco: 'R$ 2,50' },
-  { sku: '3.11.0027', nome: 'Abraçadeira Inox 2"',   tag: 'FERRAMENTAS', kind: 'blue', disp: 36, estoque: 40, un: 'un', preco: 'R$ 9,90' },
-  { sku: '3.11.0028', nome: 'Abraçadeira Inox 4"',   tag: 'FERRAMENTAS', kind: 'blue', disp: 22, estoque: 30, un: 'un', preco: 'R$ 14,50' },
-  { sku: '3.00.0102', nome: 'Filamento PETG Preto 1kg', tag: '3D',     kind: 'accent', disp: 14, estoque: 20, un: 'un', preco: 'R$ 109,90' },
-  { sku: '3.00.0103', nome: 'Filamento ABS Cinza 1kg', tag: '3D',      kind: 'accent', disp: 6, estoque: 15, un: 'un', preco: 'R$ 94,90' },
-  { sku: '5.20.0100', nome: 'Cabo Flexível 4,0mm',   tag: 'ELÉTRICA',  kind: 'amber', disp: 180, estoque: 240, un: 'm', preco: 'R$ 5,10' },
-  { sku: '5.32.0040', nome: 'Terminal Ilhós 2,5mm',  tag: 'ELÉTRICA',  kind: 'amber', disp: 1200, estoque: 1500, un: 'un', preco: 'R$ 0,12', img: 'assets/terminal-ilhos.png', imgFit: 'contain' },
-  { sku: '9.99.0240', nome: 'Parafuso Allen M6',     tag: 'HOMOLOG',   kind: 'amber', disp: 540, estoque: 600, un: 'un', preco: 'R$ 0,65' },
-  { sku: '1.02.0045', nome: 'Chapa Inox 304 1,5mm',  tag: 'USINAGEM',  kind: 'blue',  disp: 9, estoque: 14, un: 'ch', preco: 'R$ 320,00' },
-  { sku: '1.02.0046', nome: 'Barra Redonda 1020 1"', tag: 'USINAGEM',  kind: 'blue',  disp: 18, estoque: 25, un: 'br', preco: 'R$ 78,00' },
-  { sku: '4.10.0234', nome: 'Rolamento 6205ZZ',      tag: 'MECÂNICA',  kind: 'gray',  disp: 40, estoque: 50, un: 'un', preco: 'R$ 16,80' },
-  { sku: '4.10.0235', nome: 'Correia A-32',          tag: 'MECÂNICA',  kind: 'gray',  disp: 12, estoque: 16, un: 'un', preco: 'R$ 28,00' },
-  { sku: '6.30.0013', nome: 'Verniz PU 900ml',       tag: 'ACABAMENTO', kind: 'green', disp: 7, estoque: 10, un: 'lt', preco: 'R$ 85,00' },
-  { sku: '6.30.0014', nome: 'Massa Plástica 1kg',    tag: 'ACABAMENTO', kind: 'green', disp: 20, estoque: 24, un: 'un', preco: 'R$ 32,00' },
-  { sku: '2.11.0081', nome: 'EPI Luva Nitrílica',    tag: 'EPI',       kind: 'red',   disp: 60, estoque: 80, un: 'par', preco: 'R$ 4,80' },
-  { sku: '2.11.0082', nome: 'EPI Óculos de Proteção', tag: 'EPI',      kind: 'red',   disp: 35, estoque: 50, un: 'un', preco: 'R$ 12,00' },
-  { sku: '3.11.0030', nome: 'Abraçadeira Nylon 200mm', tag: 'FERRAMENTAS', kind: 'blue', disp: 900, estoque: 1000, un: 'un', preco: 'R$ 0,40' },
-];
-const PRODUTO_TAGS = [...new Map(PRODUTOS.map((p) => [p.tag, p.kind])).entries()].map(([tag, kind]) => ({ tag, kind }));
+// ⚰️ LÁPIDE — o seed PRODUTOS (26 itens do protótipo) morreu aqui na rodada 16. Ele já não
+// rendia card nenhum (as telas leem useFRProducts desde a leva 1), mas seguia vivo como fonte
+// de PRODUTO_TAGS — os chips de categoria mostravam etiquetas que talvez nem existissem no
+// banco. Agora as tags derivam dos produtos CARREGADOS (frTagsDe, abaixo); a cor continua no
+// mesmo mapa de sempre (FRAdapters.tagToKind).
 const UNIDADES = ['un', 'm', 'ch', 'lt', 'kg', 'par', 'br', 'cx', 'pç', 'rolo'];
 function parsePreco(s) { return parseFloat(String(s).replace(/[^0-9,]/g, '').replace(',', '.')) || 0; }
+
+// Tags REAIS: todas as etiquetas dos produtos carregados (não só a 1ª de cada um), únicas,
+// maiúsculas, com a cor do mapa canônico. Fonte única dos chips do form e do modal de edição.
+function frTagsDe(produtos) {
+  const m = new Map();
+  (produtos || []).forEach((p) => (p.tags || []).forEach((tg) => {
+    const up = String(tg).toUpperCase().trim();
+    if (up && !m.has(up)) m.set(up, window.FRAdapters.tagToKind(up));
+  }));
+  return [...m.entries()].map(([tag, kind]) => ({ tag, kind }));
+}
 
 // --- Estados de dados reais (Etapa 2 · leva 1): skeleton discreto, vazio e erro ---
 // Coerentes com os tokens do tema; não inventam layout novo.
@@ -190,6 +184,9 @@ function NovoProdutoForm({ t, brand, onCreated, produtos = [], flat }) {
     : null;
   const bloqueado = salvando || !skuValido || skuDuplicado;
 
+  // Chips de categoria: derivados dos produtos REAIS carregados (o seed PRODUTO_TAGS morreu).
+  const tagsReais = useMemoM(() => frTagsDe(produtos), [produtos]);
+
   const toggleTag = (tg) => { setFeedback(null); setTags((xs) => (xs.includes(tg) ? xs.filter((x) => x !== tg) : [...xs, tg])); };
   const addNovaTag = () => {
     const tg = novaTag.trim();
@@ -266,7 +263,7 @@ function NovoProdutoForm({ t, brand, onCreated, produtos = [], flat }) {
         <div>
           <label style={lab}>Categorias e etiquetas</label>
           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 10 }}>
-            {PRODUTO_TAGS.map(({ tag, kind }) => {
+            {tagsReais.map(({ tag, kind }) => {
               const on = tags.includes(tag);
               const c = uiTone(t, kind);
               return (
@@ -275,7 +272,7 @@ function NovoProdutoForm({ t, brand, onCreated, produtos = [], flat }) {
                 </button>
               );
             })}
-            {tags.filter((tg) => !PRODUTO_TAGS.some((x) => x.tag === tg)).map((tg) => {
+            {tags.filter((tg) => !tagsReais.some((x) => x.tag === tg)).map((tg) => {
               const c = uiTone(t, 'accent');
               return (
                 <button key={tg} onClick={() => toggleTag(tg)} title="Remover etiqueta" style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, letterSpacing: '.02em', padding: '5px 10px', borderRadius: 8, background: c.fg, color: '#fff', border: `1px solid ${c.fg}` }}>
@@ -300,12 +297,56 @@ function NovoProdutoForm({ t, brand, onCreated, produtos = [], flat }) {
   );
 }
 
-function EditProdutoModal({ t, prod, onClose, onSave }) {
-  const [f, setF] = useStateM({ nome: prod.nome, tag: prod.tag, disp: String(prod.disp), estoque: String(prod.estoque), un: prod.un, preco: prod.preco });
-  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+// Edição REAL (rodada 16): PUT /products/:id (parcial, COALESCE no backend). O modal edita só o
+// que o produto TEM — nome, etiquetas (multi, como no cadastro), unidade, mínimo e valor unitário.
+// Os campos Disponível/Física do desenho SAÍRAM de propósito: a edição de produto NÃO toca stock
+// no backend (products.controller: "Edição não mexe no estoque") — saldo muda por entrada/saída/
+// ajuste, nunca por aqui. Ao salvar, `onSaved` recarrega a lista (o dado volta do servidor;
+// nada de setState-como-fonte).
+function EditProdutoModal({ t, prod, produtos, onClose, onSaved }) {
+  const [f, setF] = useStateM({
+    nome: prod.nome || '',
+    un: prod.un || 'un',
+    minimo: String(prod.min_stock != null ? prod.min_stock : 0),
+    preco: (prod.precoNum != null ? prod.precoNum : parsePreco(prod.preco)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    tags: (prod.tags || []).map((x) => String(x).toUpperCase().trim()).filter(Boolean),
+  });
+  const [novaTag, setNovaTag] = useStateM('');
+  const [salvando, setSalvando] = useStateM(false);
+  const [erro, setErro] = useStateM(null);
+  const set = (k, v) => { setErro(null); setF((s) => ({ ...s, [k]: v })); };
+  const tagsReais = useMemoM(() => frTagsDe(produtos), [produtos]);
+  const toggleTag = (tg) => set('tags', f.tags.includes(tg) ? f.tags.filter((x) => x !== tg) : [...f.tags, tg]);
+  const addNovaTag = () => {
+    const tg = novaTag.trim().toUpperCase();
+    setNovaTag('');
+    if (tg && !f.tags.includes(tg)) set('tags', [...f.tags, tg]);
+  };
+  const salvar = async () => {
+    if (salvando) return;   // guard anti-duplo-clique
+    const nomeLimpo = f.nome.trim();
+    if (!nomeLimpo) { setErro('Informe o nome do produto.'); return; }
+    if (!prod.product_id) { setErro('Produto sem id — recarregue a lista e tente de novo.'); return; }
+    setSalvando(true);
+    setErro(null);
+    try {
+      await window.FRApi.put(`/products/${prod.product_id}`, {
+        name: nomeLimpo,
+        unit: f.un,
+        min_stock: f.minimo.trim() === '' ? 0 : Number(f.minimo),
+        unit_price: parsePreco(f.preco),
+        tags: f.tags,
+      });
+      if (onSaved) onSaved();   // recarrega a lista — a tela mostra o que o servidor gravou
+    } catch (e) {
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setErro(gm ? gm(e) : 'Não foi possível salvar o produto.');
+      setSalvando(false);       // no erro o modal fica aberto com o que foi digitado
+    }
+  };
   const field = { boxSizing: 'border-box', width: '100%', height: 42, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
   const lab = { display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 };
-  const tagKind = (PRODUTO_TAGS.find((x) => x.tag === f.tag) || {}).kind || 'gray';
+  const cErr = uiTone(t, 'red');
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
@@ -317,58 +358,145 @@ function EditProdutoModal({ t, prod, onClose, onSave }) {
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div><label style={lab}>Nome</label><input value={f.nome} onChange={(e) => set('nome', e.target.value)} style={field} /></div>
           <div>
-            <label style={lab}>Categoria</label>
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-              {PRODUTO_TAGS.map(({ tag, kind }) => { const on = f.tag === tag; const c = uiTone(t, kind); return (
-                <button key={tag} onClick={() => set('tag', tag)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, padding: '6px 11px', borderRadius: 8, background: on ? c.fg : c.bg, color: on ? '#fff' : c.fg }}>{on && <Icon name="check" size={11} />}{tag}</button>
+            <label style={lab}>Categorias e etiquetas</label>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 10 }}>
+              {tagsReais.map(({ tag, kind }) => { const on = f.tags.includes(tag); const c = uiTone(t, kind); return (
+                <button key={tag} onClick={() => toggleTag(tag)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, padding: '6px 11px', borderRadius: 8, background: on ? c.fg : c.bg, color: on ? '#fff' : c.fg, border: `1px solid ${on ? c.fg : 'transparent'}` }}>{on && <Icon name="check" size={11} />}{tag}</button>
+              ); })}
+              {f.tags.filter((tg) => !tagsReais.some((x) => x.tag === tg)).map((tg) => { const c = uiTone(t, 'accent'); return (
+                <button key={tg} onClick={() => toggleTag(tg)} title="Remover etiqueta" style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, padding: '6px 11px', borderRadius: 8, background: c.fg, color: '#fff', border: `1px solid ${c.fg}` }}><Icon name="check" size={11} />{tg}</button>
               ); })}
             </div>
+            <input value={novaTag} onChange={(e) => setNovaTag(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addNovaTag(); } }} onBlur={addNovaTag} placeholder="Criar nova etiqueta…" style={field} />
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lab}>Disponível</label><input value={f.disp} onChange={(e) => set('disp', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
-            <div style={{ flex: 1 }}><label style={lab}>Física</label><input value={f.estoque} onChange={(e) => set('estoque', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
-            <div style={{ width: 90 }}>
+            <div style={{ flex: 1 }}>
               <label style={lab}>Unidade</label>
               <div style={{ position: 'relative' }}><select value={f.un} onChange={(e) => set('un', e.target.value)} style={{ ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 28, cursor: 'pointer' }}>{UNIDADES.map((u) => <option key={u}>{u}</option>)}</select><Icon name="chevronDown" size={14} style={{ position: 'absolute', right: 10, top: 14, color: t.muted, pointerEvents: 'none' }} /></div>
             </div>
+            <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input value={f.minimo} onChange={(e) => set('minimo', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Valor unitário</label><input value={f.preco} onChange={(e) => set('preco', e.target.value)} inputMode="decimal" placeholder="0,00" style={field} /></div>
           </div>
-          <div><label style={lab}>Valor unitário</label><input value={f.preco} onChange={(e) => set('preco', e.target.value)} style={field} /></div>
+          <div style={{ fontSize: 11.5, color: t.faint }}>Saldo (disponível/física) não se edita aqui: estoque muda por entrada, saída ou ajuste — nunca pelo cadastro.</div>
+          {erro && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cErr.bg, color: cErr.fg, border: `1px solid ${frHexToRgba(cErr.fg, 0.25)}` }}>
+              <Icon name="alert" size={15} /> {erro}
+            </div>
+          )}
         </div>
         <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
           <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-          <Btn t={t} icon="check" onClick={() => onSave({ ...prod, nome: f.nome, tag: f.tag, kind: tagKind, disp: parseInt(f.disp) || 0, estoque: parseInt(f.estoque) || 0, un: f.un, preco: f.preco })}>Salvar</Btn>
+          <button onClick={salvar} disabled={salvando}
+            style={{ all: 'unset', boxSizing: 'border-box', cursor: salvando ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: salvando ? 0.6 : 1, transition: 'opacity .14s' }}>
+            <Icon name={salvando ? 'refresh' : 'check'} size={16} /> {salvando ? 'Salvando…' : 'Salvar'}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-function ProdutoCard({ t, p, onEdit, onDelete, mobile }) {
-  const [editing, setEditing] = useStateM(false);
-  const [hover, setHover] = useStateM(false);
-  const [menu, setMenu] = useStateM(false);
-  const [confirm, setConfirm] = useStateM(false);
+// Badge de crítico do card: o status vem do adapter (disp<=0 esgotado; disp<=min_stock baixo).
+function ProdutoStatusBadge({ t, p }) {
+  if (p.status === 'esgotado') return <Badge t={t} kind="red" dot>Esgotado</Badge>;
+  if (p.status === 'baixo') return <Badge t={t} kind="amber" dot>Baixo</Badge>;
+  return null;
+}
 
-  // CARTÃO COMPACTO (redesign, variante mobile). É SÓ LAYOUT: os dois blocos de estoque
-  // lado a lado viram uma coluna com disponível/físico/unitário, e a tipografia encolhe.
-  //
-  // O QUE NÃO VEIO DO DESIGN, por decisão do Bruno: ele punha editar e EXCLUIR como botões
-  // diretos no topo do cartão. No nosso repo esses dois são inertes (a escrita de produto é a
-  // "próxima leva" — ver PageCatalogo), e promover controle morto de escondido no menu para
-  // primário no cartão é piorar a tela: o usuário clicaria esperando efeito. O menu de três
-  // pontinhos segue exatamente como está, com o mesmo comportamento de hoje.
+// Menu ⋯ do card — Editar (modal real) e Arquivar (DELETE real). Extraído porque agora o
+// celular também o mostra: os dois controles deixaram de ser inertes nesta rodada, então
+// escondê-los do mobile seria negar função viva, não poupar de botão morto.
+function ProdutoMenu({ t, p, onEdit, onConfirmArchive }) {
+  const [menu, setMenu] = useStateM(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setMenu((m) => !m)} title="Opções" style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="dots" size={17} /></button>
+      {menu && (
+        <>
+          <div onClick={() => setMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
+          <div style={{ position: 'absolute', zIndex: 20, top: 'calc(100% + 4px)', right: 0, width: 180, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6 }}>
+            <button onClick={() => { setMenu(false); onEdit(p); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: t.text }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="pencil" size={15} /> Editar produto</button>
+            <button onClick={() => { setMenu(false); onConfirmArchive(); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: uiTone(t, 'red').fg }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="trash" size={15} /> Arquivar produto</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Sobreposição de confirmação do arquivamento — DELETE /products/:id REAL (rodada 16). No
+// backend isso é active=false ("Excluir" seria mentira: o produto vai pra lista de inativos e
+// tem rota de reativação). `onArchive` é async: o botão trava enquanto envia e o erro aparece
+// aqui dentro, sem fechar a confirmação.
+function ProdutoConfirmArquivar({ t, p, onArchive, onClose }) {
+  const [enviando, setEnviando] = useStateM(false);
+  const [erro, setErro] = useStateM(null);
+  const c = uiTone(t, 'red');
+  const confirmar = async () => {
+    if (enviando) return;
+    setEnviando(true);
+    setErro(null);
+    try { await onArchive(p); } catch (e) {
+      const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+      setErro(gm ? gm(e) : 'Não foi possível arquivar.');
+      setEnviando(false);
+    }
+  };
+  return (
+    <div onClick={() => !enviando && onClose()} style={{ position: 'absolute', inset: 0, zIndex: 25, borderRadius: 16, background: frHexToRgba(t.panel === '#ffffff' ? '#ffffff' : '#0e0f12', 0.96), display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 20, textAlign: 'center', border: `1px solid ${t.borderStrong}` }}>
+      <span style={{ width: 44, height: 44, borderRadius: 12, background: c.bg, color: c.fg, display: 'grid', placeItems: 'center' }}><Icon name="trash" size={22} /></span>
+      <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>Arquivar “{p.nome}”?</div>
+      <div style={{ fontSize: 12, color: t.muted }}>Sai do catálogo; reativável pela lista de inativos.</div>
+      {erro && <div style={{ fontSize: 12, fontWeight: 700, color: c.fg }}>{erro}</div>}
+      <div style={{ display: 'flex', gap: 10 }} onClick={(e) => e.stopPropagation()}>
+        <Btn t={t} kind="ghost" onClick={() => !enviando && onClose()}>Cancelar</Btn>
+        <button onClick={confirmar} disabled={enviando} style={{ all: 'unset', cursor: enviando ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: c.fg, color: '#fff', opacity: enviando ? 0.6 : 1 }}>
+          <Icon name={enviando ? 'refresh' : 'trash'} size={16} /> {enviando ? 'Arquivando…' : 'Arquivar'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Foto do produto (capability herdada da galeria 'Produtos'): image_url REAL via adapter.
+// Só aparece quando o produto TEM foto — sem placeholder cinza ocupando 200px de nada.
+function ProdutoFoto({ t, p }) {
+  if (!p.img) return null;
+  const out = p.disp <= 0;
+  return (
+    <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 14, border: `1px solid ${t.border}` }}>
+      <img src={window.__asset(p.img)} alt={p.nome} style={{ display: 'block', width: '100%', height: 150, objectFit: p.imgFit || 'cover', padding: p.imgFit === 'contain' ? 16 : 0, boxSizing: 'border-box', background: '#ffffff' }} />
+      <span style={{ position: 'absolute', top: 10, right: 10, fontSize: 11, fontWeight: 800, padding: '5px 11px', borderRadius: 999, color: '#fff', background: out ? '#ef4444' : '#10b981', boxShadow: '0 4px 10px rgba(0,0,0,.25)' }}>{out ? 'Esgotado' : `${p.disp} ${p.un}`}</span>
+    </div>
+  );
+}
+
+function ProdutoCard({ t, p, onEdit, onArchive, mobile }) {
+  const [confirm, setConfirm] = useStateM(false);
+  const out = p.disp <= 0;
+
+  // CARTÃO COMPACTO (redesign, variante mobile): coluna com disponível/físico/unitário e
+  // tipografia menor. Ganhou o menu ⋯ nesta rodada — editar/arquivar agora são VIVOS.
   if (mobile) {
     return (
       <Card t={t} style={{ padding: '18px 18px 16px', position: 'relative' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
           <Badge t={t} kind="gray">{p.sku}</Badge>
-          {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <ProdutoStatusBadge t={t} p={p} />
+            {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
+            <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} />
+          </div>
         </div>
         <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text, margin: '10px 0 14px', letterSpacing: '-.01em', lineHeight: 1.3 }}>{p.nome}</div>
+        <ProdutoFoto t={t} p={p} />
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, paddingTop: 14, borderTop: `1px solid ${t.border}` }}>
           <div>
             <div style={{ fontSize: 9.5, letterSpacing: '.08em', fontWeight: 800, color: t.faint }}>DISPONÍVEL</div>
-            <div style={{ fontSize: 20, fontWeight: 850, color: t.accentText, lineHeight: 1.15 }}>{p.disp} <span style={{ fontSize: 11, color: t.muted, fontWeight: 700 }}>{p.un}</span></div>
+            <div style={{ fontSize: 20, fontWeight: 850, color: out ? uiTone(t, 'red').fg : t.accentText, lineHeight: 1.15 }}>{p.disp} <span style={{ fontSize: 11, color: t.muted, fontWeight: 700 }}>{p.un}</span></div>
             <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.04em', color: t.faint, marginTop: 3 }}>FÍSICA: <span style={{ color: t.muted }}>{p.estoque} {p.un}</span></div>
           </div>
           <div style={{ textAlign: 'right' }}>
@@ -376,6 +504,7 @@ function ProdutoCard({ t, p, onEdit, onDelete, mobile }) {
             <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{p.preco}</div>
           </div>
         </div>
+        {confirm && <ProdutoConfirmArquivar t={t} p={p} onArchive={onArchive} onClose={() => setConfirm(false)} />}
       </Card>
     );
   }
@@ -384,95 +513,207 @@ function ProdutoCard({ t, p, onEdit, onDelete, mobile }) {
     <Card t={t} hover style={{ padding: 22, position: 'relative' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <Badge t={t} kind="gray">{p.sku}</Badge>
-        <div style={{ position: 'relative' }}>
-          <button onClick={() => setMenu((m) => !m)} title="Opções" style={{ all: 'unset', cursor: 'pointer', width: 28, height: 28, borderRadius: 7, display: 'grid', placeItems: 'center', color: t.muted }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="dots" size={17} /></button>
-          {menu && (
-            <>
-              <div onClick={() => setMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 19 }} />
-              <div style={{ position: 'absolute', zIndex: 20, top: 'calc(100% + 4px)', right: 0, width: 168, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6 }}>
-                <button onClick={() => { setMenu(false); onEdit(p); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: t.text }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="pencil" size={15} /> Editar produto</button>
-                <button onClick={() => { setMenu(false); setConfirm(true); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: uiTone(t, 'red').fg }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="trash" size={15} /> Excluir item</button>
-              </div>
-            </>
-          )}
-        </div>
+        <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} />
       </div>
       <div style={{ fontSize: 19, fontWeight: 850, color: t.text, margin: '14px 0 11px', letterSpacing: '-.01em', lineHeight: 1.25 }}>{p.nome}</div>
-      {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
-      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: p.img ? 14 : 0 }}>
+        {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
+        <ProdutoStatusBadge t={t} p={p} />
+      </div>
+      <ProdutoFoto t={t} p={p} />
+      <div style={{ display: 'flex', gap: 10, marginTop: p.img ? 0 : 20 }}>
         <div style={{ flex: 1, padding: '13px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
           <div style={{ fontSize: 9.5, letterSpacing: '.06em', fontWeight: 700, color: t.faint }}>DISPONÍVEL</div>
-          <div style={{ fontSize: 24, fontWeight: 850, color: t.accentText, marginTop: 4 }}>{p.disp} <span style={{ fontSize: 12, color: t.muted, fontWeight: 600 }}>{p.un}</span></div>
+          <div style={{ fontSize: 24, fontWeight: 850, color: out ? uiTone(t, 'red').fg : t.accentText, marginTop: 4 }}>{p.disp} <span style={{ fontSize: 12, color: t.muted, fontWeight: 600 }}>{p.un}</span></div>
         </div>
         <div style={{ flex: 1, padding: '13px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
           <div style={{ fontSize: 9.5, letterSpacing: '.06em', fontWeight: 700, color: t.faint }}>FÍSICA</div>
           <div style={{ fontSize: 24, fontWeight: 850, color: t.text, marginTop: 4 }}>{p.estoque} <span style={{ fontSize: 12, color: t.muted, fontWeight: 600 }}>{p.un}</span></div>
         </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 15, borderTop: `1px solid ${t.border}` }}
-        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, letterSpacing: '.06em', fontWeight: 700, color: t.faint }}>
-          VALOR UNITÁRIO
-          {/* leva 1: edição de preço inerte (não persiste) — botão não entra em modo edição */}
-          {!editing && (
-            <button onClick={(e) => e.preventDefault()} title="Editar valor" style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 20, height: 20, borderRadius: 5, color: t.accentText, opacity: hover ? 1 : 0, transition: 'opacity .15s' }}><Icon name="pencil" size={13} /></button>
-          )}
-        </div>
-        {editing ? (
-          <input autoFocus value={p.preco} onChange={(e) => onEdit({ ...p, preco: e.target.value }, true)} onBlur={() => setEditing(false)} onKeyDown={(e) => e.key === 'Enter' && setEditing(false)}
-            style={{ width: 110, height: 32, textAlign: 'right', borderRadius: 8, border: `1px solid ${t.accent}`, background: t.panel, color: t.text, fontSize: 16, fontWeight: 850, fontFamily: 'inherit', outline: 'none', padding: '0 8px' }} />
-        ) : (
-          <div style={{ fontSize: 20, fontWeight: 850, color: t.text }}>{p.preco}</div>
-        )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 15, borderTop: `1px solid ${t.border}` }}>
+        {/* Edição de valor: só pelo modal (PUT real). O lápis inline inerte da leva 1 morreu. */}
+        <div style={{ fontSize: 10, letterSpacing: '.06em', fontWeight: 700, color: t.faint }}>VALOR UNITÁRIO</div>
+        <div style={{ fontSize: 20, fontWeight: 850, color: t.text }}>{p.preco}</div>
       </div>
-
-      {confirm && (
-        <div onClick={() => setConfirm(false)} style={{ position: 'absolute', inset: 0, zIndex: 25, borderRadius: 16, background: frHexToRgba(t.panel === '#ffffff' ? '#ffffff' : '#0e0f12', 0.96), display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 20, textAlign: 'center', border: `1px solid ${t.borderStrong}` }}>
-          <span style={{ width: 44, height: 44, borderRadius: 12, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'grid', placeItems: 'center' }}><Icon name="trash" size={22} /></span>
-          <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>Excluir “{p.nome}”?</div>
-          <div style={{ display: 'flex', gap: 10 }} onClick={(e) => e.stopPropagation()}>
-            <Btn t={t} kind="ghost" onClick={() => setConfirm(false)}>Cancelar</Btn>
-            {/* leva 1: exclusão inerte (não remove do backend) — apenas fecha a confirmação */}
-            <button onClick={() => setConfirm(false)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: uiTone(t, 'red').fg, color: '#fff' }}><Icon name="trash" size={16} /> Excluir</button>
-          </div>
-        </div>
-      )}
+      {confirm && <ProdutoConfirmArquivar t={t} p={p} onArchive={onArchive} onClose={() => setConfirm(false)} />}
     </Card>
   );
 }
 
-function InventarioModal({ t, onClose }) {
+// SKU canônico d.dd.dddd — MESMO normalizador do import da Entrada por NF (pages_admin.jsx):
+// tolera zero à esquerda e segmento curto; sem os 2 pontos devolve cru (não casa → "desconhecido" honesto).
+function frNormSku(v) {
+  const s = String(v == null ? '' : v).trim();
+  const m = s.match(/^0*(\d)\.0*(\d{1,2})\.0*(\d{1,4})$/);
+  if (!m) return s;
+  return `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(4, '0')}`;
+}
+
+// InventarioModal COMPLETO (rodada 16): modelo .xlsx real (SheetJS), parse .xlsx/.csv com
+// drag-drop e PREVIEW das diferenças (contado × sistema, delta, SKU desconhecido sinalizado).
+// "Sistema" = estoque FÍSICO (quantity_on_hand): inventário conta o que está na prateleira,
+// não o disponível (que desconta reserva).
+//
+// O botão "Processar inventário" nasce DESABILITADO de propósito: o ajuste em massa aguarda
+// endpoint dedicado de backend (lote futuro). Disparar N ajustes unitários daqui seria N
+// escritas sem transação — meio inventário aplicado se uma falhar. Preview sim, escrita não.
+function InventarioModal({ t, onClose, produtos }) {
   const [drag, setDrag] = useStateM(false);
-  const [file, setFile] = useStateM(null);
+  const [fileName, setFileName] = useStateM(null);
+  const [linhas, setLinhas] = useStateM(null);   // null = sem arquivo; [] = arquivo sem linha válida
+  const [parseErro, setParseErro] = useStateM(null);
+
+  const baixarModelo = () => {
+    // Modelo pré-preenchido com o catálogo REAL carregado: SKU + Nome, contagem em branco.
+    const dados = [['SKU', 'Nome', 'Quantidade Contada'], ...(produtos || []).map((p) => [p.sku, p.nome, ''])];
+    const ws = XLSX.utils.aoa_to_sheet(dados);
+    // Blindagem anti-colapso (mesma da Entrada por NF): SKU como TEXTO explícito, senão o
+    // Excel reinterpreta "9.99.0238" como número/data e o re-upload não casa mais.
+    (produtos || []).forEach((p, i) => {
+      const addr = XLSX.utils.encode_cell({ c: 0, r: i + 1 });
+      ws[addr] = { t: 's', v: String(p.sku), z: '@' };
+    });
+    ws['!cols'] = [{ wch: 14 }, { wch: 40 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventário');
+    XLSX.writeFile(wb, 'modelo-inventario.xlsx');
+  };
+
+  const lerArquivo = async (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setParseErro(null);
+    setLinhas(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });   // XLSX.read cobre .xlsx e .csv
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) { setParseErro('Não foi possível ler a planilha (sem abas).'); return; }
+      const matriz = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+      if (!matriz.length) { setParseErro('Planilha vazia.'); return; }
+      const porSku = new Map((produtos || []).map((p) => [frNormSku(p.sku), p]));
+      // Contado: coluna C do modelo; se a linha só tem 2 colunas (A=SKU, B=qtd), aceita B.
+      const contadoDe = (linha) => {
+        const c = String(linha[2] == null ? '' : linha[2]).trim();
+        if (c !== '') return c;
+        return String(linha[1] == null ? '' : linha[1]).trim();
+      };
+      // Cabeçalho: 1ª linha sem contagem numérica → pula (mesma heurística da Entrada).
+      const inicio = (matriz[0] && !Number.isFinite(Number(contadoDe(matriz[0]).replace(',', '.')))) ? 1 : 0;
+      const vistos = new Set();
+      const out = [];
+      for (let i = inicio; i < matriz.length; i++) {
+        const linha = matriz[i] || [];
+        const skuRaw = String(linha[0] == null ? '' : linha[0]).trim();
+        if (!skuRaw) continue;                                   // linha vazia
+        const contadoRaw = contadoDe(linha);
+        if (contadoRaw === '') continue;                          // sem contagem → item não contado, fora do preview
+        const contado = Number(contadoRaw.replace(',', '.'));
+        const chave = frNormSku(skuRaw);
+        if (vistos.has(chave)) continue;                          // SKU repetido na planilha → vale a 1ª contagem
+        vistos.add(chave);
+        const prod = porSku.get(chave) || null;
+        const contadoOk = Number.isFinite(contado) && contado >= 0;
+        out.push({
+          sku: prod ? prod.sku : skuRaw,
+          nome: prod ? prod.nome : null,
+          contado: contadoOk ? contado : null,
+          sistema: prod ? prod.estoque : null,
+          delta: prod && contadoOk ? contado - prod.estoque : null,
+          desconhecido: !prod,
+          invalido: !contadoOk,
+        });
+      }
+      setLinhas(out);
+    } catch (e) {
+      setParseErro('Não foi possível ler a planilha. Confirme que é um .xlsx ou .csv válido.');
+    }
+  };
+
+  const desconhecidos = (linhas || []).filter((l) => l.desconhecido).length;
+  const invalidos = (linhas || []).filter((l) => l.invalido).length;
+  const comDelta = (linhas || []).filter((l) => l.delta != null && l.delta !== 0).length;
+  const cAmb = uiTone(t, 'amber');
+  const cRed = uiTone(t, 'red');
+  const deltaCor = (d) => (d > 0 ? uiTone(t, 'green').fg : d < 0 ? cRed.fg : t.muted);
+  const fmtDelta = (d) => (d > 0 ? `+${d}` : String(d));
+
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(620px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
           <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="clipboard" size={20} /></span>
           <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Fazer Inventário</div><div style={{ fontSize: 12.5, color: t.muted }}>Importe a planilha com a contagem dos itens.</div></div>
           <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
-        <div style={{ padding: 24 }}>
+        <div className="fr-scroll" style={{ padding: 24, overflowY: 'auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 14, background: t.accentSoft, border: `1px solid ${frHexToRgba(t.accent, 0.25)}`, marginBottom: 18 }}>
             <Icon name="sheet" size={22} style={{ color: t.accentText, flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Modelo de planilha</div><div style={{ fontSize: 11.5, color: t.muted }}>Colunas: SKU · Nome · Quantidade Contada</div></div>
-            <button onClick={() => { const csv = 'SKU,Nome,Quantidade Contada\\n9.99.0238,Parafuso Sextavado M8,\\n1.02.0044,Chapa Aço 1020 2mm,'; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'modelo-inventario.csv'; a.click(); }}
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Modelo de planilha</div><div style={{ fontSize: 11.5, color: t.muted }}>Colunas: SKU · Nome · Quantidade Contada — já vem com o catálogo atual.</div></div>
+            <button onClick={baixarModelo}
               style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: t.panel, color: t.accentText, border: `1px solid ${t.border}` }}><Icon name="download" size={15} /> Baixar modelo</button>
           </div>
-          <label onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); setFile((e.dataTransfer.files[0] || {}).name || 'planilha.xlsx'); }}
-            style={{ display: 'block', cursor: 'pointer', borderRadius: 16, padding: '34px 20px', textAlign: 'center', border: `2px dashed ${drag ? t.accent : t.borderStrong}`, background: drag ? t.accentSoft : t.elevated, transition: 'all .15s' }}>
-            <input type="file" accept=".xlsx,.csv" style={{ display: 'none' }} onChange={(e) => setFile((e.target.files[0] || {}).name)} />
-            <div style={{ width: 56, height: 56, margin: '0 auto 14px', borderRadius: 15, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="upload" size={26} /></div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{file || 'Arraste a planilha ou clique para selecionar'}</div>
+          <label onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); lerArquivo(e.dataTransfer.files[0]); }}
+            style={{ display: 'block', cursor: 'pointer', borderRadius: 16, padding: '28px 20px', textAlign: 'center', border: `2px dashed ${drag ? t.accent : t.borderStrong}`, background: drag ? t.accentSoft : t.elevated, transition: 'all .15s' }}>
+            <input type="file" accept=".xlsx,.csv" style={{ display: 'none' }} onChange={(e) => { lerArquivo(e.target.files[0]); e.target.value = ''; }} />
+            <div style={{ width: 52, height: 52, margin: '0 auto 12px', borderRadius: 15, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="upload" size={24} /></div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{fileName || 'Arraste a planilha ou clique para selecionar'}</div>
             <div style={{ fontSize: 12.5, color: t.muted, marginTop: 5 }}>Formatos aceitos: .xlsx, .csv</div>
           </label>
+          {parseErro && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg, border: `1px solid ${frHexToRgba(cRed.fg, 0.25)}` }}>
+              <Icon name="alert" size={15} /> {parseErro}
+            </div>
+          )}
+          {linhas && !parseErro && (
+            linhas.length === 0 ? (
+              <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>Nenhuma linha com contagem preenchida na planilha.</div>
+            ) : (
+              <div style={{ marginTop: 18 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <Badge t={t} kind="accent" dot>{linhas.length} {linhas.length === 1 ? 'item contado' : 'itens contados'}</Badge>
+                  <Badge t={t} kind={comDelta ? 'amber' : 'green'} dot>{comDelta} com diferença</Badge>
+                  {desconhecidos > 0 && <Badge t={t} kind="red" dot>{desconhecidos} SKU desconhecido{desconhecidos > 1 ? 's' : ''}</Badge>}
+                  {invalidos > 0 && <Badge t={t} kind="red" dot>{invalidos} contagem inválida</Badge>}
+                </div>
+                <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, overflow: 'hidden' }}>
+                  <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }} className="fr-scroll">
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480, fontSize: 13 }}>
+                      <thead><tr>
+                        {['SKU', 'Produto', 'Contado', 'Sistema', 'Delta'].map((h, k) => <th key={h} style={{ position: 'sticky', top: 0, textAlign: k >= 2 ? 'right' : 'left', padding: '10px 14px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}`, background: t.elevated, whiteSpace: 'nowrap' }}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {linhas.map((l, i) => (
+                          <tr key={`${l.sku}-${i}`}>
+                            <td style={{ padding: '9px 14px', fontWeight: 700, color: t.text, whiteSpace: 'nowrap', borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sku}</td>
+                            <td style={{ padding: '9px 14px', color: l.desconhecido ? cRed.fg : t.text, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>
+                              {l.desconhecido ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700 }}><Icon name="alert" size={13} /> SKU desconhecido</span> : l.nome}
+                            </td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: l.invalido ? cRed.fg : t.text, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.invalido ? 'inválida' : l.contado}</td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', color: t.muted, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sistema == null ? '—' : l.sistema}</td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 800, color: l.delta == null ? t.faint : deltaCor(l.delta), whiteSpace: 'nowrap', borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.delta == null ? '—' : fmtDelta(l.delta)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
         </div>
-        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+          <span style={{ marginRight: 'auto', fontSize: 11.5, color: t.faint }}>O preview não altera o estoque.</span>
           <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-          <Btn t={t} icon="check" onClick={onClose}>Processar inventário</Btn>
+          {/* DESABILITADO de nascença — tooltip honesto no span (title em botão disabled não dispara em todo browser). */}
+          <span title="Processamento em massa aguarda endpoint dedicado — em breve." style={{ display: 'inline-flex' }}>
+            <button disabled
+              style={{ all: 'unset', boxSizing: 'border-box', cursor: 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: 0.45 }}>
+              <Icon name="check" size={16} /> Processar inventário
+            </button>
+          </span>
         </div>
       </div>
     </div>
@@ -534,22 +775,35 @@ function Paginacao({ t, page, totalPages, total, start, end, onPage, unidade = '
   );
 }
 
+// PÁGINA UNIFICADA (rodada 16): a antiga 'Movimentação' + a galeria 'Produtos' numa aba só.
+// Tudo sobre useFRProducts (GET /products real, reload em stock_updated). O que cada peça faz:
+//   • header: título + subtítulo + Relatório (herdado da galeria) + Fazer Inventário;
+//   • HeroPatrimonio: números do dado carregado (unit_price real × estoque físico);
+//   • esquerda: NovoProdutoForm (POST real) — no celular vira FAB + folha;
+//   • direita: busca nome/SKU/tag + filtro por etiqueta + grid paginada de ProdutoCard
+//     (com foto image_url e badge de crítico, herdados da galeria);
+//   • modais: edição (PUT real), inventário (preview; processar aguarda endpoint), relatório (CSV).
 function PageCatalogo({ t, brand }) {
   const [inv, setInv] = useStateM(false);
+  const [rel, setRel] = useStateM(false);
   const [edit, setEdit] = useStateM(null);
   const [page, setPage] = useStateM(1);
   const [q, setQ] = useStateM('');
-  const [novoOpen, setNovoOpen] = useStateM(false);   // folha de novo produto (celular)
+  const [tagFiltro, setTagFiltro] = useStateM(null);   // etiqueta ativa (null = todas)
+  const [novoOpen, setNovoOpen] = useStateM(false);    // folha de novo produto (celular)
   const topRef = useRefM(null);
   const { mobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
-  // Fonte REAL: GET /products adaptado. Escrita (novo/editar/excluir/inventário) fica para a próxima leva.
   const { items, loading, error, reload } = window.useFRProducts();
-  // Busca funcional (portada da PageProdutos): filtra sobre a lista COMPLETA por nome/SKU/tag; só então pagina a fatia visível.
+  const tagsReais = useMemoM(() => frTagsDe(items), [items]);
+  // Ordem obrigatória: busca + filtro sobre a lista COMPLETA; só então pagina a fatia visível.
   const ql = q.trim().toLowerCase();
-  const view = items.filter((p) => !ql
-    || (p.nome || '').toLowerCase().includes(ql)
-    || (p.sku || '').toLowerCase().includes(ql)
-    || (p.tag || '').toLowerCase().includes(ql));
+  const view = items.filter((p) => {
+    if (tagFiltro && !(p.tags || []).some((tg) => String(tg).toUpperCase() === tagFiltro)) return false;
+    return !ql
+      || (p.nome || '').toLowerCase().includes(ql)
+      || (p.sku || '').toLowerCase().includes(ql)
+      || (p.tags || []).some((tg) => String(tg).toLowerCase().includes(ql));
+  });
   const total = view.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -557,16 +811,25 @@ function PageCatalogo({ t, brand }) {
   const end = Math.min(safePage * PAGE_SIZE, total);
   const pageItems = view.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const goToPage = (n) => { setPage(n); if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
-  // Ao mudar a busca, volta para a página 1 (senão ficaria numa página inexistente no resultado filtrado).
+  // Busca/filtro mudou → página 1 (senão ficaria numa página inexistente no resultado filtrado).
   const onBusca = (e) => { setQ(e.target.value); setPage(1); };
+  const onTag = (tg) => { setTagFiltro((cur) => (cur === tg ? null : tg)); setPage(1); };
+  // Arquivar REAL: DELETE /products/:id (active=false no backend) e a lista volta do servidor.
+  const arquivar = async (p) => {
+    await window.FRApi.delete(`/products/${p.product_id}`);
+    reload();
+  };
   return (
     <div ref={topRef}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginBottom: 18 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 850, letterSpacing: '-.02em', color: t.text }}>Movimentação</h1>
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 850, letterSpacing: '-.02em', color: t.text }}>Catálogo</h1>
           <p style={{ margin: '6px 0 0', fontSize: 13, color: t.muted }}>Cadastre produtos, ajuste valores e faça o inventário do estoque.</p>
         </div>
-        <Btn t={t} icon="clipboard" onClick={() => setInv(true)}>Fazer Inventário</Btn>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <Btn t={t} icon="barChart" kind="ghost" onClick={() => setRel(true)}>Relatório</Btn>
+          <Btn t={t} icon="clipboard" onClick={() => setInv(true)}>Fazer Inventário</Btn>
+        </div>
       </div>
       <HeroPatrimonio t={t} brand={brand} produtos={items} />
       <div style={{ display: 'flex', gap: 20, marginTop: 22, alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -574,10 +837,25 @@ function PageCatalogo({ t, brand }) {
             largura inteira ele empurraria a lista pra baixo da dobra. */}
         {!mobile && <NovoProdutoForm t={t} brand={brand} onCreated={reload} produtos={items} />}
         <div style={{ flex: 1, minWidth: 280 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderRadius: 13, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 16px', borderRadius: 13, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, marginBottom: tagsReais.length ? 10 : 16 }}>
             <Icon name="search" size={17} />
             <input value={q} onChange={onBusca} placeholder="Busque por nome, SKU ou tag…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
           </div>
+          {/* Filtro por etiqueta: chips das tags REAIS carregadas (toggle; some se não há tags). */}
+          {tagsReais.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: 16 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: t.faint }}>FILTRAR:</span>
+              {tagsReais.map(({ tag, kind }) => {
+                const on = tagFiltro === tag;
+                const c = uiTone(t, kind);
+                return (
+                  <button key={tag} onClick={() => onTag(tag)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 800, letterSpacing: '.02em', padding: '5px 10px', borderRadius: 8, background: on ? c.fg : c.bg, color: on ? '#fff' : c.fg, border: `1px solid ${on ? c.fg : 'transparent'}` }}>
+                    {on && <Icon name="check" size={11} />}{tag}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {error ? (
             <ProdutoErro t={t} message={error} onRetry={reload} />
           ) : (
@@ -586,18 +864,17 @@ function PageCatalogo({ t, brand }) {
               {loading
                 ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
                 : total === 0
-                ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql ? `Nada encontrado para "${q.trim()}".` : 'Nenhum produto ativo no catálogo.'} /></Card></div>
-                : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onDelete={() => {}} />)}
+                ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql || tagFiltro ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql || tagFiltro ? 'Ajuste a busca ou o filtro de etiqueta.' : 'Nenhum produto ativo no catálogo.'} /></Card></div>
+                : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} />)}
             </div>
             {!loading && total > 0 && <Paginacao t={t} page={safePage} totalPages={totalPages} total={total} start={start} end={end} onPage={goToPage} unidade="produtos" />}
             </>
           )}
         </div>
       </div>
-      {/* FAB + folha de criação (redesign) — VIVOS: o form já bate no POST /products real, com
+      {/* FAB + folha de criação (redesign) — VIVOS: o form bate no POST /products real, com
           as validações atuais (SKU C.SS.NNNN, duplicata, guard anti-duplo-clique). Ao criar,
-          `reload` recarrega a lista e a folha fecha, então o produto novo aparece atrás dela.
-          A paginação segue valendo no celular: a lista é real e cresce. */}
+          `reload` recarrega a lista e a folha fecha, então o produto novo aparece atrás dela. */}
       {mobile && (
         <button onClick={() => setNovoOpen(true)} title="Novo produto"
           style={{ all: 'unset', cursor: 'pointer', position: 'fixed', right: 18, bottom: 20, zIndex: 40, width: 58, height: 58, borderRadius: '50%', display: 'grid', placeItems: 'center', background: t.accent, color: t.onAccent, boxShadow: `0 10px 26px ${frHexToRgba(t.accent, 0.5)}` }}>
@@ -616,8 +893,9 @@ function PageCatalogo({ t, brand }) {
           </div>
         </div>
       )}
-      {inv && <InventarioModal t={t} onClose={() => setInv(false)} />}
-      {edit && <EditProdutoModal t={t} prod={edit} onClose={() => setEdit(null)} onSave={() => setEdit(null)} />}
+      {inv && <InventarioModal t={t} onClose={() => setInv(false)} produtos={items} />}
+      {rel && <RelatorioModal t={t} onClose={() => setRel(false)} produtos={items} />}
+      {edit && <EditProdutoModal t={t} prod={edit} produtos={items} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload(); }} />}
     </div>
   );
 }
@@ -644,7 +922,9 @@ function RelatorioModal({ t, onClose, produtos }) {
   const exportar = () => {
     const head = 'SKU,Nome,Categoria,Disponivel,Fisica,Unidade,Valor Unitario,Valor Total,Status';
     const rows = ord.map((l) => [l.sku, '"' + l.nome + '"', l.tag, l.disp, l.estoque, l.un, l.unit.toFixed(2), l.valorTotal.toFixed(2), l.status].join(','));
-    const csv = [head, ...rows].join('\\n');
+    // '\n' de verdade — o export herdado do protótipo juntava com a STRING "\n" (barra + n),
+    // e o arquivo saía numa linha só. Nenhum leitor de CSV abria as linhas.
+    const csv = [head, ...rows].join('\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'relatorio-estoque.csv'; a.click();
   };
   const statusBadge = (s) => s === 'esgotado' ? <Badge t={t} kind="red" dot>Esgotado</Badge> : s === 'baixo' ? <Badge t={t} kind="amber" dot>Baixo</Badge> : <Badge t={t} kind="green" dot>OK</Badge>;
@@ -705,88 +985,10 @@ function RelatorioModal({ t, onClose, produtos }) {
   );
 }
 
-function PageProdutos({ t, theme }) {
-  const [q, setQ] = useStateM('');
-  const [rel, setRel] = useStateM(false);
-  const [page, setPage] = useStateM(1);
-  const topRef = useRefM(null);
-  // Fonte REAL: GET /products adaptado.
-  const { items, loading, error, reload } = window.useFRProducts();
-  const ql = q.trim().toLowerCase();
-  // Ordem obrigatória: filtrar/buscar sobre a lista COMPLETA primeiro; só então paginar a fatia visível.
-  const view = items.filter((p) => !ql || (p.nome || '').toLowerCase().includes(ql) || (p.sku || '').toLowerCase().includes(ql) || (p.tag || '').toLowerCase().includes(ql));
-  const total = view.length;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages);
-  const start = total === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
-  const end = Math.min(safePage * PAGE_SIZE, total);
-  const pageItems = view.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-  const goToPage = (n) => { setPage(n); if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
-  // Ao mudar a busca, volta para a página 1 (senão ficaria numa página inexistente no resultado filtrado).
-  const onBusca = (e) => { setQ(e.target.value); setPage(1); };
-  return (
-    <div ref={topRef}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 22 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 27, fontWeight: 850, letterSpacing: '-.02em', color: t.text, display: 'flex', alignItems: 'center', gap: 11 }}><Icon name="box" size={25} style={{ color: t.accentText }} /> Produtos</h1>
-          <p style={{ margin: '7px 0 0', fontSize: 13.5, color: t.muted }}>Visualize os materiais do estoque com foto, disponibilidade e valor.</p>
-        </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, width: 320, maxWidth: '100%', height: 46, padding: '0 14px', borderRadius: 12, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text' }}>
-          <Icon name="search" size={18} />
-          <input value={q} onChange={onBusca} placeholder="Buscar por nome, SKU ou tag…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
-        </label>
-        <Btn t={t} icon="barChart" onClick={() => setRel(true)}>Relatório</Btn>
-      </div>
-
-      {error ? (
-        <ProdutoErro t={t} message={error} onRetry={reload} />
-      ) : (
-      <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 18 }}>
-        {loading && Array.from({ length: 10 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} media />)}
-        {!loading && pageItems.map((p) => {
-          const out = p.disp <= 0;
-          return (
-            <div key={p.sku} style={{ borderRadius: 16, overflow: 'hidden', border: `1px solid ${t.border}`, background: t.panel, transition: 'transform .18s ease, box-shadow .18s ease' }}
-              onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = t.shadow; }}
-              onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
-              <div style={{ position: 'relative' }}>
-                {p.img
-                  ? <img src={window.__asset(p.img)} alt={p.nome} style={{ display: 'block', width: '100%', height: 200, objectFit: p.imgFit || 'cover', padding: p.imgFit === 'contain' ? 22 : 0, boxSizing: 'border-box', background: '#ffffff' }} />
-                  : <image-slot id={`prod-${p.sku}`} shape="rect" placeholder="Foto do material" style={{ display: 'block', width: '100%', height: 200, background: '#e9ebf0' }}></image-slot>}
-                {p.tag && <span style={{ position: 'absolute', top: 0, left: 0, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 800, letterSpacing: '.04em', padding: '7px 14px', borderTopLeftRadius: 16, borderBottomRightRadius: 12, color: '#fff', background: uiTone(t, p.kind).fg, boxShadow: '0 3px 10px rgba(0,0,0,.22)' }}><Icon name="box" size={13} /> {p.tag}</span>}
-                <span style={{ position: 'absolute', top: 12, right: 12, fontSize: 11, fontWeight: 800, padding: '5px 11px', borderRadius: 999, color: '#fff', background: out ? '#ef4444' : '#10b981', boxShadow: '0 4px 10px rgba(0,0,0,.25)' }}>{out ? 'Esgotado' : `${p.disp} ${p.un}`}</span>
-              </div>
-              <div style={{ padding: 16 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: t.muted, letterSpacing: '.02em' }}>{p.sku}</div>
-                <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text, margin: '6px 0 14px', lineHeight: 1.3, letterSpacing: '-.01em' }}>{p.nome}</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <div style={{ flex: 1, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>DISPONÍVEL</div>
-                    <div style={{ fontSize: 16, fontWeight: 850, color: out ? uiTone(t, 'red').fg : t.accentText, marginTop: 3 }}>{p.disp} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{p.un}</span></div>
-                  </div>
-                  <div style={{ flex: 1, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>EM ESTOQUE</div>
-                    <div style={{ fontSize: 16, fontWeight: 850, color: t.text, marginTop: 3 }}>{p.estoque} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>{p.un}</span></div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>VALOR UNITÁRIO</span>
-                  <span style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{p.preco}</span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-        {!loading && view.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhum produto" sub={q ? 'Ajuste a busca.' : 'Nenhum produto ativo no catálogo.'} /></Card></div>}
-      </div>
-      {!loading && total > 0 && <Paginacao t={t} page={safePage} totalPages={totalPages} total={total} start={start} end={end} onPage={goToPage} unidade="produtos" />}
-      </>
-      )}
-      {rel && <RelatorioModal t={t} onClose={() => setRel(false)} produtos={items} />}
-    </div>
-  );
-}
+// ⚰️ LÁPIDE — PageProdutos (a galeria 'Produtos', antiga sub-aba 'cat-produtos') morreu na
+// rodada 16, unificada na PageCatalogo. O que ela tinha de VIVO migrou: foto image_url e chip
+// Esgotado/disp (ProdutoFoto), busca nome/SKU/tag, paginação, RelatorioModal (agora no header
+// do Catálogo), skeleton/vazio/erro. O id 'cat-produtos' segue como alias no renderPage.
 
 function PageDashboard({ t, brand }) {
   const meses = [
@@ -837,4 +1039,4 @@ function PageDashboard({ t, brand }) {
   );
 }
 
-Object.assign(window, { PageCatalogo, PageDashboard, PageProdutos });
+Object.assign(window, { PageCatalogo, PageDashboard });
