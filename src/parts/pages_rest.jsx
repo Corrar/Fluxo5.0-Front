@@ -1779,20 +1779,31 @@ function PageCriticos({ t }) {
 }
 
 // ---------- Permissões ----------
-// LIGAÇÃO AO BACKEND: matriz papel × page_keys REAIS + exceções por usuário.
-//   GET  /admin/permissions/roles  → { [role]: page_key[] }      (15 papéis / 57 chaves hoje)
-//   POST /admin/permissions/roles  → replace-all { role, permissions } (guard anti-vazio no back)
-//   GET  /admin/permissions/users  → { [user_id]: page_key[] }
+// LIGAÇÃO AO BACKEND (design ref21 sobre o RBAC real — permissões por CLASSE):
+//   GET  /admin/permissions/roles  → { [role]: page_key[] }   (matriz real; universo = união)
+//   POST /admin/permissions/roles  → replace-all { role, permissions } (guard anti-vazio no back;
+//        papel NOVO nasce por aqui — criar classe = o 1º POST dela, doutrina do rbac)
+//   GET  /admin/permissions/users  → { [user_id]: page_key[] }     (aba Exceções, preservada)
 //   POST /admin/permissions/users  → replace-all { userId, permissions } (vazio = sem exceções)
-//   GET  /users                    → dropdown de usuários reais
-// ESCOPO v1 (travado): SEM criar papel (typo viraria papel-fantasma atribuível na allowlist do
-// UPDATE_ROLE), SEM remover papel (o guard anti-vazio do backend também barra), SEM normalizar
-// a convenção mista flat×namespaced (dívida). O agrupamento por módulo é SÓ VISUAL — o dado é
-// flat; chave sem grupo óbvio cai em "Outras", exibida crua.
-// SALVAR SEMPRE CONFIRMA avisando o efeito real: role_permissions_updated / user_permissions_
-// updated DESLOGAM na hora quem for afetado (comportamento dos dois fronts) — a UI não esconde.
-// Limitação conhecida: o universo de chaves é a UNIÃO dos conjuntos dos papéis (GET /roles);
-// chave que perder o último papel que a tinha some do checklist no próximo load (v1).
+//   GET  /users                    → usuários reais (contagem por classe + mover usuário)
+//   PUT  /users/:id/role           → mover usuário de classe (allowlist = papéis da matriz;
+//        desloga o alvo na hora — confirm obrigatório, mesmo padrão da tela Usuários)
+// DECISÕES TRAVADAS deste lote:
+//   • "Classe" = role de role_permissions; "Setor" = agrupador VISUAL derivado do slug
+//     ('setor--classe' + alias legado usinagem_*; sem prefixo → "Geral"). Nada novo no back.
+//   • Matriz página×ação = BASES reais do universo do GET × Acesso/Ver/Adicionar/Editar/
+//     Remover/Apontar; célula só existe se a chave exata existe. Páginas do ref21 sem chave
+//     real ficam FORA da matriz (fila de decisão do Bruno, listada no relatório do lote).
+//   • Excluir classe salva: SEM rota no backend v1 (o guard anti-vazio barra até o replace-all
+//     vazio) — botão sempre desabilitado com o motivo; rascunho local pode ser descartado.
+//   • Módulos por classe (defaultMods do ref) FORA deste lote — gate de módulo segue no mapa
+//     provisório de access.js.
+//   • SEM normalizar a convenção mista flat×namespaced (dívida antiga, mantida).
+// Salvar é EXPLÍCITO por classe (o POST manda o conjunto inteiro; toggle nunca chama rede) e
+// SEMPRE CONFIRMA avisando o efeito real: role_permissions_updated / user_permissions_updated
+// DESLOGAM na hora quem for afetado — a UI não esconde. Pós-salvar recarrega do GET
+// (servidor-como-fonte). Limitação herdada: o universo de chaves é a UNIÃO dos conjuntos dos
+// papéis; chave que perder o último papel que a tinha some da matriz no próximo load.
 function permErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
 
 // Agrupamento VISUAL por módulo (apresentação, nunca semântica). Prefixo → grupo, na ordem.
@@ -1802,9 +1813,10 @@ const PERM_GRUPOS = [
   { grupo: 'Produção 3D', prefixos: ['producao_3d', 'solicitar_3d', 'producao'] },
   { grupo: 'Painéis e Relatórios', prefixos: ['dashboard', 'office_dashboard', 'relatorios'] },
   { grupo: 'Tarefas e Utilidades', prefixos: ['tarefas_eletrica', 'avisos', 'calculadora'] },
-  // As três chaves do módulo Dev caíam em "Outras" — com rótulo agora em PERM_BASES, ganham
-  // grupo próprio pra tela não parecer inacabada (apresentação, nunca semântica).
-  { grupo: 'Desenvolvimento', prefixos: ['dev_dashboard', 'chamados', 'projetos'] },
+  // As chaves do módulo Dev caíam em "Outras" — com rótulo em PERM_BASES, ganham grupo
+  // próprio pra tela não parecer inacabada (apresentação, nunca semântica). 'dev_' cobre
+  // também dev_area/dev_custos/dev_repos, que nasceram depois do mapa original.
+  { grupo: 'Desenvolvimento', prefixos: ['dev_', 'chamados', 'projetos'] },
   { grupo: 'Gestão Admin', prefixos: ['usuarios', 'permissoes', 'logs', 'clientes'] },
 ];
 function permGrupoDe(key) {
@@ -1827,6 +1839,9 @@ const PERM_BASES = {
   // Chaves do módulo Dev (helpdesk 012, dev-projetos 013, dev-painel 015). Estavam aparecendo
   // como CHAVE CRUA em "Outras" desde que nasceram — dívida paga aqui.
   chamados: 'Chamados (atender)', projetos: 'Projetos do Dev', dev_dashboard: 'Painel do Dev',
+  // Chaves que nasceram depois (migrations 016/018/019) e ainda apareciam cruas.
+  dev_area: 'Área Dev', dev_custos: 'Custos & Serviços', dev_repos: 'Repositórios',
+  montagem: 'Montagem de Máquinas',
 };
 const PERM_ACOES = { view: 'ver', add: 'adicionar', edit: 'editar', delete: 'excluir', apontar: 'apontar' };
 function permLabelDe(key) {
@@ -1844,7 +1859,7 @@ function PagePermissoes({ t }) {
   if (!A || typeof A.canAccess !== 'function' || !A.canAccess('permissoes')) {
     return (
       <div>
-        <PageHeader t={t} title="Permissões" subtitle="Matriz de acesso por cargo e exceções por usuário." />
+        <PageHeader t={t} title="Permissões" subtitle="Classes de acesso por setor e exceções por usuário." />
         <Card t={t} style={{ padding: 40, textAlign: 'center' }}>
           <span style={{ width: 52, height: 52, borderRadius: '50%', background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, display: 'inline-grid', placeItems: 'center', marginBottom: 14 }}><Icon name="lock" size={24} /></span>
           <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700 }}>
@@ -1857,53 +1872,520 @@ function PagePermissoes({ t }) {
   return <PagePermissoesReal t={t} />;
 }
 
-function PagePermissoesReal({ t }) {
+// ── Classe × Setor: convenção VISUAL sobre o slug do papel (nenhuma dimensão nova no back) ──
+// Papel novo criado na tela nasce 'setor--classe' — '--' é o único separador de setor que cabe
+// no ROLE_RE do backend (^[a-z0-9_-]+$: sem espaço, acento ou maiúscula) sem ambiguidade com os
+// papéis legados de '_' simples (assistente_tecnico NÃO é um setor). Os dois papéis legados
+// 'usinagem_*' entram no setor Usinagem por alias declarado; todo o resto mora no "Geral".
+const PERM_SETOR_ALIAS = [{ prefixo: 'usinagem_', setor: 'Usinagem' }];
+function permHumaniza(slug) {
+  return String(slug || '').split(/[-_]+/).filter(Boolean).map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' ');
+}
+function permSetorDe(role) {
+  const r = String(role || '').toLowerCase().trim();
+  const i = r.indexOf('--');
+  if (i > 0) return permHumaniza(r.slice(0, i));
+  const alias = PERM_SETOR_ALIAS.filter(function (a) { return r.indexOf(a.prefixo) === 0; })[0];
+  return alias ? alias.setor : 'Geral';
+}
+function permClasseNomeDe(role) {
+  const lbl = (window.FRAccess && window.FRAccess.roleLabel) ? window.FRAccess.roleLabel(role) : role;
+  if (lbl !== role) return lbl;                    // papéis conhecidos têm rótulo em access.js
+  const i = String(role).indexOf('--');
+  return permHumaniza(i > 0 ? role.slice(i + 2) : role);
+}
+// Slug de classe nova, espelhando a borda do backend. O colapso de '-{2,}' garante que '--'
+// NUNCA nasce por acidente do texto digitado — ele só entra pela composição explícita
+// setor + '--' + classe em permMontaSlug.
+function permSlugifica(txt) {
+  return String(txt || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+// "Setor — Classe" digitado (— ou " - ") cria/usa setor explícito; sem separador, a classe
+// herda a aba ativa (no "Geral" nasce sem prefixo).
+function permMontaSlug(texto, setorAtivo) {
+  const m = /^(.+?)(?:\s+—\s+|\s+-\s+)(.+)$/.exec(String(texto || '').trim());
+  const setor = m ? m[1] : (setorAtivo !== 'Geral' ? setorAtivo : '');
+  const classe = m ? m[2] : String(texto || '').trim();
+  const sc = permSlugifica(classe);
+  if (!sc) return '';
+  const ss = permSlugifica(setor);
+  return ss ? ss + '--' + sc : sc;
+}
+
+// Colunas da matriz página×ação. Célula só existe quando a CHAVE EXATA existe no universo do
+// GET — o front não inventa chave (doutrina anti-alucinação); célula sem chave vira "—" com
+// tooltip. 'Acesso' é a chave-folha da convenção flat; 'Apontar' cobre producao:apontar (dado
+// real que as 4 ações do ref não vestem). Chave marcada com sufixo fora destas colunas nunca é
+// derrubada pelo replace-all (marcadas nasce do conjunto INTEIRO do papel) — só fica sem célula.
+const PERM_COLS = [
+  { suf: '',        label: 'Acesso',    icon: 'key' },
+  { suf: 'view',    label: 'Ver',       icon: 'eye' },
+  { suf: 'add',     label: 'Adicionar', icon: 'plus' },
+  { suf: 'edit',    label: 'Editar',    icon: 'pencil' },
+  { suf: 'delete',  label: 'Remover',   icon: 'trash' },
+  { suf: 'apontar', label: 'Apontar',   icon: 'clipboard' },
+];
+function permChave(base, suf) { return suf ? base + ':' + suf : base; }
+function permBaseDe(key) { return String(key).split(':')[0]; }
+function permSufDe(key) { const i = String(key).indexOf(':'); return i > 0 ? key.slice(i + 1) : ''; }
+
+function PermToggle({ t, on, onClick, title }) {
+  return (
+    <button onClick={onClick} title={title} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', width: 26, height: 26, borderRadius: 8, margin: '0 auto', background: on ? uiTone(t, 'green').fg : t.hover, color: on ? '#fff' : t.faint, border: `1px solid ${on ? 'transparent' : t.border}` }}>
+      <Icon name={on ? 'check' : 'x'} size={14} />
+    </button>
+  );
+}
+
+// ── Aba "Classes de acesso" (design ref21): abas de setor derivadas, pills de classes, card da
+// classe selecionada com matriz página×ação, salvar explícito e usuários da classe. ──
+function PermClasses({ t, matriz, usuarios, carregar }) {
   const R = window.React;
-  const [aba, setAba] = R.useState('papeis'); // 'papeis' | 'excecoes'
-  const [matriz, setMatriz] = R.useState(null);     // GET /roles → { role: keys[] }
-  const [excecoes, setExcecoes] = R.useState(null); // GET /users (permissions) → { user_id: keys[] }
-  const [usuarios, setUsuarios] = R.useState([]);   // GET /users (contas)
-  const [loading, setLoading] = R.useState(true);
-  const [error, setError] = R.useState(null);
-  const [papel, setPapel] = R.useState('');
+  const [drafts, setDrafts] = R.useState({});           // { slug: true } — rascunhos SÓ locais
+  const [setorAtivo, setSetorAtivo] = R.useState('Geral');
+  const [selRole, setSelRole] = R.useState('');
+  const [novaClasse, setNovaClasse] = R.useState('');
+  const [criarErro, setCriarErro] = R.useState(null);
+  const [marcadas, setMarcadas] = R.useState([]);
+  const [confirmando, setConfirmando] = R.useState(false);
+  const [salvando, setSalvando] = R.useState(false);
+  const [feedback, setFeedback] = R.useState(null);     // { kind: 'ok'|'erro', msg }
+  const [confirmaMove, setConfirmaMove] = R.useState(null); // { user, destino }
+  const [movendo, setMovendo] = R.useState(false);
+  const [moveErro, setMoveErro] = R.useState(null);
+
+  // Rascunho que o servidor passou a conhecer (1º Salvar + releitura) deixa de ser rascunho.
+  R.useEffect(function () {
+    const salvos = Object.keys(drafts).filter(function (s) { return matriz && matriz[s]; });
+    if (salvos.length) setDrafts(function (d) { const n = { ...d }; salvos.forEach(function (s) { delete n[s]; }); return n; });
+  }, [matriz, drafts]);
+
+  // Classes = papéis reais da matriz + rascunhos; setor/nome são DERIVADOS do slug (visual).
+  const classes = R.useMemo(function () {
+    const reais = Object.keys(matriz || {});
+    const todos = reais.concat(Object.keys(drafts).filter(function (s) { return reais.indexOf(s) < 0; }));
+    return todos.map(function (role) {
+      return { role: role, setor: permSetorDe(role), nome: permClasseNomeDe(role), rascunho: !(matriz && matriz[role]) };
+    }).sort(function (a, b) { return a.nome.localeCompare(b.nome); });
+  }, [matriz, drafts]);
+
+  const setores = R.useMemo(function () {
+    const s = [];
+    classes.forEach(function (c) { if (s.indexOf(c.setor) < 0) s.push(c.setor); });
+    s.sort(function (a, b) { return a === 'Geral' ? -1 : b === 'Geral' ? 1 : a.localeCompare(b); });
+    return s.length ? s : ['Geral'];
+  }, [classes]);
+
+  const classesDoSetor = classes.filter(function (c) { return c.setor === setorAtivo; });
+  const roleDoUsuario = function (u) { return String(u.role || '').toLowerCase().trim(); };
+  const usuariosDe = function (role) { return usuarios.filter(function (u) { return roleDoUsuario(u) === role; }); };
+
+  // Aba/seleção sempre válidas (o setor pode sumir quando um rascunho é descartado).
+  R.useEffect(function () {
+    if (setores.indexOf(setorAtivo) < 0) setSetorAtivo(setores[0]);
+  }, [setores, setorAtivo]);
+  R.useEffect(function () {
+    const lista = classes.filter(function (c) { return c.setor === setorAtivo; });
+    if (!lista.some(function (c) { return c.role === selRole; })) setSelRole(lista.length ? lista[0].role : '');
+  }, [setorAtivo, classes, selRole]);
+
+  const sel = classes.filter(function (c) { return c.role === selRole; })[0] || null;
+  const ehRascunho = !!(sel && sel.rascunho);
+  // Baseline = verdade carregada do servidor (rascunho nasce vazio); troca de classe ou reload
+  // pós-save ressincroniza — no ERRO do POST nada disso roda e as marcas ficam intactas.
+  const baseline = (!sel || ehRascunho) ? [] : ((matriz && matriz[sel.role]) || []);
+  R.useEffect(function () {
+    setMarcadas(baseline.slice());
+    // baseline entra via matriz/selRole — objetos estáveis do estado
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selRole, matriz]);
+  // Feedback/confirm limpam SÓ na troca de classe — a releitura pós-salvar também muda `matriz`,
+  // e limpar ali apagaria o "Salvo." no mesmo flush em que ele nasce (medido no harness).
+  R.useEffect(function () { setFeedback(null); setConfirmando(false); }, [selRole]);
+
+  // Universo do sistema = união dos conjuntos de TODOS os papéis (dado real, convenção mista).
+  const universo = R.useMemo(function () {
+    if (!matriz) return [];
+    const s = new Set();
+    Object.keys(matriz).forEach(function (r) { (matriz[r] || []).forEach(function (k) { s.add(k); }); });
+    return Array.from(s).sort();
+  }, [matriz]);
+  // Linhas da matriz = BASES reais do universo, agrupadas pelo mesmo mapa visual da tela antiga.
+  const linhas = R.useMemo(function () {
+    const porBase = new Map();
+    universo.forEach(function (k) {
+      const b = permBaseDe(k);
+      if (!porBase.has(b)) porBase.set(b, new Set());
+      porBase.get(b).add(permSufDe(k));
+    });
+    const grupos = new Map();
+    Array.from(porBase.keys()).sort().forEach(function (b) {
+      const g = permGrupoDe(b);
+      if (!grupos.has(g)) grupos.set(g, []);
+      grupos.get(g).push({ base: b, sufs: porBase.get(b) });
+    });
+    const ordem = PERM_GRUPOS.map(function (g) { return g.grupo; }).concat(['Outras']);
+    return ordem.filter(function (g) { return grupos.has(g); }).map(function (g) { return { grupo: g, bases: grupos.get(g) }; });
+  }, [universo]);
+
+  const alternar = function (k) {
+    setMarcadas(function (m) { return m.indexOf(k) >= 0 ? m.filter(function (x) { return x !== k; }) : m.concat([k]); });
+  };
+  // Toggle de coluna, semântica do ref: todas as células EXISTENTES ligadas → desliga; senão liga.
+  const alternarColuna = function (suf) {
+    const chaves = [];
+    linhas.forEach(function (g) { g.bases.forEach(function (b) { if (b.sufs.has(suf)) chaves.push(permChave(b.base, suf)); }); });
+    setMarcadas(function (m) {
+      const todasOn = chaves.every(function (k) { return m.indexOf(k) >= 0; });
+      if (todasOn) return m.filter(function (k) { return chaves.indexOf(k) < 0; });
+      const n = m.slice();
+      chaves.forEach(function (k) { if (n.indexOf(k) < 0) n.push(k); });
+      return n;
+    });
+  };
+
+  const criarClasse = function () {
+    const slug = permMontaSlug(novaClasse, setorAtivo);
+    if (!slug) { setCriarErro('Nome inválido: a classe precisa de ao menos uma letra ou número.'); return; }
+    if (classes.some(function (c) { return c.role === slug; })) { setCriarErro('Já existe uma classe com o slug "' + slug + '".'); return; }
+    setCriarErro(null);
+    setDrafts(function (d) { const n = { ...d }; n[slug] = true; return n; });
+    setSetorAtivo(permSetorDe(slug));
+    setSelRole(slug);
+    setNovaClasse('');
+  };
+  const descartarRascunho = function () {
+    if (!sel || !ehRascunho) return;
+    setDrafts(function (d) { const n = { ...d }; delete n[sel.role]; return n; });
+  };
+
+  const addedNow = marcadas.filter(function (k) { return baseline.indexOf(k) < 0; }).sort();
+  const removedNow = baseline.filter(function (k) { return marcadas.indexOf(k) < 0; }).sort();
+  const dirty = ehRascunho ? true : (addedNow.length > 0 || removedNow.length > 0);
+  // Espelha o guard do backend: conjunto vazio de papel é barrado (removeria o papel da allowlist).
+  const vazioBloqueado = marcadas.length === 0;
+
+  const salvar = function () {
+    if (!sel) return;
+    setSalvando(true); setFeedback(null);
+    window.FRApi.post('/admin/permissions/roles', { role: sel.role, permissions: marcadas })
+      .then(function () {
+        // Recarrega do servidor (verdade autoritativa) — o baseline novo zera o dirty e o que a
+        // tela mostra depois do save é o que o GET devolveu, não o estado local.
+        return carregar(false).then(function () {
+          setFeedback({ kind: 'ok', msg: ehRascunho ? 'Classe criada no servidor.' : 'Salvo. Quem foi afetado foi deslogado e entra com o conjunto novo.' });
+          setConfirmando(false);   // fecha SÓ no sucesso
+        });
+      })
+      // Erro NÃO fecha o modal nem perde marca nenhuma: a mensagem aparece ali mesmo e o
+      // operador decide entre tentar de novo e cancelar (as marcas seguem no card).
+      .catch(function (e) { setFeedback({ kind: 'erro', msg: permErr(e) }); })
+      .then(function () { setSalvando(false); });
+  };
+
+  const moverUsuario = function (user, destino) {
+    setMovendo(true); setMoveErro(null);
+    window.FRApi.put('/users/' + user.id + '/role', { role: destino })
+      .then(function () { return carregar(false); })
+      .then(function () { setConfirmaMove(null); })
+      .catch(function (e) { setMoveErro(permErr(e)); })   // erro fica NO modal; nada se perde
+      .then(function () { setMovendo(false); });
+  };
+
+  const membros = sel ? usuariosDe(sel.role) : [];
+  const classesSalvas = classes.filter(function (c) { return !c.rascunho; });
+  const foraDoCard = usuarios.filter(function (u) { return !sel || roleDoUsuario(u) !== sel.role; });
+  const av = function (n) { return String(n || '?').split(' ').map(function (x) { return x[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase(); };
+  const resumo = PERM_COLS.map(function (c) {
+    return { ...c, n: marcadas.filter(function (k) { return permSufDe(k) === c.suf; }).length };
+  });
+  const sufsConhecidos = PERM_COLS.map(function (c) { return c.suf; });
+  const foraDasColunas = marcadas.filter(function (k) { return sufsConhecidos.indexOf(permSufDe(k)) < 0; });
+
+  // Excluir classe: NÃO EXISTE rota no backend v1 (o guard anti-vazio barra até o replace-all
+  // vazio), então o botão do design fica sempre desabilitado para classe salva — com o motivo
+  // certo em cada caso. Rascunho local pode ser descartado à vontade.
+  const motivoExcluir = ehRascunho
+    ? 'Descartar este rascunho (ainda não existe no servidor).'
+    : membros.length > 0
+      ? 'Bloqueado: mova ' + (membros.length === 1 ? 'o usuário' : 'os ' + membros.length + ' usuários') + ' desta classe antes de excluir.'
+      : 'Sem rota de remoção de papel no backend v1 — pendente de decisão (fila do Bruno).';
+
+  const field = { boxSizing: 'border-box', height: 40, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' };
+  const selStyle = { boxSizing: 'border-box', height: 38, borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 30px 0 11px', fontSize: 12.5, fontWeight: 700, fontFamily: 'inherit', appearance: 'none', WebkitAppearance: 'none', outline: 'none', cursor: 'pointer', maxWidth: 260 };
+
+  return (
+    <div>
+      {/* Abas de setor — DERIVADAS do prefixo do slug das classes; contagem = usuários do setor */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 22 }}>
+        {setores.map(function (s) {
+          const on = setorAtivo === s;
+          const n = usuarios.filter(function (u) { return permSetorDe(roleDoUsuario(u)) === s; }).length;
+          return (
+            <button key={s} onClick={function () { setSetorAtivo(s); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 16px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: on ? t.accent : t.panel, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}`, boxShadow: on ? `0 4px 12px ${frHexToRgba(t.accent, 0.25)}` : 'none' }}>
+              <Icon name="briefcase" size={15} /> {s}
+              <span style={{ fontSize: 11, fontWeight: 800, padding: '1px 7px', borderRadius: 7, background: on ? 'rgba(255,255,255,.25)' : t.hover, color: on ? t.onAccent : t.muted }}>{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Classes de acesso · {setorAtivo}</span>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={novaClasse} onChange={function (e) { setNovaClasse(e.target.value); if (criarErro) setCriarErro(null); }} onKeyDown={function (e) { if (e.key === 'Enter') criarClasse(); }} placeholder="Nova classe…" style={{ ...field, width: 180 }} />
+          <button onClick={criarClasse} disabled={!novaClasse.trim()} style={{ all: 'unset', cursor: novaClasse.trim() ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6, height: 40, padding: '0 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: novaClasse.trim() ? t.accent : t.elevated, color: novaClasse.trim() ? t.onAccent : t.faint }}><Icon name="plus" size={15} /> Criar</button>
+        </div>
+      </div>
+      {criarErro && <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg, marginBottom: 10 }}>{criarErro}</div>}
+
+      {/* Pills de classes do setor ativo */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        {classesDoSetor.map(function (c) {
+          const on = selRole === c.role;
+          const n = usuariosDe(c.role).length;
+          return (
+            <button key={c.role} onClick={function () { setSelRole(c.role); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 38, padding: '0 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: on ? t.accentSoft : t.panel, color: on ? t.accentText : t.muted, border: `1.5px solid ${on ? frHexToRgba(t.accent, 0.5) : t.border}` }}>
+              <Icon name="shield" size={14} /> {c.nome}
+              {c.rascunho
+                ? <span style={{ fontSize: 10, fontWeight: 800, padding: '1px 7px', borderRadius: 7, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg }}>nova</span>
+                : <span style={{ fontSize: 11, fontWeight: 800, padding: '1px 7px', borderRadius: 7, background: t.hover, color: t.muted }}>{n}</span>}
+            </button>
+          );
+        })}
+        {classesDoSetor.length === 0 && <span style={{ fontSize: 12.5, color: t.muted }}>Nenhuma classe neste setor — crie a primeira em "Nova classe…".</span>}
+      </div>
+
+      {sel && (
+        <Card t={t} style={{ overflow: 'hidden', border: `1px solid ${frHexToRgba(t.accent, 0.4)}` }}>
+          {/* Cabeçalho do card: identidade da classe + resumo por ação + excluir */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '16px 18px', flexWrap: 'wrap' }}>
+            <span style={{ width: 38, height: 38, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="shield" size={19} /></span>
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {sel.nome}
+                {ehRascunho && <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 7, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg }}>não salva ainda</span>}
+              </div>
+              <div style={{ fontSize: 11.5, color: t.muted }}>
+                <span style={{ fontFamily: 'ui-monospace, monospace' }}>{sel.role}</span>
+                {' · '}{membros.length} {membros.length === 1 ? 'usuário' : 'usuários'} · {marcadas.length} {marcadas.length === 1 ? 'chave marcada' : 'chaves marcadas'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {resumo.map(function (c) { return <span key={c.suf || 'acesso'} title={c.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, padding: '4px 8px', borderRadius: 7, background: t.hover, color: t.muted }}><Icon name={c.icon} size={12} /> {c.n}</span>; })}
+            </div>
+            <button onClick={function () { if (ehRascunho) descartarRascunho(); }} disabled={!ehRascunho} title={motivoExcluir}
+              style={{ all: 'unset', cursor: ehRascunho ? 'pointer' : 'not-allowed', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: ehRascunho ? uiTone(t, 'red').fg : t.faint, opacity: ehRascunho ? 1 : 0.55, flexShrink: 0 }}>
+              <Icon name="trash" size={15} />
+            </button>
+          </div>
+
+          {/* Matriz página×ação — linhas = bases REAIS do universo do GET; célula só onde a chave existe */}
+          <div style={{ borderTop: `1px solid ${t.border}`, overflowX: 'auto' }} className="fr-scroll">
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '12px 18px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}` }}>Página</th>
+                  {PERM_COLS.map(function (c) {
+                    return (
+                      <th key={c.suf || 'acesso'} style={{ padding: '10px 8px', borderBottom: `1px solid ${t.border}`, textAlign: 'center', minWidth: 76 }}>
+                        <button onClick={function () { alternarColuna(c.suf); }} title={`Marcar/desmarcar ${c.label} em todas as páginas`} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: t.text }}>
+                          <Icon name={c.icon} size={15} style={{ color: t.accentText }} />
+                          <span style={{ fontSize: 10.5, fontWeight: 800 }}>{c.label}</span>
+                        </button>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map(function (g) {
+                  return (
+                    <React.Fragment key={g.grupo}>
+                      <tr><td colSpan={1 + PERM_COLS.length} style={{ padding: '10px 18px 6px', fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint, background: t.elevated }}>{g.grupo}</td></tr>
+                      {g.bases.map(function (b) {
+                        return (
+                          <tr key={b.base}>
+                            <td style={{ padding: '10px 18px', borderBottom: `1px solid ${t.border}`, whiteSpace: 'nowrap' }}>
+                              <div style={{ fontSize: 13.5, fontWeight: 600, color: t.text }}>{permLabelDe(b.base)}</div>
+                              {permLabelDe(b.base) !== b.base && <div style={{ fontSize: 10.5, color: t.faint, fontFamily: 'ui-monospace, monospace' }}>{b.base}</div>}
+                            </td>
+                            {PERM_COLS.map(function (c) {
+                              const k = permChave(b.base, c.suf);
+                              if (!b.sufs.has(c.suf)) {
+                                return <td key={c.suf || 'acesso'} style={{ padding: 8, textAlign: 'center', borderBottom: `1px solid ${t.border}` }}><span title={`Sem permissão configurável — a chave ${k} não existe no backend`} style={{ color: t.faint, fontSize: 12 }}>—</span></td>;
+                              }
+                              const on = marcadas.indexOf(k) >= 0;
+                              const mudou = (baseline.indexOf(k) >= 0) !== on;
+                              return (
+                                <td key={c.suf || 'acesso'} style={{ padding: 8, textAlign: 'center', borderBottom: `1px solid ${t.border}`, background: mudou ? uiTone(t, 'amber').bg : 'transparent' }}>
+                                  <PermToggle t={t} on={on} onClick={function () { alternar(k); }} title={k} />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Barra de salvar — EXPLÍCITO por classe; toggle nunca chama rede */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '14px 18px', borderTop: `1px solid ${t.border}` }}>
+            <Btn t={t} icon="check" kind={dirty && !vazioBloqueado ? 'primary' : 'ghost'} onClick={function () { if (dirty && !vazioBloqueado && !salvando) setConfirmando(true); }}>
+              {salvando ? 'Salvando…' : ehRascunho ? 'Salvar (criar classe)' : 'Salvar'}
+            </Btn>
+            {dirty && !ehRascunho && <Btn t={t} icon="undo" kind="ghost" onClick={function () { setMarcadas(baseline.slice()); }}>Desfazer</Btn>}
+            {dirty && !vazioBloqueado && (
+              <span style={{ fontSize: 12.5, color: t.muted }}>
+                {addedNow.length > 0 ? `+${addedNow.length} concedida(s)` : ''}{addedNow.length > 0 && removedNow.length > 0 ? ' · ' : ''}{removedNow.length > 0 ? `−${removedNow.length} revogada(s)` : ''}
+              </span>
+            )}
+            {vazioBloqueado && (
+              <span style={{ fontSize: 12.5, color: uiTone(t, 'red').fg, fontWeight: 700 }}>
+                {ehRascunho
+                  ? 'Marque ao menos uma chave para criar a classe (o backend barra conjunto vazio).'
+                  : 'Conjunto vazio não é permitido: removeria o papel da allowlist (remoção de papel não existe na v1).'}
+              </span>
+            )}
+            {foraDasColunas.length > 0 && (
+              <span style={{ fontSize: 12, color: t.muted }} title={foraDasColunas.join(', ')}>
+                {foraDasColunas.length} chave(s) fora das colunas — preservada(s) no salvar.
+              </span>
+            )}
+            {feedback && (!dirty || feedback.kind === 'erro') && (
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.kind === 'ok' ? uiTone(t, 'green').fg : uiTone(t, 'red').fg }}>{feedback.msg}</span>
+            )}
+          </div>
+
+          {/* Usuários da classe — mover sai/entra pelo PUT /users/:id/role real, com confirmação */}
+          <div style={{ borderTop: `1px solid ${t.border}`, padding: '14px 18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <Icon name="users" size={14} style={{ color: t.accentText }} />
+              <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>Usuários desta classe</span>
+              <span style={{ fontSize: 11, color: t.faint }}>· mover troca o cargo real e desloga o usuário na hora</span>
+            </div>
+            {ehRascunho ? (
+              <div style={{ fontSize: 12.5, color: t.muted }}>Salve a classe primeiro — a allowlist do backend só aceita mover usuários para papéis que existem na matriz.</div>
+            ) : (
+              <div>
+                {membros.length === 0 && <div style={{ fontSize: 12.5, color: t.muted, padding: '4px 0 10px' }}>Nenhum usuário nesta classe.</div>}
+                {membros.map(function (u, ui) {
+                  return (
+                    <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '10px 2px', borderBottom: ui === membros.length - 1 ? 'none' : `1px solid ${t.border}` }}>
+                      <span style={{ width: 36, height: 36, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>{av(u.name)}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: t.muted }}>{u.sector && u.sector !== '-' ? u.sector : sel.nome}</div>
+                      </div>
+                      <div style={{ position: 'relative' }}>
+                        <select value={sel.role} disabled={movendo} onChange={function (e) { if (e.target.value !== sel.role) setConfirmaMove({ user: u, destino: e.target.value }); }} style={selStyle}>
+                          {classesSalvas.map(function (c) { return <option key={c.role} value={c.role}>{c.setor !== 'Geral' ? c.setor + ' — ' : ''}{c.nome}</option>; })}
+                        </select>
+                        <Icon name="chevronDown" size={14} style={{ position: 'absolute', right: 10, top: 12, color: t.muted, pointerEvents: 'none' }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 10, flexWrap: 'wrap' }}>
+                  <div style={{ position: 'relative' }}>
+                    <select value="" disabled={movendo} onChange={function (e) { const u = foraDoCard.filter(function (x) { return x.id === e.target.value; })[0]; if (u) setConfirmaMove({ user: u, destino: sel.role }); }} style={{ ...selStyle, maxWidth: 320 }}>
+                      <option value="">Trazer usuário para esta classe…</option>
+                      {foraDoCard.map(function (u) { return <option key={u.id} value={u.id}>{u.name} · {permClasseNomeDe(roleDoUsuario(u))}</option>; })}
+                    </select>
+                    <Icon name="chevronDown" size={14} style={{ position: 'absolute', right: 10, top: 12, color: t.muted, pointerEvents: 'none' }} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* Confirmação do salvar — replace-all com efeito real nomeado (logout de quem for afetado) */}
+      {confirmando && sel && (
+        <div onClick={function () { if (!salvando) setConfirmando(false); }} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={function (e) { e.stopPropagation(); }} style={{ width: 'min(460px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 11, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={20} /></span>
+              <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>{ehRascunho ? 'Criar classe no servidor' : 'Confirmar alteração de acesso'}</div>
+            </div>
+            <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5, marginBottom: 8 }}>
+              {ehRascunho
+                ? `Criar a classe ${sel.nome} (${sel.role}) com ${marcadas.length} ${marcadas.length === 1 ? 'chave marcada' : 'chaves marcadas'}? Ela nasce sem usuários — mover gente para ela é o passo seguinte.`
+                : `Salvar desloga imediatamente todos os usuários da classe ${sel.nome} (precisarão entrar de novo).`}
+            </div>
+            <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 18 }}>
+              {addedNow.length > 0 && <div>Concede: {addedNow.join(', ')}</div>}
+              {removedNow.length > 0 && <div>Revoga: {removedNow.join(', ')}</div>}
+            </div>
+            {feedback && feedback.kind === 'erro' && (
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg, marginBottom: 14 }}>{feedback.msg}</div>
+            )}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <Btn t={t} kind="ghost" onClick={function () { if (!salvando) setConfirmando(false); }}>Cancelar</Btn>
+              <Btn t={t} icon="check" onClick={function () { if (!salvando) salvar(); }}>{salvando ? 'Salvando…' : ehRascunho ? 'Criar e salvar' : 'Confirmar e salvar'}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmação do mover — PUT /users/:id/role desloga o alvo (padrão da tela Usuários) */}
+      {confirmaMove && (
+        <div onClick={function () { if (!movendo) { setConfirmaMove(null); setMoveErro(null); } }} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+          <div onClick={function (e) { e.stopPropagation(); }} style={{ width: 'min(460px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, padding: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <span style={{ width: 40, height: 40, borderRadius: 11, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={20} /></span>
+              <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>Confirmar troca de classe</div>
+            </div>
+            <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5, marginBottom: 18 }}>
+              Mover <b>{confirmaMove.user.name}</b> para a classe <b>{permClasseNomeDe(confirmaMove.destino)}</b> (<span style={{ fontFamily: 'ui-monospace, monospace' }}>{confirmaMove.destino}</span>) desloga o usuário imediatamente — ele entra de novo já com os acessos da classe nova.
+            </div>
+            {moveErro && (
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg, marginBottom: 14 }}>{moveErro}</div>
+            )}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <Btn t={t} kind="ghost" onClick={function () { if (!movendo) { setConfirmaMove(null); setMoveErro(null); } }}>Cancelar</Btn>
+              <Btn t={t} icon="check" onClick={function () { if (!movendo) moverUsuario(confirmaMove.user, confirmaMove.destino); }}>{movendo ? 'Movendo…' : 'Confirmar e mover'}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Aba "Exceções por usuário" — comportamento PRESERVADO da tela anterior (regressão):
+// checklist flat do universo, replace-all por usuário, vazio é legítimo (= sem exceções). ──
+function PermExcecoes({ t, matriz, excecoes, usuarios, carregar }) {
+  const R = window.React;
   const [usuarioId, setUsuarioId] = R.useState('');
   const [marcadas, setMarcadas] = R.useState([]);
   const [confirmando, setConfirmando] = R.useState(false);
   const [salvando, setSalvando] = R.useState(false);
   const [feedback, setFeedback] = R.useState(null); // { kind: 'ok'|'erro', msg }
 
-  const carregar = R.useCallback(function (inicial) {
-    if (inicial) setLoading(true);
-    setError(null);
-    return Promise.all([
-      window.FRApi.get('/admin/permissions/roles', { skipLoading: true }),
-      window.FRApi.get('/admin/permissions/users', { skipLoading: true }),
-      window.FRApi.get('/users', { skipLoading: true }),
-    ]).then(function (rs) {
-      setMatriz(rs[0].data || {});
-      setExcecoes(rs[1].data || {});
-      setUsuarios(Array.isArray(rs[2].data) ? rs[2].data.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }) : []);
-      if (inicial) setLoading(false);
-    }).catch(function (e) { setError(permErr(e)); if (inicial) setLoading(false); });
-  }, []);
-  R.useEffect(function () { carregar(true); }, [carregar]);
-
-  // Defaults após o primeiro load: primeiro papel em ordem alfabética / primeiro usuário por nome.
-  R.useEffect(function () {
-    if (matriz && !papel) { const rs = Object.keys(matriz).sort(); if (rs.length) setPapel(rs[0]); }
-  }, [matriz, papel]);
   R.useEffect(function () {
     if (usuarios.length > 0 && !usuarioId) setUsuarioId(usuarios[0].id);
   }, [usuarios, usuarioId]);
 
-  // Baseline = verdade carregada do servidor; troca de alvo/aba (ou reload pós-save) ressincroniza.
-  const baseline = aba === 'papeis' ? ((matriz && matriz[papel]) || []) : ((excecoes && excecoes[usuarioId]) || []);
+  // Baseline = verdade carregada do servidor; troca de alvo (ou reload pós-save) ressincroniza.
+  const baseline = (excecoes && excecoes[usuarioId]) || [];
   R.useEffect(function () {
     setMarcadas(baseline.slice());
-    setFeedback(null);
-    // baseline entra via matriz/excecoes/papel/usuarioId — strings/objetos estáveis do estado
+    // baseline entra via excecoes/usuarioId — objetos estáveis do estado
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aba, papel, usuarioId, matriz, excecoes]);
+  }, [usuarioId, excecoes]);
+  // Feedback limpa SÓ na troca de usuário — a releitura pós-salvar também muda `excecoes`,
+  // e limpar ali apagaria o "Salvo." no mesmo flush em que ele nasce (medido no harness).
+  R.useEffect(function () { setFeedback(null); }, [usuarioId]);
 
   // Universo do checklist = união dos conjuntos de TODOS os papéis (dado real, flat).
   const universo = R.useMemo(function () {
@@ -1922,9 +2404,6 @@ function PagePermissoesReal({ t }) {
   const addedNow = marcadas.filter(function (k) { return baseline.indexOf(k) < 0; }).sort();
   const removedNow = baseline.filter(function (k) { return marcadas.indexOf(k) < 0; }).sort();
   const dirty = addedNow.length > 0 || removedNow.length > 0;
-  // Espelha o guard do backend: conjunto vazio de PAPEL removeria o papel da allowlist — a UI
-  // nem deixa tentar (no espelho por usuário, vazio é legítimo = sem exceções).
-  const vazioBloqueado = aba === 'papeis' && marcadas.length === 0;
 
   const alternar = function (k) {
     setMarcadas(function (m) { return m.indexOf(k) >= 0 ? m.filter(function (x) { return x !== k; }) : m.concat([k]); });
@@ -1935,117 +2414,76 @@ function PagePermissoesReal({ t }) {
 
   const salvar = function () {
     setSalvando(true); setFeedback(null);
-    const req = aba === 'papeis'
-      ? window.FRApi.post('/admin/permissions/roles', { role: papel, permissions: marcadas })
-      : window.FRApi.post('/admin/permissions/users', { userId: usuarioId, permissions: marcadas });
-    req.then(function () {
-      // Recarrega do servidor (verdade autoritativa) — o baseline novo zera o dirty.
-      return carregar(false).then(function () {
-        setFeedback({ kind: 'ok', msg: 'Salvo. Quem foi afetado foi deslogado e entra com o conjunto novo.' });
-      });
-    }).catch(function (e) {
-      setFeedback({ kind: 'erro', msg: permErr(e) });
-    }).then(function () { setSalvando(false); setConfirmando(false); });
+    window.FRApi.post('/admin/permissions/users', { userId: usuarioId, permissions: marcadas })
+      .then(function () {
+        // Recarrega do servidor (verdade autoritativa) — o baseline novo zera o dirty.
+        return carregar(false).then(function () {
+          setFeedback({ kind: 'ok', msg: 'Salvo. Quem foi afetado foi deslogado e entra com o conjunto novo.' });
+        });
+      })
+      .catch(function (e) { setFeedback({ kind: 'erro', msg: permErr(e) }); })
+      .then(function () { setSalvando(false); setConfirmando(false); });
   };
 
   const selStyle = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 32px 0 13px', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', appearance: 'none', WebkitAppearance: 'none', outline: 'none', cursor: 'pointer', maxWidth: 320 };
-  const tabBtn = function (on) { return { all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 16px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: on ? t.accent : t.panel, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }; };
 
   return (
     <div>
-      <PageHeader t={t} title="Permissões" subtitle="Matriz de acesso por cargo e exceções por usuário — direto do banco, salvar aplica na hora."
-        actions={<Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Atualizar</Btn>} />
-
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        <button onClick={() => setAba('papeis')} style={tabBtn(aba === 'papeis')}><Icon name="shield" size={15} /> Papéis</button>
-        <button onClick={() => setAba('excecoes')} style={tabBtn(aba === 'excecoes')}><Icon name="key" size={15} /> Exceções por usuário</button>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+        <div style={{ position: 'relative' }}>
+          <select value={usuarioId} onChange={(e) => setUsuarioId(e.target.value)} style={selStyle}>
+            {usuarios.map((u) => <option key={u.id} value={u.id}>{u.name} · {roleLabel(u.role)}</option>)}
+          </select>
+          <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
+        </div>
+        <span style={{ fontSize: 12.5, color: t.muted }}>
+          {`${marcadas.length} exceção(ões) — além do que o cargo ${usuarioAlvo ? roleLabel(usuarioAlvo.role) : ''} já concede`}
+        </span>
       </div>
 
-      {loading ? (
-        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando matriz de permissões…</Card>
-      ) : error ? (
-        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
-          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
-          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(true)}>Tentar novamente</Btn>
-        </Card>
-      ) : (
-        <div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
-            {aba === 'papeis' ? (
-              <div style={{ position: 'relative' }}>
-                <select value={papel} onChange={(e) => setPapel(e.target.value)} style={selStyle}>
-                  {Object.keys(matriz || {}).sort().map((r) => {
-                    const lbl = roleLabel(r);
-                    return <option key={r} value={r}>{lbl === r ? r : `${lbl} (${r})`}</option>;
-                  })}
-                </select>
-                <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
-              </div>
-            ) : (
-              <div style={{ position: 'relative' }}>
-                <select value={usuarioId} onChange={(e) => setUsuarioId(e.target.value)} style={selStyle}>
-                  {usuarios.map((u) => <option key={u.id} value={u.id}>{u.name} · {roleLabel(u.role)}</option>)}
-                </select>
-                <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 14, color: t.muted, pointerEvents: 'none' }} />
-              </div>
-            )}
-            <span style={{ fontSize: 12.5, color: t.muted }}>
-              {aba === 'papeis'
-                ? `${marcadas.length} de ${universo.length} chaves marcadas`
-                : `${marcadas.length} exceção(ões) — além do que o cargo ${usuarioAlvo ? roleLabel(usuarioAlvo.role) : ''} já concede`}
-            </span>
-          </div>
+      <Card t={t} style={{ padding: 8, marginBottom: 14 }}>
+        {grupos.map((g) => (
+          <React.Fragment key={g.grupo}>
+            <div style={{ padding: '12px 14px 6px', fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint, background: t.elevated, borderRadius: 8 }}>{g.grupo}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2, padding: '6px 4px 10px' }}>
+              {g.keys.map((k) => {
+                const on = marcadas.indexOf(k) >= 0;
+                const mudou = (baseline.indexOf(k) >= 0) !== on;
+                return (
+                  <div key={k} onClick={() => alternar(k)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 10, cursor: 'pointer', background: mudou ? uiTone(t, 'amber').bg : 'transparent', transition: 'background .12s' }}
+                    onMouseEnter={(e) => { if (!mudou) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { if (!mudou) e.currentTarget.style.background = 'transparent'; }}>
+                    <span style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, display: 'grid', placeItems: 'center', background: on ? uiTone(t, 'green').fg : t.hover, color: on ? '#fff' : t.faint, border: `1px solid ${on ? 'transparent' : t.border}` }}>
+                      <Icon name={on ? 'check' : 'x'} size={13} />
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{permLabelDe(k)}</div>
+                      {permLabelDe(k) !== k && <div style={{ fontSize: 10.5, color: t.faint, fontFamily: 'ui-monospace, monospace' }}>{k}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </React.Fragment>
+        ))}
+      </Card>
 
-          <Card t={t} style={{ padding: 8, marginBottom: 14 }}>
-            {grupos.map((g) => (
-              <React.Fragment key={g.grupo}>
-                <div style={{ padding: '12px 14px 6px', fontSize: 10, fontWeight: 800, letterSpacing: '.1em', textTransform: 'uppercase', color: t.faint, background: t.elevated, borderRadius: 8 }}>{g.grupo}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2, padding: '6px 4px 10px' }}>
-                  {g.keys.map((k) => {
-                    const on = marcadas.indexOf(k) >= 0;
-                    const mudou = (baseline.indexOf(k) >= 0) !== on;
-                    return (
-                      <div key={k} onClick={() => alternar(k)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 10, cursor: 'pointer', background: mudou ? uiTone(t, 'amber').bg : 'transparent', transition: 'background .12s' }}
-                        onMouseEnter={(e) => { if (!mudou) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { if (!mudou) e.currentTarget.style.background = 'transparent'; }}>
-                        <span style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, display: 'grid', placeItems: 'center', background: on ? uiTone(t, 'green').fg : t.hover, color: on ? '#fff' : t.faint, border: `1px solid ${on ? 'transparent' : t.border}` }}>
-                          <Icon name={on ? 'check' : 'x'} size={13} />
-                        </span>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{permLabelDe(k)}</div>
-                          {permLabelDe(k) !== k && <div style={{ fontSize: 10.5, color: t.faint, fontFamily: 'ui-monospace, monospace' }}>{k}</div>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </React.Fragment>
-            ))}
-          </Card>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <Btn t={t} icon="check" kind={dirty && !vazioBloqueado ? 'primary' : 'ghost'} onClick={() => { if (dirty && !vazioBloqueado && !salvando) setConfirmando(true); }}>
-              {salvando ? 'Salvando…' : 'Salvar'}
-            </Btn>
-            {dirty && <Btn t={t} icon="undo" kind="ghost" onClick={() => setMarcadas(baseline.slice())}>Desfazer</Btn>}
-            {dirty && !vazioBloqueado && (
-              <span style={{ fontSize: 12.5, color: t.muted }}>
-                {addedNow.length > 0 ? `+${addedNow.length} concedida(s)` : ''}{addedNow.length > 0 && removedNow.length > 0 ? ' · ' : ''}{removedNow.length > 0 ? `−${removedNow.length} revogada(s)` : ''}
-              </span>
-            )}
-            {vazioBloqueado && (
-              <span style={{ fontSize: 12.5, color: uiTone(t, 'red').fg, fontWeight: 700 }}>
-                Conjunto vazio não é permitido: removeria o papel da allowlist (remoção de papel não existe na v1).
-              </span>
-            )}
-            {!dirty && feedback && (
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.kind === 'ok' ? uiTone(t, 'green').fg : uiTone(t, 'red').fg }}>{feedback.msg}</span>
-            )}
-            {dirty && feedback && feedback.kind === 'erro' && (
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{feedback.msg}</span>
-            )}
-          </div>
-        </div>
-      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <Btn t={t} icon="check" kind={dirty ? 'primary' : 'ghost'} onClick={() => { if (dirty && !salvando) setConfirmando(true); }}>
+          {salvando ? 'Salvando…' : 'Salvar'}
+        </Btn>
+        {dirty && <Btn t={t} icon="undo" kind="ghost" onClick={() => setMarcadas(baseline.slice())}>Desfazer</Btn>}
+        {dirty && (
+          <span style={{ fontSize: 12.5, color: t.muted }}>
+            {addedNow.length > 0 ? `+${addedNow.length} concedida(s)` : ''}{addedNow.length > 0 && removedNow.length > 0 ? ' · ' : ''}{removedNow.length > 0 ? `−${removedNow.length} revogada(s)` : ''}
+          </span>
+        )}
+        {!dirty && feedback && (
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.kind === 'ok' ? uiTone(t, 'green').fg : uiTone(t, 'red').fg }}>{feedback.msg}</span>
+        )}
+        {dirty && feedback && feedback.kind === 'erro' && (
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>{feedback.msg}</span>
+        )}
+      </div>
 
       {confirmando && (
         <div onClick={() => !salvando && setConfirmando(false)} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
@@ -2055,9 +2493,7 @@ function PagePermissoesReal({ t }) {
               <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text }}>Confirmar alteração de acesso</div>
             </div>
             <div style={{ fontSize: 13.5, color: t.text, lineHeight: 1.5, marginBottom: 8 }}>
-              {aba === 'papeis'
-                ? `Salvar desloga imediatamente todos os usuários do cargo ${papel} (precisarão entrar de novo).`
-                : `Salvar desloga imediatamente ${usuarioAlvo ? usuarioAlvo.name : 'o usuário'} (precisará entrar de novo).`}
+              {`Salvar desloga imediatamente ${usuarioAlvo ? usuarioAlvo.name : 'o usuário'} (precisará entrar de novo).`}
             </div>
             <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 18 }}>
               {addedNow.length > 0 && <div>Concede: {addedNow.join(', ')}</div>}
@@ -2069,6 +2505,59 @@ function PagePermissoesReal({ t }) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function PagePermissoesReal({ t }) {
+  const R = window.React;
+  const [aba, setAba] = R.useState('classes'); // 'classes' | 'excecoes'
+  const [matriz, setMatriz] = R.useState(null);     // GET /roles → { role: keys[] }
+  const [excecoes, setExcecoes] = R.useState(null); // GET /users (permissions) → { user_id: keys[] }
+  const [usuarios, setUsuarios] = R.useState([]);   // GET /users (contas)
+  const [loading, setLoading] = R.useState(true);
+  const [error, setError] = R.useState(null);
+
+  const carregar = R.useCallback(function (inicial) {
+    if (inicial) setLoading(true);
+    setError(null);
+    return Promise.all([
+      window.FRApi.get('/admin/permissions/roles', { skipLoading: true }),
+      window.FRApi.get('/admin/permissions/users', { skipLoading: true }),
+      window.FRApi.get('/users', { skipLoading: true }),
+    ]).then(function (rs) {
+      setMatriz(rs[0].data || {});
+      setExcecoes(rs[1].data || {});
+      setUsuarios(Array.isArray(rs[2].data) ? rs[2].data.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }) : []);
+      if (inicial) setLoading(false);
+    }).catch(function (e) { setError(permErr(e)); if (inicial) setLoading(false); });
+  }, []);
+  R.useEffect(function () { carregar(true); }, [carregar]);
+
+  const tabBtn = function (on) { return { all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 16px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, background: on ? t.accent : t.panel, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }; };
+
+  return (
+    <div>
+      <PageHeader t={t} title="Permissões" subtitle="Classes de acesso por setor e exceções por usuário — direto do banco, salvar aplica na hora."
+        actions={<Btn t={t} kind="ghost" icon="refresh" onClick={() => carregar(true)}>Atualizar</Btn>} />
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+        <button onClick={() => setAba('classes')} style={tabBtn(aba === 'classes')}><Icon name="shield" size={15} /> Classes de acesso</button>
+        <button onClick={() => setAba('excecoes')} style={tabBtn(aba === 'excecoes')}><Icon name="key" size={15} /> Exceções por usuário</button>
+      </div>
+
+      {loading ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando matriz de permissões…</Card>
+      ) : error ? (
+        <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
+          <Btn t={t} icon="refresh" kind="ghost" onClick={() => carregar(true)}>Tentar novamente</Btn>
+        </Card>
+      ) : aba === 'classes' ? (
+        <PermClasses t={t} matriz={matriz} usuarios={usuarios} carregar={carregar} />
+      ) : (
+        <PermExcecoes t={t} matriz={matriz} excecoes={excecoes} usuarios={usuarios} carregar={carregar} />
       )}
     </div>
   );
