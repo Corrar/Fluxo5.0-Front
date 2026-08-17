@@ -1877,6 +1877,12 @@ function PageConfronto({ t }) {
   const cur = trips.find((x) => x.id === openId) || null;
   const confrontoTrip = trips.find((x) => x.id === confrontoId) || null;
   const stageMeta = { pending: ['Em viagem', 'blue'], reconciled: ['Finalizada', 'green'] };
+  const [fStage, setFStage] = useStateR(null);
+  const [busca, setBusca] = useStateR('');
+  const bq = busca.trim().toLowerCase();
+  // Busca CLIENT-SIDE sobre o que já está carregado (A3): destino + técnicos.
+  // Origem NÃO entra — a coluna não existe no backend (F2).
+  const view = trips.filter((tr) => (!fStage || tr.stage === fStage) && (!bq || [tr.destino].concat(tr.tecnicos).join(' ').toLowerCase().includes(bq)));
   // Roster sugerido = nomes já usados nas viagens existentes (nunca nomes inventados).
   const rosterSeed = React.useMemo(() => {
     const s = new Set();
@@ -1911,13 +1917,27 @@ function PageConfronto({ t }) {
     <div>
       <PageHeader t={t} title="Confronto de Viagens" subtitle="Registre a saída do material, acompanhe a viagem e faça o confronto do retorno."
         actions={<><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}>Registrar saída</Btn></>} />
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <KPI t={t} mini icon="truck" label="Em viagem" value={trips.filter((x) => !x.done).length} kind="blue" />
-        <KPI t={t} mini icon="check" label="Finalizadas" value={trips.filter((x) => x.done).length} kind="green" />
+      {/* KPI clicável como filtro de estágio (A4, gabarito ref21:1941-1945) — UM por estágio REAL */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+        {[['pending', 'truck', 'Em viagem', 'blue'], ['reconciled', 'check', 'Finalizadas', 'green']].map(([st, ic, lb, kd]) => (
+          <div key={st} onClick={() => setFStage(fStage === st ? null : st)} style={{ cursor: 'pointer', borderRadius: 16, outline: fStage === st ? `2px solid ${uiTone(t, kd).fg}` : 'none', outlineOffset: 2 }} title={fStage === st ? 'Limpar filtro' : 'Filtrar por ' + lb}>
+            <KPI t={t} mini icon={ic} label={lb} value={trips.filter((x) => x.stage === st).length} kind={kd} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 260px', maxWidth: 440, height: 44, padding: '0 14px', borderRadius: 12, background: t.panel, border: `1px solid ${busca ? t.accent : t.border}`, color: t.muted, cursor: 'text', transition: 'border-color .15s' }}>
+          <Icon name="search" size={16} />
+          <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar por destino ou técnico…" style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 13.5, fontFamily: 'inherit' }} />
+          {busca && <button onClick={() => setBusca('')} style={{ all: 'unset', cursor: 'pointer', display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={14} /></button>}
+        </label>
+        {fStage && <button onClick={() => setFStage(null)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, padding: '7px 13px', borderRadius: 999, background: t.accentSoft, color: t.accentText }}>{stageMeta[fStage][0]} <Icon name="x" size={13} /></button>}
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: t.faint, fontWeight: 600 }}>{view.length} de {trips.length} viagens</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
         {trips.length === 0 && <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nenhuma viagem" sub="Registre uma saída para reservar material e acompanhar o confronto." /></Card></div>}
-        {trips.map((tr) => {
+        {trips.length > 0 && view.length === 0 && <Card t={t} style={{ gridColumn: '1/-1', padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>Nenhuma viagem encontrada.</Card>}
+        {view.map((tr) => {
           const sm = stageMeta[tr.stage];
           const emViagem = !tr.done;
           return (
