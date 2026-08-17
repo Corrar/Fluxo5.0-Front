@@ -1,13 +1,22 @@
-// lib/access.js — GATE DE MÓDULOS (PROVISÓRIO) da camada de fundação.
+// lib/access.js — GATE DE MÓDULOS da camada de fundação.
 //
-// ⚠️ FONTE PROVISÓRIA E AUTORAL. O backend (branch 002-FR5.0) NÃO tem conceito
-// de "módulo" — só `page_keys` de Estoque. Então, enquanto não existe o painel
-// de permissões do admin (grupos/cargos/módulos), o acesso aos módulos é
-// resolvido por este mapa role -> módulos, mantido AQUI e em nenhum outro lugar.
+// A SUBSTITUIÇÃO FUTURA prometida no cabeçalho antigo ACONTECEU AQUI (rodada módulos-por-
+// classe): a fonte do gate agora é a família de chaves `modulo:<id>` em role_permissions,
+// lida das PERMISSÕES EFETIVAS do usuário (role ∪ exceções, o array do login) — nenhuma
+// migration, é page_key como as outras, configurada na tela Permissões (faixa "Acesso aos
+// módulos"). Assinatura consumida pelas telas (window.FRAuth.canAccessModule) intacta.
 //
-// SUBSTITUIÇÃO FUTURA: quando o backend expuser módulos por cargo/usuário, troca-se
-// SÓ este arquivo (o mapa e/ou as funções). A assinatura consumida pelas telas
-// (window.FRAuth.canAccessModule / window.FRAccess) NÃO muda. Não tocar nas telas.
+// REGRA (canAccessModuleEfetivo):
+//   • admin → tudo (bypass como sempre foi);
+//   • QUALQUER chave modulo:* presente nas permissões efetivas liga o MODO ESTRITO:
+//     módulo acende SÓ com a chave dele (fail-closed — sem chave, não acende);
+//   • NENHUMA chave modulo:* → FALLBACK TRANSITÓRIO no mapa autoral ROLE_MODULES abaixo,
+//     para ninguém perder acesso no deploy (transição sem apagão: a tela Permissões
+//     pré-marca os chips pelo mapa e o admin confirma salvando — o papel ganha as chaves).
+//
+// ⚠️ REMOÇÃO PLANEJADA DO FALLBACK (e do mapa ROLE_MODULES): 30/09/2026, ou assim que os
+// 15 papéis tiverem chaves modulo:* salvas — o que vier primeiro. Até lá o mapa é só rede
+// de transição, não fonte.
 //
 // IDs de módulo = exatamente os de parts/data.jsx (MODULES[].id).
 
@@ -23,7 +32,18 @@ export const ALL_MODULE_IDS = [
   'financeiro',   // Financeiro
 ];
 
-// Mapa AUTORAL role(profiles.role) -> módulos visíveis.
+// Família de chaves de módulo em role_permissions/user_permissions (sem migration —
+// é page_key normal). 'modulo:estoque' presente = módulo Estoque acende no login.
+export const MODULE_KEY_PREFIX = 'modulo:';
+/** Ids de módulo presentes num array de permissões efetivas (['modulo:estoque',...] -> ['estoque']). */
+export function moduleIdsFromPermissions(permissions) {
+  return (Array.isArray(permissions) ? permissions : [])
+    .filter((p) => typeof p === 'string' && p.indexOf(MODULE_KEY_PREFIX) === 0)
+    .map((p) => p.slice(MODULE_KEY_PREFIX.length));
+}
+
+// Mapa AUTORAL role(profiles.role) -> módulos visíveis. HOJE É SÓ FALLBACK DE TRANSIÇÃO
+// (ver cabeçalho — remoção planejada 30/09/2026); a fonte real é modulo:<id>.
 // 'all' = bypass (todos os módulos). [] = nenhum módulo (oculto).
 export const ROLE_MODULES = {
   // --- acesso total ---
@@ -93,14 +113,27 @@ export function modulesForRole(role) {
   return Array.isArray(entry) ? entry.slice() : [];
 }
 
-/** true se a role enxerga o módulo. Role/entrada desconhecida -> false (fail-safe). */
+/** true se a role enxerga o módulo PELO MAPA DE FALLBACK. Role desconhecida -> false (fail-safe). */
 export function roleCanAccessModule(role, moduleId) {
   const entry = ROLE_MODULES[normalizeRole(role)];
   if (entry === 'all') return true;
   return Array.isArray(entry) && entry.includes(moduleId);
 }
 
-// Exposição p/ testes/painel futuro (as telas usam window.FRAuth.canAccessModule).
+/**
+ * GATE REAL de módulo — a função que window.FRAuth.canAccessModule consome.
+ * admin = tudo; qualquer modulo:* nas permissões efetivas = modo ESTRITO (fail-closed:
+ * módulo só acende com a chave dele); zero modulo:* = fallback transitório no mapa.
+ */
+export function canAccessModuleEfetivo(role, permissions, moduleId) {
+  if (normalizeRole(role) === 'admin') return true;
+  const ids = moduleIdsFromPermissions(permissions);
+  if (ids.length > 0) return ids.includes(moduleId);
+  return roleCanAccessModule(role, moduleId); // TRANSIÇÃO SEM APAGÃO — remoção 30/09/2026
+}
+
+// Exposição p/ testes/painel (as telas usam window.FRAuth.canAccessModule; a tela de
+// Permissões usa modulesForRole p/ pré-marcar chips na migração).
 if (typeof window !== 'undefined') {
-  window.FRAccess = { ALL_MODULE_IDS, ROLE_MODULES, ROLE_LABELS, modulesForRole, roleCanAccessModule, roleLabel };
+  window.FRAccess = { ALL_MODULE_IDS, MODULE_KEY_PREFIX, ROLE_MODULES, ROLE_LABELS, modulesForRole, roleCanAccessModule, canAccessModuleEfetivo, moduleIdsFromPermissions, roleLabel };
 }

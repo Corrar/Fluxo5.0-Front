@@ -11,7 +11,7 @@
 //   O login recebe CÓDIGO (1..999) e monta `NNN@fluxoroyale.local`. E-mail cru é REJEITADO —
 //   ver o comentário em login(). O zero-padding acontece só ali.
 import { api, AUTH_KEYS, clearAuthStorage, getErrorMessage } from './api.js';
-import { roleCanAccessModule } from './access.js';
+import { canAccessModuleEfetivo } from './access.js';
 
 const INACTIVITY_LIMIT = 30 * 60 * 1000; // 30 min
 
@@ -351,11 +351,12 @@ function canAccess(pageKey) {
   return _permissions.some((p) => p.startsWith(`${pageKey}:`));
 }
 
-// Gate de MÓDULOS (seletor de módulos). FONTE PROVISÓRIA: mapa role->módulos
-// AUTORAL em access.js. Será substituída por permissão efetiva do backend
-// (painel de permissões do admin) SEM alterar esta assinatura. admin = tudo.
+// Gate de MÓDULOS (seletor de módulos). A substituição prometida aconteceu: a fonte é a
+// família modulo:<id> nas PERMISSÕES EFETIVAS (`_permissions` = role ∪ exceções, do login),
+// com fallback transitório no mapa autoral enquanto o papel não tem chave modulo:* salva
+// (regra e prazo de remoção em access.js). Assinatura intacta. admin = tudo.
 function canAccessModule(moduleId) {
-  return roleCanAccessModule(_profile?.role, moduleId);
+  return canAccessModuleEfetivo(_profile?.role, _permissions, moduleId);
 }
 
 function hasRole(roles) {

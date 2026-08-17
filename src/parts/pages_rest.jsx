@@ -1796,8 +1796,12 @@ function PageCriticos({ t }) {
 //     real ficam FORA da matriz (fila de decisão do Bruno, listada no relatório do lote).
 //   • Excluir classe salva: SEM rota no backend v1 (o guard anti-vazio barra até o replace-all
 //     vazio) — botão sempre desabilitado com o motivo; rascunho local pode ser descartado.
-//   • Módulos por classe (defaultMods do ref) FORA deste lote — gate de módulo segue no mapa
-//     provisório de access.js.
+//   • Módulos por classe ENTRARAM (revisão do Bruno, rodada módulos): faixa "Acesso aos
+//     módulos" com a família de chaves modulo:<id> (ids reais de window.MODULES), salvas no
+//     MESMO POST /roles — sem migration. O gate de login/NAV (access.js) lê as chaves das
+//     permissões efetivas, fail-closed; papel sem NENHUMA modulo:* cai no fallback do mapa
+//     antigo (transição sem apagão, remoção planejada 30/09/2026) e a tela PRÉ-MARCA os
+//     chips pelo mapa com aviso "não salvo — confirme".
 //   • SEM normalizar a convenção mista flat×namespaced (dívida antiga, mantida).
 // Salvar é EXPLÍCITO por classe (o POST manda o conjunto inteiro; toggle nunca chama rede) e
 // SEMPRE CONFIRMA avisando o efeito real: role_permissions_updated / user_permissions_updated
@@ -1808,6 +1812,9 @@ function permErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMes
 
 // Agrupamento VISUAL por módulo (apresentação, nunca semântica). Prefixo → grupo, na ordem.
 const PERM_GRUPOS = [
+  // Família modulo:<id> (gate de login) — primeira do checklist de Exceções; na matriz de
+  // classes ela NÃO aparece (o lugar dela lá é a faixa de chips).
+  { grupo: 'Módulos', prefixos: ['modulo:'] },
   { grupo: 'Estoque', prefixos: ['produtos', 'estoque_critico', 'estoque', 'entradas', 'saidas', 'stock_', 'valores', 'calculo_minimo'] },
   { grupo: 'Operação', prefixos: ['solicitacoes', 'minhas_solicitacoes', 'separacoes', 'reposicoes', 'confronto_viagem', 'consultar'] },
   { grupo: 'Produção 3D', prefixos: ['producao_3d', 'solicitar_3d', 'producao'] },
@@ -1846,10 +1853,32 @@ const PERM_BASES = {
 const PERM_ACOES = { view: 'ver', add: 'adicionar', edit: 'editar', delete: 'excluir', apontar: 'apontar' };
 function permLabelDe(key) {
   const partes = key.split(':');
+  // Família de módulo: rótulo pelo nome REAL do módulo (window.MODULES), nunca pelo id cru.
+  if (partes[0] === 'modulo' && partes[1]) {
+    const m = (window.MODULES || []).filter(function (x) { return x.id === partes[1]; })[0];
+    return 'Módulo — ' + (m ? m.name : partes[1]);
+  }
   const b = PERM_BASES[partes[0]];
   if (!b) return key; // sem rótulo óbvio → chave crua
   return partes[1] ? `${b} — ${PERM_ACOES[partes[1]] || partes[1]}` : b;
 }
+
+// Páginas do protótipo ref21 SEM chave correspondente em role_permissions (snapshot da rodada
+// de 17/08/2026, universo de PRODUÇÃO) — exibidas como card informativo na aba Classes;
+// entrar na matriz depende de nascer chave no backend (decisão de produto, fila do Bruno).
+// "~chave" = a tela hoje é coberta pela chave de OUTRA página.
+const PERM_REF_SEM_CHAVE = [
+  { grupo: 'Principal', paginas: ['Quadro de Tarefas'] },
+  { grupo: 'Estoque', paginas: ['Conferência de Envio (~separacoes)'] },
+  { grupo: 'Operacional', paginas: ['Quadro Gestão (~separacoes)'] },
+  { grupo: 'Gestão Admin', paginas: ['Controle de Saída (~saidas)', 'Painel TI'] },
+  { grupo: 'Produção 3D', paginas: ['Catálogo de Peças (~producao_3d)', 'Histórico de Produção (~producao_3d)'] },
+  { grupo: 'Produção', paginas: ['Armazém Produção', 'Recebimento', 'Devolução por OP'] },
+  { grupo: 'RH', paginas: ['Colaboradores', 'Ponto & Frequência', 'Folha de Pagamento', 'Advertências', 'Comunicados'] },
+  { grupo: 'Compras', paginas: ['Solicitação de Compra', 'Cotações', 'Pedidos de Compra', 'Fornecedores'] },
+  { grupo: 'Financeiro', paginas: ['Emitir Nota', 'Faturar', 'Contas a Pagar', 'Contas a Receber', 'Fluxo de Caixa'] },
+  { grupo: 'Assistência Técnica', paginas: ['Ordens de Serviço', 'Agenda Técnica', 'Base de Equipamentos'] },
+];
 
 // Gate por permissão, padrão da Auditoria: sem page_key 'permissoes' a tela interna NEM MONTA
 // (nenhuma chamada de rede). Ver ≠ salvar: o POST segue admin-only no backend — um não-admin
@@ -1998,9 +2027,17 @@ function PermClasses({ t, matriz, usuarios, carregar }) {
   // Baseline = verdade carregada do servidor (rascunho nasce vazio); troca de classe ou reload
   // pós-save ressincroniza — no ERRO do POST nada disso roda e as marcas ficam intactas.
   const baseline = (!sel || ehRascunho) ? [] : ((matriz && matriz[sel.role]) || []);
+  // MIGRAÇÃO SEM APAGÃO (rodada módulos): papel salvo SEM nenhuma chave modulo:* abre com os
+  // chips PRÉ-MARCADOS pelo mapa provisório de access.js — vira dirty com aviso, o admin
+  // confirma salvando e o papel ganha as chaves. Rascunho nasce vazio (marca-se o que quiser).
+  const semChaveDeModulo = !!sel && !ehRascunho && !baseline.some(function (k) { return k.indexOf('modulo:') === 0; });
   R.useEffect(function () {
-    setMarcadas(baseline.slice());
-    // baseline entra via matriz/selRole — objetos estáveis do estado
+    let iniciais = baseline.slice();
+    if (semChaveDeModulo && window.FRAccess && window.FRAccess.modulesForRole) {
+      iniciais = iniciais.concat(window.FRAccess.modulesForRole(sel.role).map(function (id) { return 'modulo:' + id; }));
+    }
+    setMarcadas(iniciais);
+    // baseline/semChaveDeModulo entram via matriz/selRole — objetos estáveis do estado
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selRole, matriz]);
   // Feedback/confirm limpam SÓ na troca de classe — a releitura pós-salvar também muda `matriz`,
@@ -2014,10 +2051,11 @@ function PermClasses({ t, matriz, usuarios, carregar }) {
     Object.keys(matriz).forEach(function (r) { (matriz[r] || []).forEach(function (k) { s.add(k); }); });
     return Array.from(s).sort();
   }, [matriz]);
-  // Linhas da matriz = BASES reais do universo, agrupadas pelo mesmo mapa visual da tela antiga.
+  // Linhas da matriz = BASES reais do universo, agrupadas pelo mesmo mapa visual da tela
+  // antiga. A família modulo:* fica FORA da matriz — o lugar dela é a faixa de chips.
   const linhas = R.useMemo(function () {
     const porBase = new Map();
-    universo.forEach(function (k) {
+    universo.filter(function (k) { return k.indexOf('modulo:') !== 0; }).forEach(function (k) {
       const b = permBaseDe(k);
       if (!porBase.has(b)) porBase.set(b, new Set());
       porBase.get(b).add(permSufDe(k));
@@ -2104,7 +2142,8 @@ function PermClasses({ t, matriz, usuarios, carregar }) {
     return { ...c, n: marcadas.filter(function (k) { return permSufDe(k) === c.suf; }).length };
   });
   const sufsConhecidos = PERM_COLS.map(function (c) { return c.suf; });
-  const foraDasColunas = marcadas.filter(function (k) { return sufsConhecidos.indexOf(permSufDe(k)) < 0; });
+  // modulo:* não conta como "fora das colunas" — tem casa própria (a faixa de chips).
+  const foraDasColunas = marcadas.filter(function (k) { return k.indexOf('modulo:') !== 0 && sufsConhecidos.indexOf(permSufDe(k)) < 0; });
 
   // Excluir classe: NÃO EXISTE rota no backend v1 (o guard anti-vazio barra até o replace-all
   // vazio), então o botão do design fica sempre desabilitado para classe salva — com o motivo
@@ -2184,8 +2223,48 @@ function PermClasses({ t, matriz, usuarios, carregar }) {
             </button>
           </div>
 
+          {/* Acesso aos módulos (design ref21) — chips = chaves modulo:<id> reais, salvas no
+              MESMO POST /roles junto das demais. O gate do login (access.js) lê estas chaves. */}
+          <div style={{ borderTop: `1px solid ${t.border}`, padding: '14px 18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              <Icon name="grid" size={14} style={{ color: t.accentText }} />
+              <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.08em', textTransform: 'uppercase', color: t.faint }}>Acesso aos módulos</span>
+              <span style={{ fontSize: 11, color: t.faint }}>· define quais módulos acendem no login</span>
+            </div>
+            {semChaveDeModulo && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 11px', borderRadius: 9, marginBottom: 10, fontSize: 12, fontWeight: 700, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg }}>
+                <Icon name="alert" size={13} /> Sem chave de módulo salva neste papel — chips pré-marcados pelo mapa antigo (transição). Não salvo: confirme salvando a classe.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {(window.MODULES || []).map(function (m) {
+                const k = 'modulo:' + m.id;
+                const on = marcadas.indexOf(k) >= 0;
+                return (
+                  <button key={m.id} title={k} onClick={function () { alternar(k); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 38, padding: '0 13px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: on ? frHexToRgba(m.accent, 0.14) : t.elevated, color: on ? (t.panel === '#ffffff' ? m.accent : m.accentText) : t.faint, border: `1.5px solid ${on ? frHexToRgba(m.accent, 0.5) : t.border}`, transition: 'all .14s' }}>
+                    <Icon name={m.icon} size={15} /> {m.name}
+                    <Icon name={on ? 'check' : 'x'} size={13} style={{ opacity: 0.75 }} />
+                  </button>
+                );
+              })}
+            </div>
+            {!ehRascunho && !semChaveDeModulo && !marcadas.some(function (k) { return k.indexOf('modulo:') === 0; }) && (
+              <div style={{ fontSize: 12, fontWeight: 700, color: uiTone(t, 'red').fg, marginTop: 10 }}>
+                Sem módulo marcado: quem entrar nesta classe não acende módulo nenhum no login (fail-closed).
+              </div>
+            )}
+            {ehRascunho && !marcadas.some(function (k) { return k.indexOf('modulo:') === 0; }) && (
+              <div style={{ fontSize: 12, color: t.muted, marginTop: 10 }}>
+                Marque ao menos um módulo — classe nova não tem fallback: sem chave modulo:*, nada acende no login.
+              </div>
+            )}
+          </div>
+
           {/* Matriz página×ação — linhas = bases REAIS do universo do GET; célula só onde a chave existe */}
-          <div style={{ borderTop: `1px solid ${t.border}`, overflowX: 'auto' }} className="fr-scroll">
+          <div style={{ borderTop: `1px solid ${t.border}`, padding: '10px 18px 0', fontSize: 11.5, color: t.muted }}>
+            Legenda: <b>—</b> = página sem chave configurável no backend (a chave exata não existe em role_permissions) · toggle verde = chave concedida à classe.
+          </div>
+          <div style={{ overflowX: 'auto' }} className="fr-scroll">
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
               <thead>
                 <tr>
@@ -2308,6 +2387,23 @@ function PermClasses({ t, matriz, usuarios, carregar }) {
           </div>
         </Card>
       )}
+
+      {/* Card informativo — páginas do design ref21 SEM chave no backend: ficam FORA da matriz
+          por decisão travada; virarem chave é decisão de produto (fila do Bruno). */}
+      <Card t={t} style={{ marginTop: 14, padding: '14px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <Icon name="alert" size={14} style={{ color: t.accentText }} />
+          <span style={{ fontSize: 12.5, fontWeight: 800, color: t.text }}>Páginas do design ainda sem chave no backend — aguardando decisão de produto</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: t.muted, lineHeight: 1.7 }}>
+          {PERM_REF_SEM_CHAVE.map(function (g) {
+            return <div key={g.grupo}><b style={{ color: t.text }}>{g.grupo}:</b> {g.paginas.join(' · ')}</div>;
+          })}
+        </div>
+        <div style={{ fontSize: 10.5, color: t.faint, marginTop: 8 }}>
+          Snapshot de 17/08/2026 (universo de produção) · "~chave" = tela hoje coberta pela chave de outra página.
+        </div>
+      </Card>
 
       {/* Confirmação do salvar — replace-all com efeito real nomeado (logout de quem for afetado) */}
       {confirmando && sel && (
