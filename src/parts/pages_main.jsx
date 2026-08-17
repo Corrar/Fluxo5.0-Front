@@ -548,19 +548,304 @@ function frNormSku(v) {
   return `${m[1]}.${m[2].padStart(2, '0')}.${m[3].padStart(4, '0')}`;
 }
 
-// InventarioModal COMPLETO (rodada 16): modelo .xlsx real (SheetJS), parse .xlsx/.csv com
-// drag-drop e PREVIEW das diferenças (contado × sistema, delta, SKU desconhecido sinalizado).
-// "Sistema" = estoque FÍSICO (quantity_on_hand): inventário conta o que está na prateleira,
-// não o disponível (que desconta reserva).
+// ============================================================================================
+// INVENTÁRIO — modal de DUAS VIAS (lote R2), sobre o POST /stock/recount (lote R1, backend).
+// ============================================================================================
+// Aba "Recontagem rápida": busca item -> confere o que o sistema diz -> digita o que contou ->
+// registra. Uma chamada por item, cada uma com a sua âncora de idempotência.
+// Aba "Em massa (planilha)": o preview que já existia, agora LIGADO — processa em lotes de 500.
 //
-// O botão "Processar inventário" nasce DESABILITADO de propósito: o ajuste em massa aguarda
-// endpoint dedicado de backend (lote futuro). Disparar N ajustes unitários daqui seria N
-// escritas sem transação — meio inventário aplicado se uma falhar. Preview sim, escrita não.
-function InventarioModal({ t, onClose, produtos }) {
+// "NO SISTEMA" é sempre o FÍSICO (`estoque` = quantity_on_hand), nunca o disponível: inventário
+// conta o que está na prateleira, e o material reservado está fisicamente lá.
+//
+// Unidades que aceitam fração — CÓPIA EXATA do Set do servidor (stock.controller.ts, RECOUNT_
+// DECIMAL_UNITS, que por sua vez espelha requests.controller.ts:15). 'UND' fica FORA (é sinônimo
+// de unidade, não medida contínua) e 'MT' fica DENTRO (fidelidade à lista, embora o catálogo só
+// use 'M'). A TELA NUNCA PODE SER MAIS PERMISSIVA QUE O SERVIDOR: divergir aqui faria o operador
+// digitar um valor que a tela aceita e a API recusa com 400. Quarta cópia da mesma lista no
+// projeto — unificação registrada no DIVIDAS.md.
+const INV_DECIMAL_UNITS = new Set(['M', 'MT', 'L', 'KG']);
+const invIsDecimalUnit = (un) => INV_DECIMAL_UNITS.has(String(un || '').trim().toUpperCase());
+// Espelha MAX_ITENS do POST /stock/recount. O servidor devolve 400 acima disso; o fatiamento é
+// responsabilidade DESTA tela (decisão do R1).
+const INV_MAX_LOTE = 500;
+
+// POST /stock/recount — X-Idempotency-Key é OBRIGATÓRIO (400 sem ele).
+function frStockRecount(items, idemKey) {
+  return window.FRApi.post('/stock/recount', { items: items }, { headers: { 'X-Idempotency-Key': idemKey } });
+}
+
+// Erro do backend em texto (o 400 do AJUSTE_ABAIXO_RESERVA já vem com os dois números prontos).
+function invErr(e) {
+  const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+  return g ? g(e) : (e && e.message) || 'Erro inesperado.';
+}
+
+// Aba em pill — cópia local do padrão do Confronto (pages_rest.jsx). A casa copia helper de
+// layout em vez de promover a lib; são 4 cópias hoje (Confronto, Dev, Montagem, Permissões).
+function InvTabBtn({ t, id, atual, onSel, icon, children }) {
+  const on = atual === id;
+  return (
+    <button onClick={() => onSel(id)} type="button"
+      style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 38, padding: '0 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}>
+      <Icon name={icon} size={15} /> {children}
+    </button>
+  );
+}
+
+// Miniatura do produto. `image_url` é opcional no catálogo e o card devolve `img: undefined`
+// quando não há foto — o ícone genérico NÃO existia no projeto (nenhuma tela desenhava
+// placeholder; o ProdutoCard só ajustava espaçamento). Nasce aqui.
+function InvMiniatura({ t, img, size = 40 }) {
+  const base = { width: size, height: size, borderRadius: 10, flexShrink: 0, display: 'grid', placeItems: 'center', overflow: 'hidden' };
+  if (img) return <div style={{ ...base, background: t.elevated, border: `1px solid ${t.border}` }}><img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /></div>;
+  return <div style={{ ...base, background: t.hover, border: `1px dashed ${t.border}`, color: t.faint }}><Icon name="box" size={Math.round(size * 0.5)} /></div>;
+}
+
+// Linha de resultado da busca. O SLOT DO BADGE TEM LARGURA FIXA: 62% dos produtos não têm tag
+// (`p.tag` vem null e o Badge não renderiza) — sem o slot reservado a linha pula de largura
+// conforme o item tenha ou não etiqueta.
+function InvLinhaProduto({ t, p, onSel }) {
+  const zerado = window.FRAdapters.parseNumber(p.estoque) === 0;
+  return (
+    <button onClick={() => onSel(p)} type="button"
+      style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 11px', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = t.accent; e.currentTarget.style.background = t.hover; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.background = t.elevated; }}>
+      <InvMiniatura t={t} img={p.img} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.nome}</div>
+        <div style={{ fontSize: 11.5, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>{p.sku}</div>
+      </div>
+      <span style={{ width: 82, flexShrink: 0, display: 'inline-flex', justifyContent: 'flex-end' }}>
+        {p.tag ? <Badge t={t} kind={p.kind}>{p.tag}</Badge> : null}
+      </span>
+      <div style={{ width: 92, flexShrink: 0, textAlign: 'right' }}>
+        <div style={{ fontSize: 15, fontWeight: 850, color: zerado ? t.faint : t.text, whiteSpace: 'nowrap' }}>{p.estoque} <span style={{ fontSize: 10.5, fontWeight: 700, color: t.muted }}>{p.un}</span></div>
+        {zerado && <div style={{ fontSize: 10, fontWeight: 800, color: uiTone(t, 'amber').fg }}>ZERADO NO SISTEMA</div>}
+      </div>
+    </button>
+  );
+}
+
+// ── ABA 1: RECONTAGEM RÁPIDA ────────────────────────────────────────────────────────────────
+// Ciclo do Apontamentos (producaoger.jsx): a âncora de idempotência NASCE NA SELEÇÃO do item,
+// SOBREVIVE ao erro (o retry reusa a mesma chave e o servidor responde replay em vez de aplicar
+// de novo) e é QUEIMADA só no sucesso. Uma chave POR ITEM registrado — "sessão" é agrupamento
+// visual, não escopo de chave.
+function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegistrado }) {
+  const [q, setQ] = useStateM('');
+  const [sel, setSel] = useStateM(null);
+  const [idemKey, setIdemKey] = useStateM(null);
+  const [contado, setContado] = useStateM('');
+  const [busy, setBusy] = useStateM(false);
+  const [erro, setErro] = useStateM(null);
+  const [aviso, setAviso] = useStateM(null);
+  const buscaRef = useRefM(null);
+  const qtdRef = useRefM(null);
+
+  const ql = q.trim().toLowerCase();
+  // Busca client-side sobre o catálogo JÁ CARREGADO (useFRProducts traz tudo; o Catálogo faz
+  // igual). SKU EXATO PRIMEIRO — é o que o leitor de código de barras entrega — e só então nome.
+  const resultados = useMemoM(() => {
+    if (!ql) return [];
+    const exato = (produtos || []).filter((p) => String(p.sku).toLowerCase() === ql);
+    const resto = (produtos || []).filter((p) => String(p.sku).toLowerCase() !== ql
+      && (String(p.sku).toLowerCase().includes(ql) || String(p.nome).toLowerCase().includes(ql)));
+    return [...exato, ...resto].slice(0, 8);
+  }, [produtos, ql]);
+
+  const selecionar = (p) => {
+    setSel(p);
+    setQ('');
+    setErro(null);
+    setAviso(null);
+    setIdemKey(window.pgGenKey());          // âncora nasce aqui e sobrevive ao erro
+    setContado(String(p.estoque));
+    setTimeout(() => qtdRef.current && qtdRef.current.select(), 0);
+  };
+
+  const buscarEnter = () => {
+    if (!ql) return;
+    const exato = (produtos || []).find((p) => String(p.sku).toLowerCase() === ql);
+    if (exato) return selecionar(exato);
+    if (resultados.length === 1) return selecionar(resultados[0]);
+    if (resultados.length === 0) setAviso(`"${q.trim()}" não está no catálogo ativo.`);
+  };
+
+  const cancelar = () => { setSel(null); setContado(''); setIdemKey(null); setErro(null); setTimeout(() => buscaRef.current && buscaRef.current.focus(), 0); };
+
+  // Entrada por unidade: inteira aceita só dígitos; decimal aceita UMA vírgula/ponto. Filtrar na
+  // digitação é REJEITAR, não truncar — o Recebimento truncava com parseInt e comia a fração.
+  const aceitaFracao = sel ? invIsDecimalUnit(sel.un) : false;
+  const setQtd = (v) => {
+    let s = String(v).replace(aceitaFracao ? /[^0-9.,]/g : /[^0-9]/g, '');
+    if (aceitaFracao) {
+      s = s.replace(',', '.');
+      const partes = s.split('.');
+      if (partes.length > 2) s = `${partes[0]}.${partes.slice(1).join('')}`;
+    }
+    setContado(s);
+  };
+
+  const nContado = contado === '' ? null : Number(contado);
+  const contadoValido = nContado != null && Number.isFinite(nContado) && nContado >= 0
+    && (aceitaFracao || Number.isInteger(nContado));
+  const fracaoInvalida = nContado != null && Number.isFinite(nContado) && !aceitaFracao && !Number.isInteger(nContado);
+  const noSistema = sel ? window.FRAdapters.parseNumber(sel.estoque) : 0;
+  const reservado = sel ? window.FRAdapters.parseNumber(sel.reserved) : 0;
+  const delta = contadoValido ? nContado - noSistema : null;
+  // Piso do servidor: contagem abaixo do reservado volta 400 (AJUSTE_ABAIXO_RESERVA). Avisamos
+  // ANTES do envio — sem isto o operador só descobre depois de mandar.
+  const abaixoDoReservado = contadoValido && reservado > 0 && nContado < reservado;
+
+  const registrar = async () => {
+    if (busy || !sel || !contadoValido || abaixoDoReservado || !podeEscrever) return;
+    setBusy(true);
+    setErro(null);
+    try {
+      const res = await frStockRecount([{ product_id: sel.product_id, counted_qty: nContado }], idemKey);
+      const item = (res.data && res.data.items && res.data.items[0]) || null;
+      // A linha da sessão é ESTADO CONGELADO DA RESPOSTA (nunca derivada de `produtos`: o hook
+      // refaz o fetch a cada stock_updated e o "antes" seria reescrito pelo saldo novo).
+      onRegistrado({
+        key: `${idemKey}:${sel.product_id}`,
+        product_id: sel.product_id,
+        sku: item ? item.sku : sel.sku,
+        nome: sel.nome,
+        img: sel.img,
+        un: sel.un,
+        active: item ? item.active : sel.active,
+        antes: item ? item.antes : noSistema,
+        depois: item ? item.depois : nContado,
+        delta: item ? item.delta : (nContado - noSistema),
+        status: item ? item.status : 'aplicado',
+        hora: new Date(),
+      });
+      setSel(null); setContado(''); setIdemKey(null);   // só o SUCESSO queima a chave
+      setTimeout(() => buscaRef.current && buscaRef.current.focus(), 0);
+    } catch (e) {
+      // NO ERRO: seleção e MESMA chave ficam de pé (o retry é idempotente). A mensagem do 400 vai
+      // CRUA para a tela — ela já traz os dois números do piso de reserva.
+      setErro(invErr(e));
+    } finally { setBusy(false); }
+  };
+
+  const field = { boxSizing: 'border-box', height: 46, borderRadius: 12, border: `1px solid ${t.border}`, background: t.panel, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
+  const cRed = uiTone(t, 'red');
+  const cAmb = uiTone(t, 'amber');
+
+  if (!sel) {
+    return (
+      <div>
+        <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Bipe o código ou busque por nome</label>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 220, ...field }}>
+            <Icon name="search" size={17} style={{ color: t.muted, flexShrink: 0 }} />
+            <input ref={buscaRef} value={q} onChange={(e) => { setQ(e.target.value); setAviso(null); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); buscarEnter(); } }}
+              placeholder="SKU ou nome do produto" autoFocus
+              style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
+          </div>
+        </div>
+        {aviso && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>
+            <Icon name="alert" size={15} /> {aviso}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+          {resultados.map((p) => <InvLinhaProduto key={p.product_id || p.sku} t={t} p={p} onSel={selecionar} />)}
+        </div>
+        {!ql && (
+          <div style={{ marginTop: 16, fontSize: 12.5, color: t.muted, lineHeight: 1.5 }}>
+            A contagem corrige o <b style={{ color: t.text }}>saldo físico</b> do almoxarifado. Item reservado continua na prateleira: o sistema recusa contagem abaixo do que está reservado.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 13px', borderRadius: 14, border: `1px solid ${t.border}`, background: t.elevated, marginBottom: 16 }}>
+        <InvMiniatura t={t} img={sel.img} size={46} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{sel.nome}</span>
+            {sel.tag && <Badge t={t} kind={sel.kind}>{sel.tag}</Badge>}
+            {/* Produto ARQUIVADO é contável (decisão do R1: a prateleira não sabe do catálogo) —
+                sinaliza, não bloqueia. */}
+            {sel.active === false && <Badge t={t} kind="amber">FORA DO CATÁLOGO</Badge>}
+          </div>
+          <div style={{ fontSize: 12, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>{sel.sku}</div>
+        </div>
+        <Btn t={t} kind="ghost" icon="x" onClick={cancelar}>Trocar item</Btn>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 160, padding: '13px 15px', borderRadius: 13, border: `1px solid ${t.border}`, background: t.panel }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>No sistema</div>
+          <div style={{ fontSize: 26, fontWeight: 850, color: t.text, lineHeight: 1.2, marginTop: 4 }}>{noSistema} <span style={{ fontSize: 12, fontWeight: 700, color: t.muted }}>{sel.un}</span></div>
+          {reservado > 0 && (
+            <div style={{ fontSize: 11.5, color: cAmb.fg, fontWeight: 700, marginTop: 5 }}>{reservado} {sel.un} reservado — a contagem não pode ficar abaixo disso</div>
+          )}
+        </div>
+        <div style={{ flex: 1, minWidth: 160, padding: '13px 15px', borderRadius: 13, border: `1px solid ${t.accent}`, background: t.accentSoft }}>
+          <label htmlFor="inv-contagem" style={{ display: 'block', fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: t.accentText, textTransform: 'uppercase' }}>Contagem física</label>
+          <input id="inv-contagem" ref={qtdRef} value={contado} onChange={(e) => setQtd(e.target.value)}
+            inputMode={aceitaFracao ? 'decimal' : 'numeric'}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); registrar(); } }}
+            style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 26, fontWeight: 850, fontFamily: 'inherit' }} />
+          <div style={{ fontSize: 11.5, color: t.muted, fontWeight: 700 }}>{aceitaFracao ? `em ${sel.un} — aceita fração` : `em ${sel.un} — número inteiro`}</div>
+        </div>
+      </div>
+
+      {fracaoInvalida && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg }}>
+          <Icon name="alert" size={15} /> A unidade "{sel.un}" não aceita casas decimais.
+        </div>
+      )}
+      {abaixoDoReservado && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg }}>
+          <Icon name="alert" size={15} /> Contagem ({nContado}) abaixo do reservado ({reservado}). O sistema recusaria o ajuste.
+        </div>
+      )}
+      {delta != null && delta !== 0 && !abaixoDoReservado && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, padding: '11px 13px', borderRadius: 12, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>
+          <Icon name="alert" size={15} style={{ flexShrink: 0 }} />
+          <span>{delta < 0 ? `Falta de ${Math.abs(delta)} ${sel.un}` : `Sobra de ${delta} ${sel.un}`} — o estoque será ajustado para <b>{nContado} {sel.un}</b>.</span>
+        </div>
+      )}
+      {delta === 0 && (
+        <div style={{ marginTop: 12, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'green').fg }}>Contagem bate com o sistema — o registro confirma o saldo.</div>
+      )}
+      {erro && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginTop: 12, padding: '9px 11px', borderRadius: 10, background: cRed.bg, color: cRed.fg, fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>
+          <Icon name="alert" size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {erro}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <span title={podeEscrever ? undefined : motivoSemPermissao} style={{ display: 'inline-flex' }}>
+          <button onClick={registrar} disabled={!podeEscrever || busy || !contadoValido || abaixoDoReservado} type="button"
+            style={{ all: 'unset', boxSizing: 'border-box', cursor: (!podeEscrever || busy || !contadoValido || abaixoDoReservado) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: (!podeEscrever || busy || !contadoValido || abaixoDoReservado) ? 0.45 : 1 }}>
+            <Icon name={busy ? 'refresh' : 'check'} size={16} style={busy ? { animation: 'fr-spin .7s linear infinite' } : undefined} /> {busy ? 'Registrando…' : 'Registrar contagem'}
+          </button>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── ABA 2: PLANILHA ─────────────────────────────────────────────────────────────────────────
+function InvPlanilha({ t, produtos, podeEscrever, motivoSemPermissao, onLote }) {
   const [drag, setDrag] = useStateM(false);
   const [fileName, setFileName] = useStateM(null);
   const [linhas, setLinhas] = useStateM(null);   // null = sem arquivo; [] = arquivo sem linha válida
   const [parseErro, setParseErro] = useStateM(null);
+  const [busy, setBusy] = useStateM(false);
+  const [erroEnvio, setErroEnvio] = useStateM(null);
+  const [resumo, setResumo] = useStateM(null);
 
   const baixarModelo = () => {
     // Modelo pré-preenchido com o catálogo REAL carregado: SKU + Nome, contagem em branco.
@@ -583,6 +868,8 @@ function InventarioModal({ t, onClose, produtos }) {
     setFileName(file.name);
     setParseErro(null);
     setLinhas(null);
+    setResumo(null);
+    setErroEnvio(null);
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: 'array' });   // XLSX.read cobre .xlsx e .csv
@@ -609,18 +896,28 @@ function InventarioModal({ t, onClose, produtos }) {
         if (contadoRaw === '') continue;                          // sem contagem → item não contado, fora do preview
         const contado = Number(contadoRaw.replace(',', '.'));
         const chave = frNormSku(skuRaw);
-        if (vistos.has(chave)) continue;                          // SKU repetido na planilha → vale a 1ª contagem
+        // DUPLICATA É SINALIZADA, NÃO DEDUPLICADA (antes: `vistos.has -> continue`, e a 2ª
+        // contagem sumia em silêncio). Duas contagens do mesmo SKU são discordância física do
+        // operador, não empate a resolver por regra — e o servidor recusa o lote com 400 pelo
+        // mesmo motivo. Quem decide qual vale é quem contou.
+        const duplicada = vistos.has(chave);
         vistos.add(chave);
         const prod = porSku.get(chave) || null;
         const contadoOk = Number.isFinite(contado) && contado >= 0;
+        // Fração em unidade inteira é recusada AQUI, com o mesmo Set do servidor.
+        const fracaoRuim = contadoOk && prod && !invIsDecimalUnit(prod.un) && !Number.isInteger(contado);
         out.push({
           sku: prod ? prod.sku : skuRaw,
           nome: prod ? prod.nome : null,
+          product_id: prod ? prod.product_id : null,   // a lacuna do preview antigo: sem isto não dá para POSTar
+          un: prod ? prod.un : '',
           contado: contadoOk ? contado : null,
           sistema: prod ? prod.estoque : null,
           delta: prod && contadoOk ? contado - prod.estoque : null,
           desconhecido: !prod,
-          invalido: !contadoOk,
+          invalido: !contadoOk || fracaoRuim,
+          fracaoRuim: !!fracaoRuim,
+          duplicada: duplicada,
         });
       }
       setLinhas(out);
@@ -631,87 +928,222 @@ function InventarioModal({ t, onClose, produtos }) {
 
   const desconhecidos = (linhas || []).filter((l) => l.desconhecido).length;
   const invalidos = (linhas || []).filter((l) => l.invalido).length;
+  const duplicadas = (linhas || []).filter((l) => l.duplicada).length;
   const comDelta = (linhas || []).filter((l) => l.delta != null && l.delta !== 0).length;
   const cAmb = uiTone(t, 'amber');
   const cRed = uiTone(t, 'red');
   const deltaCor = (d) => (d > 0 ? uiTone(t, 'green').fg : d < 0 ? cRed.fg : t.muted);
   const fmtDelta = (d) => (d > 0 ? `+${d}` : String(d));
 
+  const podeProcessar = !!linhas && linhas.length > 0 && invalidos === 0 && desconhecidos === 0 && duplicadas === 0 && !busy && podeEscrever;
+
+  const processar = async () => {
+    if (!podeProcessar) return;
+    setBusy(true);
+    setErroEnvio(null);
+    setResumo(null);
+    // FATIAMENTO em blocos de <=500 (o servidor recusa acima disso). UMA CHAVE POR LOTE, não uma
+    // para a planilha inteira: se o lote 3 falhar, o retry precisa reenviar SÓ o 3 — com chave de
+    // planilha o reenvio inteiro viraria replay e os lotes que faltavam nunca entrariam.
+    const lotes = [];
+    for (let i = 0; i < linhas.length; i += INV_MAX_LOTE) lotes.push(linhas.slice(i, i + INV_MAX_LOTE));
+    let aplicados = 0;
+    const registrados = [];
+    try {
+      for (const lote of lotes) {
+        const chaveDoLote = window.pgGenKey();
+        const res = await frStockRecount(lote.map((l) => ({ product_id: l.product_id, counted_qty: l.contado })), chaveDoLote);
+        const itens = (res.data && res.data.items) || [];
+        itens.forEach((it) => registrados.push(it));
+        aplicados += 1;
+      }
+      setResumo({ ok: true, aplicados, total: lotes.length, itens: registrados.length });
+      onLote(registrados, linhas);
+      setLinhas(null);
+      setFileName(null);
+    } catch (e) {
+      // O erro PARA a sequência: os lotes já aplicados estão no banco (cada um é atômico em si),
+      // e dizer "aplicados N de M" é o único relato honesto — nem "deu certo" nem "falhou tudo".
+      setErroEnvio(`${invErr(e)} — aplicados ${aplicados} de ${lotes.length} lote(s).`);
+      setResumo({ ok: false, aplicados, total: lotes.length, itens: registrados.length });
+      if (registrados.length) onLote(registrados, linhas);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 14, background: t.accentSoft, border: `1px solid ${frHexToRgba(t.accent, 0.25)}`, marginBottom: 18 }}>
+        <Icon name="sheet" size={22} style={{ color: t.accentText, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Modelo de planilha</div><div style={{ fontSize: 11.5, color: t.muted }}>Colunas: SKU · Nome · Quantidade Contada — já vem com o catálogo atual.</div></div>
+        <button onClick={baixarModelo} type="button"
+          style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: t.panel, color: t.accentText, border: `1px solid ${t.border}` }}><Icon name="download" size={15} /> Baixar modelo</button>
+      </div>
+      <label onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+        onDrop={(e) => { e.preventDefault(); setDrag(false); lerArquivo(e.dataTransfer.files[0]); }}
+        style={{ display: 'block', cursor: 'pointer', borderRadius: 16, padding: '28px 20px', textAlign: 'center', border: `2px dashed ${drag ? t.accent : t.borderStrong}`, background: drag ? t.accentSoft : t.elevated, transition: 'all .15s' }}>
+        <input type="file" accept=".xlsx,.csv" style={{ display: 'none' }} onChange={(e) => { lerArquivo(e.target.files[0]); e.target.value = ''; }} />
+        <div style={{ width: 52, height: 52, margin: '0 auto 12px', borderRadius: 15, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="upload" size={24} /></div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{fileName || 'Arraste a planilha ou clique para selecionar'}</div>
+        <div style={{ fontSize: 12.5, color: t.muted, marginTop: 5 }}>Formatos aceitos: .xlsx, .csv</div>
+      </label>
+      {parseErro && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg, border: `1px solid ${frHexToRgba(cRed.fg, 0.25)}` }}>
+          <Icon name="alert" size={15} /> {parseErro}
+        </div>
+      )}
+      {resumo && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: resumo.ok ? uiTone(t, 'green').bg : cAmb.bg, color: resumo.ok ? uiTone(t, 'green').fg : cAmb.fg }}>
+          <Icon name={resumo.ok ? 'check' : 'alert'} size={15} /> {resumo.ok ? `Inventário processado: ${resumo.itens} item(ns) em ${resumo.total} lote(s).` : `Parcial: aplicados ${resumo.aplicados} de ${resumo.total} lote(s) · ${resumo.itens} item(ns).`}
+        </div>
+      )}
+      {erroEnvio && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginTop: 12, padding: '9px 11px', borderRadius: 10, background: cRed.bg, color: cRed.fg, fontSize: 12, fontWeight: 600, lineHeight: 1.4 }}>
+          <Icon name="alert" size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {erroEnvio}
+        </div>
+      )}
+      {linhas && !parseErro && (
+        linhas.length === 0 ? (
+          <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>Nenhuma linha com contagem preenchida na planilha.</div>
+        ) : (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <Badge t={t} kind="accent" dot>{linhas.length} {linhas.length === 1 ? 'item contado' : 'itens contados'}</Badge>
+              <Badge t={t} kind={comDelta ? 'amber' : 'green'} dot>{comDelta} com diferença</Badge>
+              {desconhecidos > 0 && <Badge t={t} kind="red" dot>{desconhecidos} SKU desconhecido{desconhecidos > 1 ? 's' : ''}</Badge>}
+              {invalidos > 0 && <Badge t={t} kind="red" dot>{invalidos} contagem inválida</Badge>}
+              {duplicadas > 0 && <Badge t={t} kind="red" dot>{duplicadas} SKU repetido</Badge>}
+            </div>
+            {duplicadas > 0 && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12, padding: '10px 12px', borderRadius: 11, fontSize: 12, fontWeight: 600, lineHeight: 1.45, background: cRed.bg, color: cRed.fg }}>
+                <Icon name="alert" size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>O mesmo SKU aparece com mais de uma contagem. Isso é discordância física, não empate: corrija a planilha deixando um valor por item e importe de novo.</span>
+              </div>
+            )}
+            <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }} className="fr-scroll">
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480, fontSize: 13 }}>
+                  <thead><tr>
+                    {['SKU', 'Produto', 'Contado', 'Sistema', 'Delta'].map((h, k) => <th key={h} style={{ position: 'sticky', top: 0, textAlign: k >= 2 ? 'right' : 'left', padding: '10px 14px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}`, background: t.elevated, whiteSpace: 'nowrap' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {linhas.map((l, i) => (
+                      <tr key={`${l.sku}-${i}`}>
+                        <td style={{ padding: '9px 14px', fontWeight: 700, color: l.duplicada ? cRed.fg : t.text, whiteSpace: 'nowrap', borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sku}</td>
+                        <td style={{ padding: '9px 14px', color: l.desconhecido || l.duplicada ? cRed.fg : t.text, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>
+                          {l.desconhecido
+                            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700 }}><Icon name="alert" size={13} /> SKU desconhecido</span>
+                            : l.duplicada
+                              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700 }}><Icon name="alert" size={13} /> repetido na planilha</span>
+                              : l.nome}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: l.invalido ? cRed.fg : t.text, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.invalido ? (l.fracaoRuim ? `${l.contado} (${l.un} não aceita fração)` : 'inválida') : l.contado}</td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', color: t.muted, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sistema == null ? '—' : l.sistema}</td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 800, color: l.delta == null ? t.faint : deltaCor(l.delta), whiteSpace: 'nowrap', borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.delta == null ? '—' : fmtDelta(l.delta)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16 }}>
+              <span style={{ marginRight: 'auto', fontSize: 11.5, color: t.faint }}>
+                {linhas.length > INV_MAX_LOTE ? `Serão ${Math.ceil(linhas.length / INV_MAX_LOTE)} lotes de até ${INV_MAX_LOTE} itens.` : 'O preview não altera o estoque.'}
+              </span>
+              <span title={podeEscrever ? undefined : motivoSemPermissao} style={{ display: 'inline-flex' }}>
+                <button onClick={processar} disabled={!podeProcessar} type="button"
+                  style={{ all: 'unset', boxSizing: 'border-box', cursor: podeProcessar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: podeProcessar ? 1 : 0.45 }}>
+                  <Icon name={busy ? 'refresh' : 'check'} size={16} style={busy ? { animation: 'fr-spin .7s linear infinite' } : undefined} /> {busy ? 'Processando…' : 'Processar inventário'}
+                </button>
+              </span>
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+// ── O MODAL ─────────────────────────────────────────────────────────────────────────────────
+function InventarioModal({ t, onClose, produtos }) {
+  const [aba, setAba] = useStateM('rapida');       // 'rapida' | 'planilha'
+  // LISTA DA SESSÃO: estado CONGELADO das respostas do POST. Nunca derivada de `produtos` — o
+  // useFRProducts refaz o fetch a cada `stock_updated` (inclusive o que ESTA tela dispara), e o
+  // "antes" de cada linha seria reescrito pelo saldo novo, apagando justamente o que ela prova.
+  const [sessao, setSessao] = useStateM([]);
+  const registrar = (linha) => setSessao((s) => [linha, ...s]);
+  const registrarLote = (itens, preview) => {
+    const porId = new Map((preview || []).map((l) => [l.product_id, l]));
+    setSessao((s) => [
+      ...itens.map((it) => {
+        const l = porId.get(it.product_id) || {};
+        return { key: `${it.product_id}:${it.antes}:${it.depois}:${s.length}`, product_id: it.product_id, sku: it.sku, nome: l.nome || it.sku, img: undefined, un: l.un || '', active: it.active, antes: it.antes, depois: it.depois, delta: it.delta, status: it.status, hora: new Date() };
+      }),
+      ...s,
+    ]);
+  };
+
+  // RBAC de tela: a chave é `estoque:edit` EXATA. Nunca `canAccess('estoque')` — o helper expande
+  // por prefixo (`chave:`), então 'estoque' casaria com quem só tem `estoque:view`.
+  const podeEscrever = !!(window.FRAuth && window.FRAuth.canAccess && window.FRAuth.canAccess('estoque:edit'));
+  const motivoSemPermissao = 'Requer a permissão "estoque:edit" — fale com o administrador.';
+
+  const cAmb = uiTone(t, 'amber');
+
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px,96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 20, boxShadow: t.shadow, overflow: 'hidden' }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
           <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="clipboard" size={20} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Fazer Inventário</div><div style={{ fontSize: 12.5, color: t.muted }}>Importe a planilha com a contagem dos itens.</div></div>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Fazer Inventário</div><div style={{ fontSize: 12.5, color: t.muted }}>Reconte um item na hora ou importe a planilha da contagem.</div></div>
           <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
         <div className="fr-scroll" style={{ padding: 24, overflowY: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 14, background: t.accentSoft, border: `1px solid ${frHexToRgba(t.accent, 0.25)}`, marginBottom: 18 }}>
-            <Icon name="sheet" size={22} style={{ color: t.accentText, flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>Modelo de planilha</div><div style={{ fontSize: 11.5, color: t.muted }}>Colunas: SKU · Nome · Quantidade Contada — já vem com o catálogo atual.</div></div>
-            <button onClick={baixarModelo}
-              style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: t.panel, color: t.accentText, border: `1px solid ${t.border}` }}><Icon name="download" size={15} /> Baixar modelo</button>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+            <InvTabBtn t={t} id="rapida" atual={aba} onSel={setAba} icon="search">Recontagem rápida</InvTabBtn>
+            <InvTabBtn t={t} id="planilha" atual={aba} onSel={setAba} icon="sheet">Em massa (planilha)</InvTabBtn>
           </div>
-          <label onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); lerArquivo(e.dataTransfer.files[0]); }}
-            style={{ display: 'block', cursor: 'pointer', borderRadius: 16, padding: '28px 20px', textAlign: 'center', border: `2px dashed ${drag ? t.accent : t.borderStrong}`, background: drag ? t.accentSoft : t.elevated, transition: 'all .15s' }}>
-            <input type="file" accept=".xlsx,.csv" style={{ display: 'none' }} onChange={(e) => { lerArquivo(e.target.files[0]); e.target.value = ''; }} />
-            <div style={{ width: 52, height: 52, margin: '0 auto 12px', borderRadius: 15, display: 'grid', placeItems: 'center', background: t.accentSoft, color: t.accentText }}><Icon name="upload" size={24} /></div>
-            <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{fileName || 'Arraste a planilha ou clique para selecionar'}</div>
-            <div style={{ fontSize: 12.5, color: t.muted, marginTop: 5 }}>Formatos aceitos: .xlsx, .csv</div>
-          </label>
-          {parseErro && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg, border: `1px solid ${frHexToRgba(cRed.fg, 0.25)}` }}>
-              <Icon name="alert" size={15} /> {parseErro}
+
+          {!podeEscrever && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>
+              <Icon name="alert" size={15} style={{ flexShrink: 0 }} /> Você pode conferir a contagem, mas não registrar: {motivoSemPermissao}
             </div>
           )}
-          {linhas && !parseErro && (
-            linhas.length === 0 ? (
-              <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>Nenhuma linha com contagem preenchida na planilha.</div>
-            ) : (
-              <div style={{ marginTop: 18 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-                  <Badge t={t} kind="accent" dot>{linhas.length} {linhas.length === 1 ? 'item contado' : 'itens contados'}</Badge>
-                  <Badge t={t} kind={comDelta ? 'amber' : 'green'} dot>{comDelta} com diferença</Badge>
-                  {desconhecidos > 0 && <Badge t={t} kind="red" dot>{desconhecidos} SKU desconhecido{desconhecidos > 1 ? 's' : ''}</Badge>}
-                  {invalidos > 0 && <Badge t={t} kind="red" dot>{invalidos} contagem inválida</Badge>}
-                </div>
-                <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, overflow: 'hidden' }}>
-                  <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }} className="fr-scroll">
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 480, fontSize: 13 }}>
-                      <thead><tr>
-                        {['SKU', 'Produto', 'Contado', 'Sistema', 'Delta'].map((h, k) => <th key={h} style={{ position: 'sticky', top: 0, textAlign: k >= 2 ? 'right' : 'left', padding: '10px 14px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: t.faint, borderBottom: `1px solid ${t.border}`, background: t.elevated, whiteSpace: 'nowrap' }}>{h}</th>)}
-                      </tr></thead>
-                      <tbody>
-                        {linhas.map((l, i) => (
-                          <tr key={`${l.sku}-${i}`}>
-                            <td style={{ padding: '9px 14px', fontWeight: 700, color: t.text, whiteSpace: 'nowrap', borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sku}</td>
-                            <td style={{ padding: '9px 14px', color: l.desconhecido ? cRed.fg : t.text, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>
-                              {l.desconhecido ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 700 }}><Icon name="alert" size={13} /> SKU desconhecido</span> : l.nome}
-                            </td>
-                            <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: l.invalido ? cRed.fg : t.text, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.invalido ? 'inválida' : l.contado}</td>
-                            <td style={{ padding: '9px 14px', textAlign: 'right', color: t.muted, borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.sistema == null ? '—' : l.sistema}</td>
-                            <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 800, color: l.delta == null ? t.faint : deltaCor(l.delta), whiteSpace: 'nowrap', borderBottom: i === linhas.length - 1 ? 'none' : `1px solid ${t.border}` }}>{l.delta == null ? '—' : fmtDelta(l.delta)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+
+          {aba === 'rapida'
+            ? <InvRecontagem t={t} produtos={produtos} podeEscrever={podeEscrever} motivoSemPermissao={motivoSemPermissao} onRegistrado={registrar} />
+            : <InvPlanilha t={t} produtos={produtos} podeEscrever={podeEscrever} motivoSemPermissao={motivoSemPermissao} onLote={registrarLote} />}
+
+          {sessao.length > 0 && (
+            <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${t.border}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.08em', color: t.faint, textTransform: 'uppercase' }}>Recontados nesta sessão</span>
+                <Badge t={t} kind="accent" dot>{sessao.length}</Badge>
               </div>
-            )
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {sessao.map((r) => (
+                  <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated }}>
+                    <InvMiniatura t={t} img={r.img} size={34} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.nome}</div>
+                      <div style={{ fontSize: 11, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>{r.sku}{r.active === false ? ' · fora do catálogo' : ''}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontSize: 12.5, color: t.muted }}>{r.antes} → <b style={{ color: t.text }}>{r.depois}</b> <span style={{ fontSize: 10.5, color: t.faint }}>{r.un}</span></div>
+                      <div style={{ fontSize: 10.5, fontWeight: 800, color: r.delta === 0 ? t.faint : r.delta > 0 ? uiTone(t, 'green').fg : uiTone(t, 'red').fg }}>
+                        {r.status === 'replay' ? 'JÁ REGISTRADO' : r.delta === 0 ? 'CONFIRMADO' : r.delta > 0 ? `SOBRA +${r.delta}` : `FALTA ${r.delta}`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
         <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
-          <span style={{ marginRight: 'auto', fontSize: 11.5, color: t.faint }}>O preview não altera o estoque.</span>
-          <Btn t={t} kind="ghost" onClick={onClose}>Cancelar</Btn>
-          {/* DESABILITADO de nascença — tooltip honesto no span (title em botão disabled não dispara em todo browser). */}
-          <span title="Processamento em massa aguarda endpoint dedicado — em breve." style={{ display: 'inline-flex' }}>
-            <button disabled
-              style={{ all: 'unset', boxSizing: 'border-box', cursor: 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: 0.45 }}>
-              <Icon name="check" size={16} /> Processar inventário
-            </button>
+          <span style={{ marginRight: 'auto', fontSize: 11.5, color: t.faint }}>
+            {sessao.length > 0 ? `${sessao.length} item(ns) recontado(s) nesta sessão.` : 'A contagem corrige o saldo físico do almoxarifado.'}
           </span>
+          <Btn t={t} kind="ghost" onClick={onClose}>Fechar</Btn>
         </div>
       </div>
     </div>
