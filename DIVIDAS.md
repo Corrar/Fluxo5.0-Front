@@ -598,3 +598,15 @@ dado já está gravado.
 
 **Aplicado**: o `003@fluxoroyale.local` (nome "Smoke Codigo 003") vive na validação com
 `is_active = false` e um `audit_logs` de LOGIN preservado. Estado final: 8 usuários, 1 ativo.
+
+## Reposições — aviso ao fechar detalhe cujo status migrou de aba (recusado na rodada do fix de montagem)
+
+**Registrado em 17/08/2026** (decisão do arquiteto, C4 da rodada "detalhe sobrepondo a lista").
+Medição provou que o detalhe SOBREVIVE ao refetch (o `cur` ancora no array completo, o filtro por
+aba é só de exibição) — nenhum fix foi necessário; virou prova de regressão no harness. O que ficou
+como dívida é o polimento recusado: **ao fechar um detalhe cujo status mudou** (ex.: salvou
+separação e o pedido migrou de Pendentes para Em preparo), o operador cai na aba antiga e o pedido
+"sumiu" dela. Desenho aprovado para quando for implementar: **toast no ramo da LISTA** (estado no
+pai, render nos dois ramos — o `toastEl` já existe) informando o novo estado do pedido. Explicitamente
+recusado: `setTab` automático ao fechar (troca um susto por outro). Sem prova sem operador — não
+implementar até haver rodada com validação de uso real.

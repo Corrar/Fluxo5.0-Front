@@ -778,9 +778,12 @@ function RepPickerDrawer({ t, rep, produtos, salvando, onClose, onConcluir }) {
   );
 }
 
-// Detalhe em tela cheia — CASCA do ref21 sobre o MOTOR REAL (intocado): separar (reservar),
-// enviar (entregar, PARCIAL permitido), reverter, rastrear. NF e volumes/dimensões do ref
-// ficaram FORA: o backend de replenishments não tem esses campos (shipping_info +
+// Detalhe NO FLUXO da área de conteúdo (padrão do SepDetail, separacoes.jsx:988/:553):
+// a lista sai do DOM via early-return no PageReposicoes — morreu o overlay
+// position:fixed sobre `t.bg` (chave que NUNCA existiu na fábrica de tokens: background
+// undefined = transparente, e a lista aparecia por baixo do detalhe em produção).
+// A superfície opaca é o pageBg do erpframe.jsx:442; o detalhe não pinta fundo próprio.
+// NF e volumes/dimensões do ref seguem FORA — o backend não tem os campos (shipping_info +
 // tracking_code é o shape inteiro do envio).
 function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, onReverter, onRastrear, onSalvarItens }) {
   const [sep, setSep] = useStateR(() => rep.itens.map((i) => i.sep));
@@ -813,19 +816,22 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
   const linhas = rep.itens.map((it, idx) => ({ it, idx })).filter(({ idx }) => !soFalta || sep[idx] < tetos[idx]);
   // Mexer na LISTA de itens (drawer) só em pendente — ver comentário do RepPickerDrawer.
   const podeMexerItens = rep.status === 'pendente';
+  const mostraRodape = !concluido && !cancelada;
   const chipHero = { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 13px', borderRadius: 999, background: 'rgba(255,255,255,.12)', border: '1px solid rgba(255,255,255,.18)' };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 65, background: t.bg, display: 'flex', flexDirection: 'column' }}>
-      {/* hero (ref21): gradiente do accent, número grande, pill de status, chips e anel de progresso */}
-      <div style={{ position: 'relative', overflow: 'hidden', padding: '16px 32px 22px', background: `linear-gradient(120deg, ${t.accent} 0%, ${frHexToRgba(t.accent, 0.85)} 100%)`, color: '#fff', flexShrink: 0 }}>
+    <div style={{ paddingBottom: mostraRodape ? 96 : 20 }}>
+      {/* Hero em CARD arredondado dentro do padding do frame (decisão do arquiteto, opção a).
+          borderRadius 16 = o mesmo do Card do repo (ui.jsx:33). overflow:hidden OBRIGATÓRIO:
+          os círculos decorativos são absolute com offsets negativos e vazariam do card. */}
+      <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 16, padding: '16px 24px 22px', background: `linear-gradient(120deg, ${t.accent} 0%, ${frHexToRgba(t.accent, 0.85)} 100%)`, color: '#fff' }}>
         <div style={{ position: 'absolute', right: -70, top: -110, width: 340, height: 340, borderRadius: '50%', border: '46px solid rgba(255,255,255,.06)' }} />
         <div style={{ position: 'absolute', right: 140, bottom: -140, width: 240, height: 240, borderRadius: '50%', border: '34px solid rgba(255,255,255,.05)' }} />
-        <div style={{ position: 'relative', maxWidth: 1100, margin: '0 auto', width: '100%', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+        <div style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,.65)' }}>Reposições › Pedido</div>
           <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, background: 'rgba(255,255,255,.16)', border: '1px solid rgba(255,255,255,.25)', color: '#fff', fontSize: 13, fontWeight: 700 }}><Icon name="chevronLeft" size={16} /> Voltar</button>
         </div>
-        <div style={{ position: 'relative', maxWidth: 1100, margin: '0 auto', width: '100%', display: 'flex', alignItems: 'center', gap: 26, flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center', gap: 26, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 30, fontWeight: 850, letterSpacing: '-.02em' }}>{rep.n}</span>
@@ -853,157 +859,156 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
         </div>
       </div>
 
-      {/* stepper (ref21) — a trava real é a do motor: envio abre com QUALQUER coisa separada (parcial permitido) */}
+      {/* stepper (ref21) — linha no fluxo; a trava real é a do motor: envio abre com QUALQUER
+          coisa separada (parcial permitido) */}
       {!concluido && !cancelada && (
-        <div style={{ padding: '12px 32px', borderBottom: `1px solid ${t.border}`, background: t.panel, flexShrink: 0 }}>
-          <div style={{ maxWidth: 1100, margin: '0 auto', width: '100%', display: 'flex', alignItems: 'center', gap: 14 }}>
-            {[['separar', 'Separar materiais'], ['envio', 'Embalagem & envio']].map(([k, lb], i) => {
-              const locked = k === 'envio' && !podeEnviar;
-              const done = k === 'separar' && tudoSeparado;
-              const on = step === k;
-              return (
-                <React.Fragment key={k}>
-                  {i > 0 && <div style={{ flex: '0 1 60px', height: 2, borderRadius: 2, background: podeEnviar ? uiTone(t, 'green').fg : t.border }} />}
-                  <button onClick={() => !locked && setStep(k)} disabled={locked} style={{ all: 'unset', cursor: locked ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10, padding: '7px 14px 7px 7px', borderRadius: 999, background: on ? t.accentSoft : 'transparent', opacity: locked ? 0.45 : 1 }}>
-                    <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: done ? uiTone(t, 'green').fg : on ? t.accent : t.elevated, color: done || on ? '#fff' : t.muted, border: done || on ? 'none' : `1.5px solid ${t.borderStrong}`, fontSize: 13, fontWeight: 800 }}>{done ? <Icon name="check" size={15} /> : locked ? <Icon name="lock" size={13} /> : i + 1}</span>
-                    <span style={{ fontSize: 13.5, fontWeight: 800, color: on ? t.accentText : t.muted }}>{lb}</span>
-                  </button>
-                </React.Fragment>
-              );
-            })}
-            <span style={{ marginLeft: 'auto', fontSize: 12.5, color: t.faint, display: typeof window !== 'undefined' && window.innerWidth > 760 ? 'inline' : 'none' }}>{step === 'separar' ? 'Confira e separe cada item do pedido.' : 'Método de envio e rastreio — confirmar dá baixa física.'}</span>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, margin: '16px 2px 0' }}>
+          {[['separar', 'Separar materiais'], ['envio', 'Embalagem & envio']].map(([k, lb], i) => {
+            const locked = k === 'envio' && !podeEnviar;
+            const done = k === 'separar' && tudoSeparado;
+            const on = step === k;
+            return (
+              <React.Fragment key={k}>
+                {i > 0 && <div style={{ flex: '0 1 60px', height: 2, borderRadius: 2, background: podeEnviar ? uiTone(t, 'green').fg : t.border }} />}
+                <button onClick={() => !locked && setStep(k)} disabled={locked} style={{ all: 'unset', cursor: locked ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10, padding: '7px 14px 7px 7px', borderRadius: 999, background: on ? t.accentSoft : 'transparent', opacity: locked ? 0.45 : 1 }}>
+                  <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: done ? uiTone(t, 'green').fg : on ? t.accent : t.elevated, color: done || on ? '#fff' : t.muted, border: done || on ? 'none' : `1.5px solid ${t.borderStrong}`, fontSize: 13, fontWeight: 800 }}>{done ? <Icon name="check" size={15} /> : locked ? <Icon name="lock" size={13} /> : i + 1}</span>
+                  <span style={{ fontSize: 13.5, fontWeight: 800, color: on ? t.accentText : t.muted }}>{lb}</span>
+                </button>
+              </React.Fragment>
+            );
+          })}
+          <span style={{ marginLeft: 'auto', fontSize: 12.5, color: t.faint, display: typeof window !== 'undefined' && window.innerWidth > 760 ? 'inline' : 'none' }}>{step === 'separar' ? 'Confira e separe cada item do pedido.' : 'Método de envio e rastreio — confirmar dá baixa física.'}</span>
         </div>
       )}
 
-      <div className="fr-scroll" style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
-        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 28px 40px' }}>
-          {step === 'separar' && !concluido && !cancelada && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-                <button onClick={() => setSoFalta((v) => !v)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 9, background: soFalta ? t.accent : t.elevated, color: soFalta ? t.onAccent : t.muted, border: `1px solid ${soFalta ? t.accent : t.border}` }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: soFalta ? t.onAccent : t.accent }} /> Disponível p/ separar {faltam ? `(${faltam})` : ''}
-                </button>
-                <button onClick={() => !readOnly && separarTudo()} disabled={readOnly} style={{ all: 'unset', cursor: readOnly ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '7px 12px', borderRadius: 9, background: t.accentSoft, opacity: readOnly ? 0.5 : 1 }}><Icon name="check" size={14} /> Separar tudo disponível</button>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {linhas.map(({ it, idx }) => (
-                  <RepItemRow key={it.id} t={t} it={{ ...it, sep: sep[idx] }} teto={tetos[idx]} readOnly={busy}
-                    onSep={(v) => setSep((xs) => xs.map((x, i) => (i === idx ? v : x)))} />
-                ))}
-                {linhas.length === 0 && <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>Todos os itens disponíveis já foram separados. ✓</div>}
-              </div>
-              {podeMexerItens ? (
-                <button onClick={() => setPickerOpen(true)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.accentText, border: `1.5px dashed ${frHexToRgba(t.accent, 0.5)}`, background: frHexToRgba(t.accent, 0.04) }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = frHexToRgba(t.accent, 0.04); }}>
-                  <Icon name="plus" size={16} /> Adicionar ou Retirar materiais
-                </button>
-              ) : (
-                <span title="Adicionar ou retirar materiais só em pedido pendente — item já reservado não pode sair da lista (o PUT deixaria a reserva órfã)." style={{ boxSizing: 'border-box', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.faint, border: `1.5px dashed ${t.border}`, cursor: 'not-allowed' }}>
-                  <Icon name="lock" size={15} /> Adicionar ou Retirar materiais — só em pedido pendente
-                </span>
-              )}
-            </>
-          )}
-
-          {(step === 'envio' || concluido) && !cancelada && (
-            concluido ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}` }}>
-                  <Icon name="check" size={18} style={{ color: uiTone(t, 'green').fg }} /> <span style={{ fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'green').fg }}>Pedido separado e enviado — baixa física feita no estoque.</span>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                  <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>DESTINO</div>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="mapPin" size={16} style={{ color: t.accentText }} /> {rep.cidade}</div>
-                  </div>
-                  <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>MÉTODO DE ENVIO</div>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="truck" size={16} style={{ color: t.accentText }} /> {repMetodoNome(rep.envio && rep.envio.metodo)}</div>
-                  </div>
-                  <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>CÓDIGO DE RASTREIO</div>
-                    <div style={{ fontSize: 15, fontWeight: 800, color: (rep.envio && rep.envio.rastreio) ? t.text : t.faint, marginTop: 6, fontFamily: (rep.envio && rep.envio.rastreio) ? 'ui-monospace, monospace' : 'inherit' }}>{(rep.envio && rep.envio.rastreio) || 'Não informado'}</div>
-                  </div>
-                </div>
-                <button onClick={() => onRastrear(rep)} disabled={!(rep.envio && rep.envio.rastreio) || busy}
-                  style={{ all: 'unset', boxSizing: 'border-box', cursor: (!(rep.envio && rep.envio.rastreio) || busy) ? 'not-allowed' : 'pointer', width: '100%', height: 50, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, fontSize: 14.5, fontWeight: 800, background: (rep.envio && rep.envio.rastreio) ? t.accent : t.elevated, color: (rep.envio && rep.envio.rastreio) ? t.onAccent : t.faint, boxShadow: (rep.envio && rep.envio.rastreio) ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', border: (rep.envio && rep.envio.rastreio) ? 'none' : `1px solid ${t.border}` }}>
-                  <Icon name="mapPin" size={18} /> Rastrear encomenda
-                </button>
-                {!(rep.envio && rep.envio.rastreio) && <div style={{ fontSize: 12, color: t.faint, textAlign: 'center' }}>Sem código de rastreio — o rastreamento não está disponível para este envio.</div>}
-                <div style={{ marginTop: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>Materiais enviados</span>
-                    <span style={{ fontSize: 12.5, color: t.muted }}>{rep.itens.length} {rep.itens.length === 1 ? 'item' : 'itens'} · {repSepTot(rep)} un</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                    {rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  {/* Reverter desfaz a BAIXA FÍSICA (receive + reserve de volta) e limpa envio/rastreio. */}
-                  <Btn t={t} kind="ghost" icon="refresh" onClick={() => onReverter(rep)}>{busy ? 'Revertendo…' : 'Reverter entrega'}</Btn>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}`, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'green').fg, flexWrap: 'wrap' }}>
-                  <Icon name="check" size={15} /> {sepTot} de {qtdTot} un separadas · destino <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="mapPin" size={13} /> {rep.cidade}</span>
-                </div>
-                <div style={{ fontSize: 12.5, color: t.muted }}>
-                  Confirmar o envio dá <b style={{ color: t.text }}>baixa física</b> de {sepTot} un. no estoque.
-                  {parcial && <span style={{ color: uiTone(t, 'amber').fg }}> Envio parcial: a reserva dos {qtdTot - sepTot} restantes é liberada.</span>}
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Método de envio <span style={{ color: uiTone(t, 'red').fg }}>*</span></div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {REP_ENVIO_METODOS.map((m) => {
-                      const on = metodo === m.id;
-                      return <button key={m.id} onClick={() => setMetodo(m.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}><Icon name={m.icon} size={15} /> {m.nome}</button>;
-                    })}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Código de rastreio <span style={{ color: t.faint, fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· opcional</span></div>
-                  <input value={rastreio} onChange={(e) => setRastreio(e.target.value.toUpperCase())} placeholder="Ex: BR123456789BR" style={{ boxSizing: 'border-box', width: '100%', height: 46, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'ui-monospace, monospace', outline: 'none' }} />
-                </div>
-              </div>
-            )
-          )}
-
-          {cancelada && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 13.5, color: t.muted }}>Pedido cancelado — a reserva de estoque foi liberada.</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}</div>
+      {/* corpo — chips e lista no MESMO container/eixo do resto do detalhe (B5) */}
+      <div style={{ marginTop: 18 }}>
+        {step === 'separar' && !concluido && !cancelada && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+              <button onClick={() => setSoFalta((v) => !v)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 9, background: soFalta ? t.accent : t.elevated, color: soFalta ? t.onAccent : t.muted, border: `1px solid ${soFalta ? t.accent : t.border}` }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: soFalta ? t.onAccent : t.accent }} /> Disponível p/ separar {faltam ? `(${faltam})` : ''}
+              </button>
+              <button onClick={() => !readOnly && separarTudo()} disabled={readOnly} style={{ all: 'unset', cursor: readOnly ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '7px 12px', borderRadius: 9, background: t.accentSoft, opacity: readOnly ? 0.5 : 1 }}><Icon name="check" size={14} /> Separar tudo disponível</button>
             </div>
-          )}
-        </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {linhas.map(({ it, idx }) => (
+                <RepItemRow key={it.id} t={t} it={{ ...it, sep: sep[idx] }} teto={tetos[idx]} readOnly={busy}
+                  onSep={(v) => setSep((xs) => xs.map((x, i) => (i === idx ? v : x)))} />
+              ))}
+              {linhas.length === 0 && <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>Todos os itens disponíveis já foram separados. ✓</div>}
+            </div>
+            {podeMexerItens ? (
+              <button onClick={() => setPickerOpen(true)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.accentText, border: `1.5px dashed ${frHexToRgba(t.accent, 0.5)}`, background: frHexToRgba(t.accent, 0.04) }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = frHexToRgba(t.accent, 0.04); }}>
+                <Icon name="plus" size={16} /> Adicionar ou Retirar materiais
+              </button>
+            ) : (
+              <span title="Adicionar ou retirar materiais só em pedido pendente — item já reservado não pode sair da lista (o PUT deixaria a reserva órfã)." style={{ boxSizing: 'border-box', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.faint, border: `1.5px dashed ${t.border}`, cursor: 'not-allowed' }}>
+                <Icon name="lock" size={15} /> Adicionar ou Retirar materiais — só em pedido pendente
+              </span>
+            )}
+          </>
+        )}
+
+        {(step === 'envio' || concluido) && !cancelada && (
+          concluido ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}` }}>
+                <Icon name="check" size={18} style={{ color: uiTone(t, 'green').fg }} /> <span style={{ fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'green').fg }}>Pedido separado e enviado — baixa física feita no estoque.</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>DESTINO</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="mapPin" size={16} style={{ color: t.accentText }} /> {rep.cidade}</div>
+                </div>
+                <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>MÉTODO DE ENVIO</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="truck" size={16} style={{ color: t.accentText }} /> {repMetodoNome(rep.envio && rep.envio.metodo)}</div>
+                </div>
+                <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>CÓDIGO DE RASTREIO</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: (rep.envio && rep.envio.rastreio) ? t.text : t.faint, marginTop: 6, fontFamily: (rep.envio && rep.envio.rastreio) ? 'ui-monospace, monospace' : 'inherit' }}>{(rep.envio && rep.envio.rastreio) || 'Não informado'}</div>
+                </div>
+              </div>
+              <button onClick={() => onRastrear(rep)} disabled={!(rep.envio && rep.envio.rastreio) || busy}
+                style={{ all: 'unset', boxSizing: 'border-box', cursor: (!(rep.envio && rep.envio.rastreio) || busy) ? 'not-allowed' : 'pointer', width: '100%', height: 50, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, fontSize: 14.5, fontWeight: 800, background: (rep.envio && rep.envio.rastreio) ? t.accent : t.elevated, color: (rep.envio && rep.envio.rastreio) ? t.onAccent : t.faint, boxShadow: (rep.envio && rep.envio.rastreio) ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', border: (rep.envio && rep.envio.rastreio) ? 'none' : `1px solid ${t.border}` }}>
+                <Icon name="mapPin" size={18} /> Rastrear encomenda
+              </button>
+              {!(rep.envio && rep.envio.rastreio) && <div style={{ fontSize: 12, color: t.faint, textAlign: 'center' }}>Sem código de rastreio — o rastreamento não está disponível para este envio.</div>}
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>Materiais enviados</span>
+                  <span style={{ fontSize: 12.5, color: t.muted }}>{rep.itens.length} {rep.itens.length === 1 ? 'item' : 'itens'} · {repSepTot(rep)} un</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                {/* Reverter desfaz a BAIXA FÍSICA (receive + reserve de volta) e limpa envio/rastreio. */}
+                <Btn t={t} kind="ghost" icon="refresh" onClick={() => onReverter(rep)}>{busy ? 'Revertendo…' : 'Reverter entrega'}</Btn>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}`, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'green').fg, flexWrap: 'wrap' }}>
+                <Icon name="check" size={15} /> {sepTot} de {qtdTot} un separadas · destino <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="mapPin" size={13} /> {rep.cidade}</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: t.muted }}>
+                Confirmar o envio dá <b style={{ color: t.text }}>baixa física</b> de {sepTot} un. no estoque.
+                {parcial && <span style={{ color: uiTone(t, 'amber').fg }}> Envio parcial: a reserva dos {qtdTot - sepTot} restantes é liberada.</span>}
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Método de envio <span style={{ color: uiTone(t, 'red').fg }}>*</span></div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {REP_ENVIO_METODOS.map((m) => {
+                    const on = metodo === m.id;
+                    return <button key={m.id} onClick={() => setMetodo(m.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}><Icon name={m.icon} size={15} /> {m.nome}</button>;
+                  })}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Código de rastreio <span style={{ color: t.faint, fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· opcional</span></div>
+                <input value={rastreio} onChange={(e) => setRastreio(e.target.value.toUpperCase())} placeholder="Ex: BR123456789BR" style={{ boxSizing: 'border-box', width: '100%', height: 46, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'ui-monospace, monospace', outline: 'none' }} />
+              </div>
+            </div>
+          )
+        )}
+
+        {cancelada && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 13.5, color: t.muted }}>Pedido cancelado — a reserva de estoque foi liberada.</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}</div>
+          </div>
+        )}
       </div>
 
-      {/* rodapé de ações (ref21) — os callbacks e regras são os do motor real */}
-      {!concluido && !cancelada && (
-        <div style={{ padding: '14px 28px', borderTop: `1px solid ${t.border}`, background: t.panel, flexShrink: 0 }}>
-          <div style={{ maxWidth: 1100, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 13, color: t.muted }}>
-              {dirty
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Separação alterada — "Salvar separação" grava a reserva no servidor.</span>
-                : step === 'envio' && !metodo
-                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Escolha o método de envio para confirmar.</span>
-                  : <span>Total do pedido <b style={{ color: t.text }}>{repMoney(rep.valor)}</b></span>}
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {step === 'separar' ? (
-                <>
-                  <Btn t={t} kind="ghost" icon="check" onClick={() => onReservar(rep, itensPayload())}>{busy ? 'Salvando…' : 'Salvar separação'}</Btn>
-                  <button onClick={() => podeEnviar && setStep('envio')} disabled={!podeEnviar} style={{ all: 'unset', cursor: podeEnviar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: podeEnviar ? t.accent : t.elevated, color: podeEnviar ? t.onAccent : t.faint }}><Icon name="arrowRight" size={16} /> Ir para o envio</button>
-                </>
-              ) : (
-                <button onClick={() => metodo && podeEnviar && onEntregar(rep, itensPayload(), metodo, rastreio.trim())} disabled={!metodo || !podeEnviar || busy}
-                  style={{ all: 'unset', cursor: (!metodo || !podeEnviar || busy) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 46, padding: '0 22px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: (!metodo || !podeEnviar || busy) ? t.elevated : t.accent, color: (!metodo || !podeEnviar || busy) ? t.faint : t.onAccent }}>
-                  <Icon name="send" size={17} /> {busy ? 'Enviando…' : !metodo ? 'Escolha o método' : parcial ? `Confirmar envio parcial (${sepTot})` : 'Confirmar envio'}
-                </button>
-              )}
-            </div>
+      {/* Rodapé de ação — MESMO mecanismo do SepDetail (separacoes.jsx:553/:662): paddingBottom
+          no root + card sticky bottom:0 no fr-scroll do frame; os −4px laterais são o respiro
+          do próprio mecanismo espelhado. Os callbacks e regras são os do motor real. */}
+      {mostraRodape && (
+        <div style={{ position: 'sticky', bottom: 0, marginTop: 22, marginLeft: -4, marginRight: -4, padding: '14px 20px', borderRadius: 16,
+          background: t.panel, border: `1px solid ${t.borderStrong}`, boxShadow: t.shadow, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 13, color: t.muted }}>
+            {dirty
+              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Separação alterada — "Salvar separação" grava a reserva no servidor.</span>
+              : step === 'envio' && !metodo
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Escolha o método de envio para confirmar.</span>
+                : <span>Total do pedido <b style={{ color: t.text }}>{repMoney(rep.valor)}</b></span>}
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {step === 'separar' ? (
+              <>
+                <Btn t={t} kind="ghost" icon="check" onClick={() => onReservar(rep, itensPayload())}>{busy ? 'Salvando…' : 'Salvar separação'}</Btn>
+                <button onClick={() => podeEnviar && setStep('envio')} disabled={!podeEnviar} style={{ all: 'unset', cursor: podeEnviar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: podeEnviar ? t.accent : t.elevated, color: podeEnviar ? t.onAccent : t.faint }}><Icon name="arrowRight" size={16} /> Ir para o envio</button>
+              </>
+            ) : (
+              <button onClick={() => metodo && podeEnviar && onEntregar(rep, itensPayload(), metodo, rastreio.trim())} disabled={!metodo || !podeEnviar || busy}
+                style={{ all: 'unset', cursor: (!metodo || !podeEnviar || busy) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 46, padding: '0 22px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: (!metodo || !podeEnviar || busy) ? t.elevated : t.accent, color: (!metodo || !podeEnviar || busy) ? t.faint : t.onAccent }}>
+                <Icon name="send" size={17} /> {busy ? 'Enviando…' : !metodo ? 'Escolha o método' : parcial ? `Confirmar envio parcial (${sepTot})` : 'Confirmar envio'}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1200,6 +1205,46 @@ function PageReposicoes({ t }) {
     </Card>
   );
 
+  // Modal de rastreio e toast renderizam nos DOIS ramos (lista e detalhe) — padrão do
+  // SepToast (separacoes.jsx:994). O estado vive aqui no pai, que nunca desmonta.
+  const trackingModal = tracking && (
+    <div onClick={() => setTracking(null)} style={{ position: 'fixed', inset: 0, zIndex: 71, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, padding: 24, boxShadow: t.shadow }}>
+        <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginBottom: 4 }}>Rastreamento</div>
+        <div style={{ fontSize: 13, color: t.muted, fontFamily: 'ui-monospace, monospace', marginBottom: 16 }}>{tracking.code}</div>
+        {tracking.loading && <div style={{ fontSize: 13, color: t.muted }}>Consultando transportadora…</div>}
+        {tracking.erro && (
+          <div style={{ fontSize: 13, color: uiTone(t, 'amber').fg, background: uiTone(t, 'amber').bg, padding: '12px 14px', borderRadius: 11, lineHeight: 1.5 }}>
+            {tracking.erro}
+            <div style={{ fontSize: 11.5, color: t.muted, marginTop: 6 }}>O rastreio usa a API Wonca (GET /tracking/:code) e exige a variável <b>WONCA_API_KEY</b> no ambiente do backend.</div>
+          </div>
+        )}
+        {tracking.data && <pre style={{ margin: 0, fontSize: 11.5, color: t.text, background: t.elevated, padding: 14, borderRadius: 11, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(tracking.data, null, 2)}</pre>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Btn t={t} kind="ghost" onClick={() => setTracking(null)}>Fechar</Btn></div>
+      </div>
+    </div>
+  );
+  const toastEl = toast && (
+    <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
+      <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
+      <span style={{ fontSize: 13, fontWeight: 600 }}>{toast.msg}</span>
+      <button onClick={() => setToast(null)} style={{ all: 'unset', cursor: 'pointer', opacity: .7, flexShrink: 0 }}><Icon name="x" size={16} /></button>
+    </div>
+  );
+
+  // Detalhe NO FLUXO da área de conteúdo com early-return: a lista SAI do DOM — mesmo
+  // trânsito lista→detalhe das Separações (separacoes.jsx:988-997).
+  if (cur) {
+    return (
+      <>
+        <RepDetail t={t} rep={cur} busy={busy} produtos={produtos} onClose={() => setOpenId(null)}
+          onReservar={reservar} onEntregar={entregar} onReverter={reverter} onRastrear={rastrear} onSalvarItens={salvarItens} />
+        {trackingModal}
+        {toastEl}
+      </>
+    );
+  }
+
   return (
     <div>
       <PageHeader t={t} title="Reposições" subtitle="Pedidos de reposição para clientes — separação, envio e baixa de estoque."
@@ -1265,34 +1310,8 @@ function PageReposicoes({ t }) {
         onClose={() => !busy && setModal(null)}
         onSave={(payload) => (modal.edit ? editar(modal.edit.id, payload) : criar(payload))} />}
 
-      {cur && <RepDetail t={t} rep={cur} busy={busy} produtos={produtos} onClose={() => setOpenId(null)}
-        onReservar={reservar} onEntregar={entregar} onReverter={reverter} onRastrear={rastrear} onSalvarItens={salvarItens} />}
-
-      {tracking && (
-        <div onClick={() => setTracking(null)} style={{ position: 'fixed', inset: 0, zIndex: 71, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px,96vw)', background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 18, padding: 24, boxShadow: t.shadow }}>
-            <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginBottom: 4 }}>Rastreamento</div>
-            <div style={{ fontSize: 13, color: t.muted, fontFamily: 'ui-monospace, monospace', marginBottom: 16 }}>{tracking.code}</div>
-            {tracking.loading && <div style={{ fontSize: 13, color: t.muted }}>Consultando transportadora…</div>}
-            {tracking.erro && (
-              <div style={{ fontSize: 13, color: uiTone(t, 'amber').fg, background: uiTone(t, 'amber').bg, padding: '12px 14px', borderRadius: 11, lineHeight: 1.5 }}>
-                {tracking.erro}
-                <div style={{ fontSize: 11.5, color: t.muted, marginTop: 6 }}>O rastreio usa a API Wonca (GET /tracking/:code) e exige a variável <b>WONCA_API_KEY</b> no ambiente do backend.</div>
-              </div>
-            )}
-            {tracking.data && <pre style={{ margin: 0, fontSize: 11.5, color: t.text, background: t.elevated, padding: 14, borderRadius: 11, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(tracking.data, null, 2)}</pre>}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Btn t={t} kind="ghost" onClick={() => setTracking(null)}>Fechar</Btn></div>
-          </div>
-        </div>
-      )}
-
-      {toast && (
-        <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
-          <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: 13, fontWeight: 600 }}>{toast.msg}</span>
-          <button onClick={() => setToast(null)} style={{ all: 'unset', cursor: 'pointer', opacity: .7, flexShrink: 0 }}><Icon name="x" size={16} /></button>
-        </div>
-      )}
+      {trackingModal}
+      {toastEl}
     </div>
   );
 }
