@@ -76,6 +76,10 @@
       kind: tag ? tagToKind(tag) : 'gray',
       disp: disp,
       estoque: onHand,
+      // RESERVADO exposto (não só usado para calcular `disp`): a recontagem física precisa do PISO
+      // antes de o operador digitar — o servidor recusa contagem abaixo do reservado
+      // (AJUSTE_ABAIXO_RESERVA), e sem este campo o piso só apareceria como 400 depois do envio.
+      reserved: reserved,
       un: p.unit || '',
       preco: formatBRL(precoNum),
       img: img,
