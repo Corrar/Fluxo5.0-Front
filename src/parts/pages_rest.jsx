@@ -571,6 +571,17 @@ function PageEncomendar({ t: tBase, theme }) {
 //   qualquer (≠concluido/cancelada) --DELETE--> cancelada
 // O 'enviado' do mock virou 'concluido': "confirmar envio" É o action='entregar' do backend, que dá
 // a BAIXA FÍSICA (StockService.consume). O mock parava antes disso e nunca debitava estoque.
+//
+// RODADA "casca do ref21" (17/08): transplante SÓ de UX por cima do motor intocado —
+//   • RepItemRow no visual do ref (ponto "disponível", borda verde, variante mobile) com o teto
+//     REAL, agora ANCORADO no sep salvo (min(qtd, sep_salvo + disponivel)) — antes o teto usava o
+//     sep local e derivava junto com o stepper;
+//   • RepDetail com hero/anel de progresso/stepper/rodapé do ref; filtro "disponível p/ separar";
+//   • RepPickerDrawer SÓ em pedido pendente (PUT /:id substitui itens por product_id — em pedido
+//     com reserva, item removido deixaria reserva órfã); persiste com UM PUT no Concluir;
+//   • NF e volumes/dimensões do ref FORA — o backend não tem os campos (shipping_info +
+//     tracking_code é o shape inteiro do envio);
+//   • rótulo de 'concluido' = "Separado" (vocabulário do ref, pedido do arquiteto).
 const REP_ENVIO_METODOS = [
   { id: 'correios-pac', nome: 'Correios — PAC', icon: 'truck' },
   { id: 'correios-sedex', nome: 'Correios — Sedex', icon: 'truck' },
@@ -578,9 +589,12 @@ const REP_ENVIO_METODOS = [
   { id: 'transportadora', nome: 'Transportadora', icon: 'truck' },
   { id: 'retirada', nome: 'Retirada no local', icon: 'box' },
 ];
+// Rótulo de 'concluido' = "Separado" (vocabulário do ref21, pedido do arquiteto). O status do
+// BACKEND segue 'concluido' (pós-entrega, baixa física feita) — só o rótulo mudou; o detalhe
+// continua dizendo "enviado/baixa física" onde importa.
 const repStatusMeta = {
   pendente: ['Pendente', 'amber'], em_preparo: ['Em preparo', 'blue'],
-  concluido: ['Concluído', 'green'], cancelada: ['Cancelada', 'red'],
+  concluido: ['Separado', 'green'], cancelada: ['Cancelada', 'red'],
 };
 const repMetodoNome = (id) => (REP_ENVIO_METODOS.find((m) => m.id === id) || {}).nome || id || '—';
 function repErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMessage; return g ? g(e) : (e && e.message) || 'Erro inesperado.'; }
@@ -631,164 +645,372 @@ function useFRReplenishments() {
 const repSepTot = (r) => r.itens.reduce((a, i) => a + i.sep, 0);
 const repQtdTot = (r) => r.itens.reduce((a, i) => a + i.qtd, 0);
 
-function RepItemRow({ t, it, onSep, readOnly }) {
-  // Teto = o que este item já reservou + o que ainda está livre no estoque.
-  const maxSep = Math.min(it.qtd, it.sep + it.disponivel);
+function RepItemRow({ t, it, teto, onSep, readOnly }) {
+  // Teto REAL de separação: o que este item já reservou + o que segue livre no estoque. Quando o
+  // detalhe edita a separação localmente, `teto` vem ANCORADO no sep SALVO (rep.itens) — sem a
+  // âncora o teto derivaria junto com o stepper (sep local + disponivel) e deixaria digitar além
+  // do estoque; o backend barraria no reservar, mas a UI teria mentido antes.
+  const maxSep = teto != null ? teto : Math.min(it.qtd, it.sep + it.disponivel);
   const completo = it.sep >= it.qtd;
   const semEstoque = maxSep < it.qtd;
+  const disp = !readOnly && !completo && it.sep < maxSep;   // ainda dá para separar mais
   const set = (v) => onSep(Math.max(0, Math.min(maxSep, v)));
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: t.elevated, border: `1px solid ${completo ? frHexToRgba('#10b981', .4) : t.border}` }}>
-      <span style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', background: completo ? uiTone(t, 'green').bg : t.hover, color: completo ? uiTone(t, 'green').fg : t.muted }}>
-        <Icon name={completo ? 'check' : 'box'} size={16} />
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div>
-        <div style={{ fontSize: 11.5, color: t.muted }}>
-          {it.sku} · pedido {it.qtd}{it.un ? ' ' + it.un : ''} · livre {it.disponivel}
-          {semEstoque && <span style={{ color: uiTone(t, 'amber').fg, fontWeight: 700 }}> · estoque insuficiente</span>}
+  const repMobile = typeof window !== 'undefined' && window.innerWidth <= 640;
+  const sub = (
+    <div style={{ fontSize: repMobile ? 12 : 12.5, color: t.muted, marginTop: 2 }}>
+      SKU {it.sku} · pedido {it.qtd}{it.un ? ' ' + it.un : ''} · livre {it.disponivel}
+      {semEstoque && <b style={{ color: uiTone(t, 'amber').fg }}> · falta estoque</b>}
+    </div>
+  );
+  const stepper = readOnly
+    ? <span style={{ fontSize: 15, fontWeight: 850, color: t.text, flexShrink: 0 }}>{it.sep}<span style={{ fontSize: 12, fontWeight: 700, color: t.faint }}>/{it.qtd}</span></span>
+    : (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <button onClick={() => set(it.sep - 1)} disabled={it.sep <= 0} style={{ all: 'unset', cursor: it.sep > 0 ? 'pointer' : 'not-allowed', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.muted, opacity: it.sep > 0 ? 1 : 0.4 }}><Icon name="minus" size={16} /></button>
+        <input value={it.sep} onChange={(e) => set(parseInt(String(e.target.value).replace(/[^0-9]/g, '')) || 0)} inputMode="numeric" style={{ boxSizing: 'border-box', width: 64, height: 42, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 17, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+        <button onClick={() => set(it.sep + 1)} disabled={it.sep >= maxSep} style={{ all: 'unset', cursor: it.sep < maxSep ? 'pointer' : 'not-allowed', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.accentText, opacity: it.sep < maxSep ? 1 : 0.4 }}><Icon name="plus" size={16} /></button>
+        <span style={{ fontSize: 13, color: t.faint, minWidth: 34, textAlign: 'right' }}>/{it.qtd}</span>
+      </div>
+    );
+  const borda = `1px solid ${completo ? frHexToRgba('#22c55e', 0.4) : disp ? frHexToRgba(t.accent, 0.32) : t.border}`;
+  if (repMobile && !readOnly) {
+    return (
+      <div style={{ padding: '14px 16px', borderRadius: 14, background: t.elevated, border: borda }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
+          {disp && <span title="Disponível para separar" style={{ width: 9, height: 9, borderRadius: '50%', background: t.accent, flexShrink: 0, marginTop: 5, boxShadow: `0 0 0 4px ${frHexToRgba(t.accent, 0.18)}` }} />}
+          {completo && <Icon name="check" size={20} style={{ color: uiTone(t, 'green').fg, flexShrink: 0, marginTop: 1 }} />}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15.5, fontWeight: 700, color: t.text }}>{it.nome}</div>
+            {sub}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: t.faint }}>Separar</span>
+          {stepper}
         </div>
       </div>
-      {readOnly ? (
-        <span style={{ fontSize: 14, fontWeight: 850, color: t.text, flexShrink: 0 }}>{it.sep}/{it.qtd}</span>
-      ) : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-          <button onClick={() => set(it.sep - 1)} disabled={it.sep <= 0} style={{ all: 'unset', cursor: it.sep <= 0 ? 'not-allowed' : 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted, border: `1px solid ${t.border}`, opacity: it.sep <= 0 ? .4 : 1 }}>–</button>
-          <input value={it.sep} onChange={(e) => set(parseInt(String(e.target.value).replace(/[^0-9]/g, '')) || 0)} inputMode="numeric"
-            style={{ width: 52, height: 30, textAlign: 'center', borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
-          <span style={{ fontSize: 12, color: t.faint, minWidth: 26 }}>/{it.qtd}</span>
-          <button onClick={() => set(it.sep + 1)} disabled={it.sep >= maxSep} style={{ all: 'unset', cursor: it.sep >= maxSep ? 'not-allowed' : 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.accentText, border: `1px solid ${t.border}`, opacity: it.sep >= maxSep ? .4 : 1 }}>+</button>
-        </div>
-      )}
+    );
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: readOnly ? '13px 16px' : '16px 20px', borderRadius: 14, background: t.elevated, border: borda }}>
+      {disp && <span title="Disponível para separar" style={{ width: 9, height: 9, borderRadius: '50%', background: t.accent, flexShrink: 0, boxShadow: `0 0 0 4px ${frHexToRgba(t.accent, 0.18)}` }} />}
+      {completo && <Icon name="check" size={20} style={{ color: uiTone(t, 'green').fg, flexShrink: 0 }} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: readOnly ? 14 : 16, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div>
+        {sub}
+      </div>
+      {stepper}
     </div>
   );
 }
 
-// Detalhe em tela cheia: separar (reservar), enviar (entregar, PARCIAL permitido), reverter, rastrear.
-function RepDetail({ t, rep, busy, onClose, onReservar, onEntregar, onReverter, onRastrear }) {
+// Drawer de materiais (design ref21) — SÓ para pedido PENDENTE: o PUT /replenishments/:id
+// substitui a lista por product_id (item ausente = DELETE), e num pedido com reserva isso
+// deixaria a reserva órfã (guarda que o backend não tem). Em pendente todo item tem
+// quantity=0 — troca livre e segura. Persistência REAL: "Concluir" faz UM PUT com a lista
+// inteira; até lá o rascunho é local e fechar o drawer descarta.
+function RepPickerDrawer({ t, rep, produtos, salvando, onClose, onConcluir }) {
+  const [itens, setItens] = useStateR(() => rep.itens.map((i) => ({ product_id: i.product_id, sku: i.sku, nome: i.nome, qtd: i.qtd, preco: i.preco, disponivel: i.disponivel })));
+  const [q, setQ] = useStateR('');
+  const [fil, setFil] = useStateR('todos');   // todos | lista | fora
+  const ql = q.trim().toLowerCase();
+  const inList = (id) => itens.some((i) => i.product_id === id);
+  const cat = (produtos || []).filter((c) => (!ql || c.nome.toLowerCase().includes(ql) || String(c.sku).toLowerCase().includes(ql)) && (fil === 'todos' || (fil === 'lista') === inList(c.product_id))).slice(0, 60);
+  const toggle = (c) => {
+    if (salvando) return;
+    if (inList(c.product_id)) setItens((xs) => xs.filter((i) => i.product_id !== c.product_id));
+    else setItens((xs) => xs.concat([{ product_id: c.product_id, sku: c.sku, nome: c.nome, qtd: 1, preco: c.preco, disponivel: c.disponivel }]));
+  };
+  const setQtd = (id, v) => setItens((xs) => xs.map((i) => (i.product_id === id ? { ...i, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : i)));
+  const nLista = itens.length;
+  return (
+    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(8,10,16,.55)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(480px, 100vw)', height: '100%', display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: `1px solid ${t.borderStrong}`, boxShadow: '-18px 0 44px rgba(0,0,0,.25)' }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ width: 38, height: 38, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={18} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 850, color: t.text }}>Adicionar ou retirar</div>
+            <div style={{ fontSize: 12, color: t.muted }}>Clique para incluir · clique de novo para remover · grava no Concluir</div>
+          </div>
+          <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted, background: t.elevated }}><Icon name="x" size={16} /></button>
+        </div>
+        <div style={{ padding: '14px 22px 12px', borderBottom: `1px solid ${t.border}` }}>
+          <div style={{ position: 'relative', marginBottom: 10 }}>
+            <Icon name="search" size={16} style={{ position: 'absolute', left: 13, top: 14, color: t.muted }} />
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material por nome ou SKU…" style={{ boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px 0 40px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none' }} />
+            {q && <button onClick={() => setQ('')} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', right: 10, top: 11, width: 22, height: 22, borderRadius: 6, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={14} /></button>}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[['todos', 'Todos'], ['lista', `Na lista (${nLista})`], ['fora', 'Fora da lista']].map(([k, lb]) => (
+              <button key={k} onClick={() => setFil(k)} style={{ all: 'unset', cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: '6px 13px', borderRadius: 999, background: fil === k ? t.accent : t.elevated, color: fil === k ? t.onAccent : t.muted, border: `1px solid ${fil === k ? t.accent : t.border}` }}>{lb}</button>
+            ))}
+          </div>
+        </div>
+        <div className="fr-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 22px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {cat.map((c) => {
+            const on = inList(c.product_id);
+            const it = on ? itens.filter((i) => i.product_id === c.product_id)[0] : null;
+            return (
+              <div key={c.product_id} onClick={() => toggle(c)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 13, background: on ? uiTone(t, 'green').bg : t.elevated, border: `1.5px solid ${on ? frHexToRgba('#22c55e', 0.55) : t.border}`, transition: 'all .13s' }}
+                onMouseEnter={(e) => { if (!on) e.currentTarget.style.borderColor = t.accent; }} onMouseLeave={(e) => { if (!on) e.currentTarget.style.borderColor = t.border; }}>
+                <span style={{ width: 26, height: 26, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: on ? uiTone(t, 'green').fg : t.hover, color: on ? '#fff' : t.faint, transition: 'all .13s' }}><Icon name={on ? 'check' : 'plus'} size={14} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{c.nome}</div>
+                  <div style={{ fontSize: 11, color: t.muted, marginTop: 1 }}>SKU {c.sku} · livre {c.disponivel} · {repMoney(c.preco)}</div>
+                </div>
+                {on && (
+                  <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.04em', color: uiTone(t, 'green').fg }}>QTD</span>
+                    <input value={it.qtd} onChange={(e) => setQtd(c.product_id, e.target.value)} inputMode="numeric" style={{ boxSizing: 'border-box', width: 58, height: 36, textAlign: 'center', borderRadius: 9, border: `1.5px solid ${frHexToRgba('#22c55e', 0.55)}`, background: t.panel, color: t.text, fontSize: 14, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {cat.length === 0 && <div style={{ padding: 30, textAlign: 'center', fontSize: 13, color: t.muted }}>Nenhum material encontrado.</div>}
+        </div>
+        <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <span style={{ fontSize: 12.5, color: t.muted }}>{nLista} {nLista === 1 ? 'material no pedido' : 'materiais no pedido'}{nLista === 0 ? ' — o pedido precisa de ao menos 1' : ''}</span>
+          <button onClick={() => nLista > 0 && !salvando && onConcluir(itens)} disabled={!nLista || salvando} style={{ all: 'unset', cursor: (!nLista || salvando) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 22px', borderRadius: 11, fontSize: 13.5, fontWeight: 800, background: (!nLista || salvando) ? t.elevated : t.accent, color: (!nLista || salvando) ? t.faint : t.onAccent }}><Icon name="check" size={16} /> {salvando ? 'Salvando…' : 'Concluir'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Detalhe em tela cheia — CASCA do ref21 sobre o MOTOR REAL (intocado): separar (reservar),
+// enviar (entregar, PARCIAL permitido), reverter, rastrear. NF e volumes/dimensões do ref
+// ficaram FORA: o backend de replenishments não tem esses campos (shipping_info +
+// tracking_code é o shape inteiro do envio).
+function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, onReverter, onRastrear, onSalvarItens }) {
   const [sep, setSep] = useStateR(() => rep.itens.map((i) => i.sep));
   const [step, setStep] = useStateR(rep.status === 'concluido' ? 'envio' : 'separar');
   const [metodo, setMetodo] = useStateR(rep.envio ? rep.envio.metodo : '');
   const [rastreio, setRastreio] = useStateR(rep.envio ? rep.envio.rastreio : '');
+  const [soFalta, setSoFalta] = useStateR(false);
+  const [pickerOpen, setPickerOpen] = useStateR(false);
   React.useEffect(() => { setSep(rep.itens.map((i) => i.sep)); }, [rep]);
 
   const concluido = rep.status === 'concluido';
   const cancelada = rep.status === 'cancelada';
   const readOnly = concluido || cancelada || busy;
+  // Teto por item ANCORADO no sep salvo do servidor (não no stepper local) — ver RepItemRow.
+  const tetos = rep.itens.map((i) => Math.min(i.qtd, i.sep + i.disponivel));
   const sepTot = sep.reduce((a, b) => a + b, 0);
   const qtdTot = repQtdTot(rep);
   const pct = qtdTot ? Math.round((sepTot / qtdTot) * 100) : 0;
-  // ENVIO PARCIAL PERMITIDO: basta ter separado ALGUMA coisa. O backend consome o separado e libera a
-  // reserva remanescente sozinho. O mock exigia sep >= qtd em TODOS os itens, o que travava para
+  const tudoSeparado = rep.itens.every((i, idx) => sep[idx] >= i.qtd);
+  const faltam = rep.itens.filter((i, idx) => sep[idx] < tetos[idx]).length;
+  const dirty = rep.itens.some((i, idx) => sep[idx] !== i.sep);
+  // ENVIO PARCIAL PERMITIDO: basta ter separado ALGUMA coisa. O backend consome o separado e
+  // libera a reserva remanescente sozinho. O ref exigia tudo separado, o que travava para
   // sempre qualquer pedido cujo estoque fosse menor que o pedido.
   const podeEnviar = sepTot > 0;
   const parcial = sepTot < qtdTot;
   const itensPayload = () => rep.itens.map((i, idx) => ({ id: i.id, quantity: sep[idx] }));
+  const separarTudo = () => setSep(rep.itens.map((i, idx) => tetos[idx]));
+  const sm = repStatusMeta[rep.status] || [rep.status, 'gray'];
+  const linhas = rep.itens.map((it, idx) => ({ it, idx })).filter(({ idx }) => !soFalta || sep[idx] < tetos[idx]);
+  // Mexer na LISTA de itens (drawer) só em pendente — ver comentário do RepPickerDrawer.
+  const podeMexerItens = rep.status === 'pendente';
+  const chipHero = { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 13px', borderRadius: 999, background: 'rgba(255,255,255,.12)', border: '1px solid rgba(255,255,255,.18)' };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 65, background: t.bg, overflowY: 'auto' }} className="fr-scroll">
-      <div style={{ maxWidth: 880, margin: '0 auto', padding: '22px 20px 40px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, fontWeight: 700, color: t.muted }}><Icon name="chevronLeft" size={18} /> Voltar</button>
-          <span style={{ marginLeft: 'auto' }}><Badge t={t} kind={repStatusMeta[rep.status] ? repStatusMeta[rep.status][1] : 'gray'} dot>{repStatusMeta[rep.status] ? repStatusMeta[rep.status][0] : rep.status}</Badge></span>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 65, background: t.bg, display: 'flex', flexDirection: 'column' }}>
+      {/* hero (ref21): gradiente do accent, número grande, pill de status, chips e anel de progresso */}
+      <div style={{ position: 'relative', overflow: 'hidden', padding: '16px 32px 22px', background: `linear-gradient(120deg, ${t.accent} 0%, ${frHexToRgba(t.accent, 0.85)} 100%)`, color: '#fff', flexShrink: 0 }}>
+        <div style={{ position: 'absolute', right: -70, top: -110, width: 340, height: 340, borderRadius: '50%', border: '46px solid rgba(255,255,255,.06)' }} />
+        <div style={{ position: 'absolute', right: 140, bottom: -140, width: 240, height: 240, borderRadius: '50%', border: '34px solid rgba(255,255,255,.05)' }} />
+        <div style={{ position: 'relative', maxWidth: 1100, margin: '0 auto', width: '100%', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'rgba(255,255,255,.65)' }}>Reposições › Pedido</div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, background: 'rgba(255,255,255,.16)', border: '1px solid rgba(255,255,255,.25)', color: '#fff', fontSize: 13, fontWeight: 700 }}><Icon name="chevronLeft" size={16} /> Voltar</button>
         </div>
-
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 24, fontWeight: 850, color: t.text, letterSpacing: '-.02em' }}>{rep.n}</div>
-          <div style={{ fontSize: 13.5, color: t.muted, marginTop: 3 }}>{rep.cliente} · {rep.cidade} · {repMoney(rep.valor)}</div>
-        </div>
-
-        {!concluido && !cancelada && (
-          <div style={{ display: 'inline-flex', gap: 4, padding: 4, borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 20 }}>
-            {[['separar', '1 · Separar materiais'], ['envio', '2 · Dados de envio']].map(([k, label]) => {
-              const on = step === k, dis = k === 'envio' && !podeEnviar;
-              return <button key={k} onClick={() => !dis && setStep(k)} disabled={dis} style={{ all: 'unset', cursor: dis ? 'not-allowed' : 'pointer', height: 36, padding: '0 16px', borderRadius: 999, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : 'transparent', color: on ? '#fff' : dis ? t.faint : t.muted }}>{label}</button>;
-            })}
+        <div style={{ position: 'relative', maxWidth: 1100, margin: '0 auto', width: '100%', display: 'flex', alignItems: 'center', gap: 26, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 30, fontWeight: 850, letterSpacing: '-.02em' }}>{rep.n}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', padding: '5px 12px', borderRadius: 999, background: concluido ? 'rgba(52,211,153,.25)' : cancelada ? 'rgba(239,68,68,.3)' : 'rgba(255,255,255,.2)', border: `1px solid ${concluido ? 'rgba(52,211,153,.5)' : cancelada ? 'rgba(239,68,68,.55)' : 'rgba(255,255,255,.28)'}` }}>{concluido && <Icon name="check" size={12} />}{sm[0]}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <span style={chipHero}><Icon name="users" size={14} style={{ opacity: 0.8 }} /> {rep.cliente}</span>
+              <span style={chipHero}><Icon name="mapPin" size={14} style={{ opacity: 0.8 }} /> {rep.cidade}</span>
+              <span style={chipHero}><Icon name="barChart" size={14} style={{ opacity: 0.8 }} /> {repMoney(rep.valor)}</span>
+              <span style={chipHero}><Icon name="box" size={14} style={{ opacity: 0.8 }} /> {rep.itens.length} {rep.itens.length === 1 ? 'material' : 'materiais'} · {qtdTot} un</span>
+            </div>
           </div>
-        )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingRight: 6 }}>
+            <svg width="78" height="78" viewBox="0 0 78 78">
+              <circle cx="39" cy="39" r="32" fill="none" stroke="rgba(255,255,255,.18)" strokeWidth="7" />
+              <circle cx="39" cy="39" r="32" fill="none" stroke={pct === 100 ? '#34d399' : '#ffd400'} strokeWidth="7" strokeLinecap="round" strokeDasharray={`${(pct / 100) * 201} 201`} transform="rotate(-90 39 39)" style={{ transition: 'stroke-dasharray .4s' }} />
+              <text x="39" y="44" textAnchor="middle" fill="#fff" fontSize="16" fontWeight="850" fontFamily="inherit">{pct}%</text>
+            </svg>
+            <div>
+              <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.08em', color: 'rgba(255,255,255,.65)' }}>SEPARAÇÃO</div>
+              <div style={{ fontSize: 19, fontWeight: 850, marginTop: 2 }}>{sepTot}<span style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,.65)' }}> / {qtdTot} un</span></div>
+              <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)', marginTop: 2 }}>{cancelada ? 'Pedido cancelado — reserva liberada' : concluido ? 'Pedido enviado' : tudoSeparado ? 'Pronto para o envio' : `${faltam} ${faltam === 1 ? 'item pendente' : 'itens pendentes'}`}</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        {step === 'separar' && !concluido && !cancelada && (
-          <Card t={t} style={{ padding: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>Materiais <span style={{ color: t.muted, fontWeight: 600 }}>({sepTot}/{qtdTot} · {pct}%)</span></div>
-              <button onClick={() => setSep(rep.itens.map((i) => Math.min(i.qtd, i.sep + i.disponivel)))} disabled={readOnly}
-                style={{ all: 'unset', cursor: readOnly ? 'not-allowed' : 'pointer', fontSize: 12.5, fontWeight: 700, color: t.accentText, opacity: readOnly ? .5 : 1 }}>Separar tudo disponível</button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              {rep.itens.map((it, idx) => (
-                <RepItemRow key={it.id} t={t} it={{ ...it, sep: sep[idx] }} readOnly={readOnly}
-                  onSep={(v) => setSep((xs) => xs.map((x, i) => (i === idx ? v : x)))} />
-              ))}
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
-              <Btn t={t} kind="ghost" icon="check" onClick={() => onReservar(rep, itensPayload())}>{busy ? 'Salvando…' : 'Salvar separação'}</Btn>
-              <Btn t={t} icon="arrowRight" onClick={() => podeEnviar && setStep('envio')}>Ir para o envio</Btn>
-            </div>
-          </Card>
-        )}
-
-        {(step === 'envio' || concluido) && !cancelada && (
-          <Card t={t} style={{ padding: 20 }}>
-            {concluido ? (
-              <>
-                <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text, marginBottom: 16 }}>Envio</div>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                  <div style={{ flex: '1 1 200px', padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>MÉTODO DE ENVIO</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text, marginTop: 4 }}>{repMetodoNome(rep.envio && rep.envio.metodo)}</div>
-                  </div>
-                  <div style={{ flex: '1 1 200px', padding: '12px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
-                    <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint }}>CÓDIGO DE RASTREIO</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text, marginTop: 4, fontFamily: 'ui-monospace, monospace' }}>{(rep.envio && rep.envio.rastreio) || 'Não informado'}</div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 18 }}>
-                  {rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                  <button onClick={() => onRastrear(rep)} disabled={!(rep.envio && rep.envio.rastreio) || busy}
-                    style={{ all: 'unset', cursor: !(rep.envio && rep.envio.rastreio) || busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 42, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 700, color: !(rep.envio && rep.envio.rastreio) ? t.faint : t.accentText, border: `1px solid ${t.border}` }}>
-                    <Icon name="search" size={16} /> Rastrear encomenda
+      {/* stepper (ref21) — a trava real é a do motor: envio abre com QUALQUER coisa separada (parcial permitido) */}
+      {!concluido && !cancelada && (
+        <div style={{ padding: '12px 32px', borderBottom: `1px solid ${t.border}`, background: t.panel, flexShrink: 0 }}>
+          <div style={{ maxWidth: 1100, margin: '0 auto', width: '100%', display: 'flex', alignItems: 'center', gap: 14 }}>
+            {[['separar', 'Separar materiais'], ['envio', 'Embalagem & envio']].map(([k, lb], i) => {
+              const locked = k === 'envio' && !podeEnviar;
+              const done = k === 'separar' && tudoSeparado;
+              const on = step === k;
+              return (
+                <React.Fragment key={k}>
+                  {i > 0 && <div style={{ flex: '0 1 60px', height: 2, borderRadius: 2, background: podeEnviar ? uiTone(t, 'green').fg : t.border }} />}
+                  <button onClick={() => !locked && setStep(k)} disabled={locked} style={{ all: 'unset', cursor: locked ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 10, padding: '7px 14px 7px 7px', borderRadius: 999, background: on ? t.accentSoft : 'transparent', opacity: locked ? 0.45 : 1 }}>
+                    <span style={{ width: 30, height: 30, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, background: done ? uiTone(t, 'green').fg : on ? t.accent : t.elevated, color: done || on ? '#fff' : t.muted, border: done || on ? 'none' : `1.5px solid ${t.borderStrong}`, fontSize: 13, fontWeight: 800 }}>{done ? <Icon name="check" size={15} /> : locked ? <Icon name="lock" size={13} /> : i + 1}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 800, color: on ? t.accentText : t.muted }}>{lb}</span>
                   </button>
+                </React.Fragment>
+              );
+            })}
+            <span style={{ marginLeft: 'auto', fontSize: 12.5, color: t.faint, display: typeof window !== 'undefined' && window.innerWidth > 760 ? 'inline' : 'none' }}>{step === 'separar' ? 'Confira e separe cada item do pedido.' : 'Método de envio e rastreio — confirmar dá baixa física.'}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="fr-scroll" style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 28px 40px' }}>
+          {step === 'separar' && !concluido && !cancelada && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+                <button onClick={() => setSoFalta((v) => !v)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 9, background: soFalta ? t.accent : t.elevated, color: soFalta ? t.onAccent : t.muted, border: `1px solid ${soFalta ? t.accent : t.border}` }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: soFalta ? t.onAccent : t.accent }} /> Disponível p/ separar {faltam ? `(${faltam})` : ''}
+                </button>
+                <button onClick={() => !readOnly && separarTudo()} disabled={readOnly} style={{ all: 'unset', cursor: readOnly ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '7px 12px', borderRadius: 9, background: t.accentSoft, opacity: readOnly ? 0.5 : 1 }}><Icon name="check" size={14} /> Separar tudo disponível</button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {linhas.map(({ it, idx }) => (
+                  <RepItemRow key={it.id} t={t} it={{ ...it, sep: sep[idx] }} teto={tetos[idx]} readOnly={busy}
+                    onSep={(v) => setSep((xs) => xs.map((x, i) => (i === idx ? v : x)))} />
+                ))}
+                {linhas.length === 0 && <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>Todos os itens disponíveis já foram separados. ✓</div>}
+              </div>
+              {podeMexerItens ? (
+                <button onClick={() => setPickerOpen(true)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.accentText, border: `1.5px dashed ${frHexToRgba(t.accent, 0.5)}`, background: frHexToRgba(t.accent, 0.04) }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = frHexToRgba(t.accent, 0.04); }}>
+                  <Icon name="plus" size={16} /> Adicionar ou Retirar materiais
+                </button>
+              ) : (
+                <span title="Adicionar ou retirar materiais só em pedido pendente — item já reservado não pode sair da lista (o PUT deixaria a reserva órfã)." style={{ boxSizing: 'border-box', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.faint, border: `1.5px dashed ${t.border}`, cursor: 'not-allowed' }}>
+                  <Icon name="lock" size={15} /> Adicionar ou Retirar materiais — só em pedido pendente
+                </span>
+              )}
+            </>
+          )}
+
+          {(step === 'envio' || concluido) && !cancelada && (
+            concluido ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}` }}>
+                  <Icon name="check" size={18} style={{ color: uiTone(t, 'green').fg }} /> <span style={{ fontSize: 13.5, fontWeight: 700, color: uiTone(t, 'green').fg }}>Pedido separado e enviado — baixa física feita no estoque.</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                  <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>DESTINO</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="mapPin" size={16} style={{ color: t.accentText }} /> {rep.cidade}</div>
+                  </div>
+                  <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>MÉTODO DE ENVIO</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="truck" size={16} style={{ color: t.accentText }} /> {repMetodoNome(rep.envio && rep.envio.metodo)}</div>
+                  </div>
+                  <div style={{ padding: 16, borderRadius: 13, background: t.elevated, border: `1px solid ${t.border}` }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: t.faint }}>CÓDIGO DE RASTREIO</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: (rep.envio && rep.envio.rastreio) ? t.text : t.faint, marginTop: 6, fontFamily: (rep.envio && rep.envio.rastreio) ? 'ui-monospace, monospace' : 'inherit' }}>{(rep.envio && rep.envio.rastreio) || 'Não informado'}</div>
+                  </div>
+                </div>
+                <button onClick={() => onRastrear(rep)} disabled={!(rep.envio && rep.envio.rastreio) || busy}
+                  style={{ all: 'unset', boxSizing: 'border-box', cursor: (!(rep.envio && rep.envio.rastreio) || busy) ? 'not-allowed' : 'pointer', width: '100%', height: 50, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, fontSize: 14.5, fontWeight: 800, background: (rep.envio && rep.envio.rastreio) ? t.accent : t.elevated, color: (rep.envio && rep.envio.rastreio) ? t.onAccent : t.faint, boxShadow: (rep.envio && rep.envio.rastreio) ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', border: (rep.envio && rep.envio.rastreio) ? 'none' : `1px solid ${t.border}` }}>
+                  <Icon name="mapPin" size={18} /> Rastrear encomenda
+                </button>
+                {!(rep.envio && rep.envio.rastreio) && <div style={{ fontSize: 12, color: t.faint, textAlign: 'center' }}>Sem código de rastreio — o rastreamento não está disponível para este envio.</div>}
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>Materiais enviados</span>
+                    <span style={{ fontSize: 12.5, color: t.muted }}>{rep.itens.length} {rep.itens.length === 1 ? 'item' : 'itens'} · {repSepTot(rep)} un</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                    {rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   {/* Reverter desfaz a BAIXA FÍSICA (receive + reserve de volta) e limpa envio/rastreio. */}
                   <Btn t={t} kind="ghost" icon="refresh" onClick={() => onReverter(rep)}>{busy ? 'Revertendo…' : 'Reverter entrega'}</Btn>
                 </div>
-              </>
+              </div>
             ) : (
-              <>
-                <div style={{ fontSize: 14.5, fontWeight: 800, color: t.text, marginBottom: 4 }}>Dados de envio</div>
-                <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: uiTone(t, 'green').bg, border: `1px solid ${frHexToRgba('#22c55e', 0.3)}`, fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'green').fg, flexWrap: 'wrap' }}>
+                  <Icon name="check" size={15} /> {sepTot} de {qtdTot} un separadas · destino <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><Icon name="mapPin" size={13} /> {rep.cidade}</span>
+                </div>
+                <div style={{ fontSize: 12.5, color: t.muted }}>
                   Confirmar o envio dá <b style={{ color: t.text }}>baixa física</b> de {sepTot} un. no estoque.
                   {parcial && <span style={{ color: uiTone(t, 'amber').fg }}> Envio parcial: a reserva dos {qtdTot - sepTot} restantes é liberada.</span>}
                 </div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Método de envio *</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-                  {REP_ENVIO_METODOS.map((m) => {
-                    const on = metodo === m.id;
-                    return <button key={m.id} onClick={() => setMetodo(m.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 38, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? '#fff' : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}><Icon name={m.icon} size={15} /> {m.nome}</button>;
-                  })}
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Método de envio <span style={{ color: uiTone(t, 'red').fg }}>*</span></div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {REP_ENVIO_METODOS.map((m) => {
+                      const on = metodo === m.id;
+                      return <button key={m.id} onClick={() => setMetodo(m.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 11, fontSize: 13, fontWeight: 700, background: on ? t.accent : t.elevated, color: on ? t.onAccent : t.muted, border: `1px solid ${on ? t.accent : t.border}` }}><Icon name={m.icon} size={15} /> {m.nome}</button>;
+                    })}
+                  </div>
                 </div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 8 }}>Código de rastreio · opcional</div>
-                <input value={rastreio} onChange={(e) => setRastreio(e.target.value.toUpperCase())} placeholder="Ex: BR123456789BR"
-                  style={{ boxSizing: 'border-box', width: '100%', height: 44, padding: '0 14px', borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 14, fontFamily: 'ui-monospace, monospace', outline: 'none', marginBottom: 18 }} />
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button onClick={() => metodo && podeEnviar && onEntregar(rep, itensPayload(), metodo, rastreio.trim())} disabled={!metodo || !podeEnviar || busy}
-                    style={{ all: 'unset', cursor: (!metodo || !podeEnviar || busy) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 46, padding: '0 22px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: (!metodo || !podeEnviar || busy) ? t.elevated : t.accent, color: (!metodo || !podeEnviar || busy) ? t.faint : '#fff' }}>
-                    <Icon name="send" size={17} /> {busy ? 'Enviando…' : !metodo ? 'Escolha o método' : parcial ? `Confirmar envio parcial (${sepTot})` : 'Confirmar envio'}
-                  </button>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 }}>Código de rastreio <span style={{ color: t.faint, fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>· opcional</span></div>
+                  <input value={rastreio} onChange={(e) => setRastreio(e.target.value.toUpperCase())} placeholder="Ex: BR123456789BR" style={{ boxSizing: 'border-box', width: '100%', height: 46, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'ui-monospace, monospace', outline: 'none' }} />
                 </div>
-              </>
-            )}
-          </Card>
-        )}
+              </div>
+            )
+          )}
 
-        {cancelada && (
-          <Card t={t} style={{ padding: 20 }}>
-            <div style={{ fontSize: 13.5, color: t.muted, marginBottom: 14 }}>Pedido cancelado — a reserva de estoque foi liberada.</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}</div>
-          </Card>
-        )}
+          {cancelada && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 13.5, color: t.muted }}>Pedido cancelado — a reserva de estoque foi liberada.</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{rep.itens.map((it) => <RepItemRow key={it.id} t={t} it={it} readOnly />)}</div>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* rodapé de ações (ref21) — os callbacks e regras são os do motor real */}
+      {!concluido && !cancelada && (
+        <div style={{ padding: '14px 28px', borderTop: `1px solid ${t.border}`, background: t.panel, flexShrink: 0 }}>
+          <div style={{ maxWidth: 1100, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, color: t.muted }}>
+              {dirty
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Separação alterada — "Salvar separação" grava a reserva no servidor.</span>
+                : step === 'envio' && !metodo
+                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Escolha o método de envio para confirmar.</span>
+                  : <span>Total do pedido <b style={{ color: t.text }}>{repMoney(rep.valor)}</b></span>}
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {step === 'separar' ? (
+                <>
+                  <Btn t={t} kind="ghost" icon="check" onClick={() => onReservar(rep, itensPayload())}>{busy ? 'Salvando…' : 'Salvar separação'}</Btn>
+                  <button onClick={() => podeEnviar && setStep('envio')} disabled={!podeEnviar} style={{ all: 'unset', cursor: podeEnviar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: podeEnviar ? t.accent : t.elevated, color: podeEnviar ? t.onAccent : t.faint }}><Icon name="arrowRight" size={16} /> Ir para o envio</button>
+                </>
+              ) : (
+                <button onClick={() => metodo && podeEnviar && onEntregar(rep, itensPayload(), metodo, rastreio.trim())} disabled={!metodo || !podeEnviar || busy}
+                  style={{ all: 'unset', cursor: (!metodo || !podeEnviar || busy) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 46, padding: '0 22px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: (!metodo || !podeEnviar || busy) ? t.elevated : t.accent, color: (!metodo || !podeEnviar || busy) ? t.faint : t.onAccent }}>
+                  <Icon name="send" size={17} /> {busy ? 'Enviando…' : !metodo ? 'Escolha o método' : parcial ? `Confirmar envio parcial (${sepTot})` : 'Confirmar envio'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pickerOpen && <RepPickerDrawer t={t} rep={rep} produtos={produtos} salvando={busy}
+        onClose={() => !busy && setPickerOpen(false)}
+        onConcluir={async (itens) => { const ok = await onSalvarItens(rep, itens); if (ok) setPickerOpen(false); }} />}
     </div>
   );
 }
@@ -906,7 +1128,7 @@ function PageReposicoes({ t }) {
   window.frUseStockReload(carregarProdutos);
 
   const cur = reps.find((r) => r.id === openId) || null;
-  const tabs = [['pendente', 'Pendentes'], ['em_preparo', 'Em preparo'], ['concluido', 'Concluídos'], ['cancelada', 'Cancelados']];
+  const tabs = [['pendente', 'Pendentes'], ['em_preparo', 'Em preparo'], ['concluido', 'Separados'], ['cancelada', 'Cancelados']];
   const view = reps.filter((r) => r.status === tab);
   // Sugestão do próximo número a partir do MAIOR existente no backend (não do tamanho do array, que
   // era o do mock e colidia). Ainda é sugestão: o campo é editável e o backend não gera.
@@ -947,6 +1169,15 @@ function PageReposicoes({ t }) {
   const reverter = (rep) => run(
     () => window.FRApi.put(`/replenishments/${rep.id}/authorize`, { action: 'reverter', items: rep.itens.map((i) => ({ id: i.id, quantity: i.sep })) }),
     'Entrega revertida — estoque devolvido e re-empenhado.');
+  // Lista de itens editada pelo RepPickerDrawer (SÓ pendente — ver o comentário do drawer):
+  // UM PUT com a lista inteira, mesmo shape do modal de editar (total recalculado igual lá).
+  const salvarItens = (rep, itens) => run(
+    () => window.FRApi.put('/replenishments/' + rep.id, {
+      order_number: rep.n, client_name: rep.cliente, city_state: rep.cidade,
+      total_value: itens.reduce((a, i) => a + i.qtd * i.preco, 0),
+      items: itens.map((i) => ({ product_id: i.product_id, qty_requested: i.qtd })),
+    }),
+    'Itens do pedido atualizados.');
   const cancelar = (rep) => {
     if (!window.confirm(`Cancelar o pedido ${rep.n}?\n\nA reserva de estoque é liberada. O pedido fica no histórico como cancelado.`)) return;
     run(() => window.FRApi.delete('/replenishments/' + rep.id), 'Pedido cancelado — reserva liberada.').then((ok) => { if (ok) setOpenId(null); });
@@ -977,7 +1208,7 @@ function PageReposicoes({ t }) {
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
         <KPI t={t} mini icon="clipboard" label="Pendentes" value={reps.filter((r) => r.status === 'pendente').length} kind="amber" />
         <KPI t={t} mini icon="box" label="Em preparo" value={reps.filter((r) => r.status === 'em_preparo').length} kind="blue" />
-        <KPI t={t} mini icon="check" label="Concluídos" value={reps.filter((r) => r.status === 'concluido').length} kind="green" />
+        <KPI t={t} mini icon="check" label="Separados" value={reps.filter((r) => r.status === 'concluido').length} kind="green" />
         <KPI t={t} mini icon="barChart" label="Valor em aberto" value={repMoney(reps.filter((r) => r.status === 'pendente' || r.status === 'em_preparo').reduce((a, r) => a + r.valor, 0))} kind="accent" />
       </div>
 
@@ -1034,8 +1265,8 @@ function PageReposicoes({ t }) {
         onClose={() => !busy && setModal(null)}
         onSave={(payload) => (modal.edit ? editar(modal.edit.id, payload) : criar(payload))} />}
 
-      {cur && <RepDetail t={t} rep={cur} busy={busy} onClose={() => setOpenId(null)}
-        onReservar={reservar} onEntregar={entregar} onReverter={reverter} onRastrear={rastrear} />}
+      {cur && <RepDetail t={t} rep={cur} busy={busy} produtos={produtos} onClose={() => setOpenId(null)}
+        onReservar={reservar} onEntregar={entregar} onReverter={reverter} onRastrear={rastrear} onSalvarItens={salvarItens} />}
 
       {tracking && (
         <div onClick={() => setTracking(null)} style={{ position: 'fixed', inset: 0, zIndex: 71, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
