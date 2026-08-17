@@ -610,3 +610,17 @@ separação e o pedido migrou de Pendentes para Em preparo), o operador cai na a
 pai, render nos dois ramos — o `toastEl` já existe) informando o novo estado do pedido. Explicitamente
 recusado: `setTab` automático ao fechar (troca um susto por outro). Sem prova sem operador — não
 implementar até haver rodada com validação de uso real.
+
+## Reposições/Separações — contagens de disponibilidade leem o rascunho VIVO (decisão de produto, não dívida)
+
+**Decidido em 17/08/2026** (veredito do arquiteto no P-TETO da rodada "detalhe sobrepondo a
+lista"). As contagens de disponibilidade (`separaveis`/`bloqueados` nas Reposições, `dispCount`
+nas Separações — separacoes.jsx:534) **leem o rascunho corrente por design**: rascunhar um item
+até o teto o tira de "disponível p/ separar" e o resto sem estoque vira "bloqueado" na hora,
+porque é a verdade do AGORA do rascunho. O que é IMÓVEL é o **TETO**: ancorado em
+`rep.itens[i].sep` (o salvo do servidor, via `repTetoDe`), re-ancorado SÓ no refetch pós-save —
+provado sob incrementos sucessivos (18 cliques, clamp de 999 no teto original, `+` morto no
+limite, zero rede). **Divergir disso — congelar as flags no salvo ou realimentar o teto do
+stepper — reintroduz a divergência que o C2 matou.** A sub-asserção "flags não mudam sob
+incremento não salvo" foi descartada pelo próprio arquiteto: ela descrevia a assinatura do teto
+móvel, não a régua das flags.
