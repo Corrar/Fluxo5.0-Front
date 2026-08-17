@@ -643,3 +643,78 @@ preventDefault no backdrop — listener nativo com passive:false, porque o onWhe
 React é passivo — mais overscrollBehavior:'contain' no scroll interno). **RepPickerDrawer e os
 demais overlays da casa NÃO têm esses comportamentos — divergência consciente, sem plano de
 conserto nesta entrada.** O padrão vigente para overlays novos passa a ser o deste drawer.
+
+
+## `DECIMAL_UNITS` — quatro cópias da mesma lista, e nenhuma é fonte
+
+**Registrado em 17/08/2026** (lote R2, Inventário). A lista de unidades que aceitam fração
+(`M`, `MT`, `L`, `KG`) existe hoje em **quatro** lugares, cada um com o seu comentário dizendo que
+espelha outro:
+
+| onde | quem usa |
+|---|---|
+| `src/parts/conferencia.jsx:11` | validação e `inputMode` da Conferência de Envio |
+| `src/parts/pages_main.jsx` (`INV_DECIMAL_UNITS`, lote R2) | Inventário: recontagem rápida e planilha |
+| backend `requests.controller.ts:15` | teto/validação da conferência de solicitação |
+| backend `stock.controller.ts` (`RECOUNT_DECIMAL_UNITS`, lote R1) | `POST /stock/recount` |
+
+Copiar foi decisão do lote (padrão da casa para helper local; promover a lib no meio do lote
+criaria uma quinta convenção). **O risco é real e nomeado**: se as listas divergirem, a tela passa
+a aceitar um valor que a API recusa — ou pior, a recusar um que a API aceitaria. A régua enquanto
+não houver fonte única: **a tela nunca pode ser mais permissiva que o servidor**.
+
+Duas decisões de vocabulário que as quatro cópias hoje respeitam e que precisam continuar juntas:
+`UND` (36 produtos ativos) fica **FORA** — é sinônimo de unidade, não medida contínua; `MT` fica
+**DENTRO** por fidelidade à lista original, embora o catálogo só use `M` (192 produtos).
+
+**Saída**: um único módulo (`src/lib/units.js` + o espelho no backend) exportando o Set e o
+`isDecimalUnit`, com um smoke que compara as duas pontas. Lote próprio.
+
+## Geradores de chave de idempotência — quatro cópias, e uma delas sem fallback
+
+**Registrado em 17/08/2026** (lote R2). O front tem **quatro** geradores locais da âncora
+`X-Idempotency-Key`, todos idênticos: `devGenKey` (`devolucao.jsx:31`), `genKey`
+(`pages_admin.jsx:127`), `p3GenKey` (`producao3d.jsx:176`) e `pgGenKey` (`producaoger.jsx:29`) —
+este último é o **único exposto no `window`**, e é o que o Inventário reusa (o lote R2 não criou a
+quinta cópia). Os quatro fazem `crypto.randomUUID?.() ?? 'prefixo-' + Date.now() + random`, com o
+fallback existindo por um motivo concreto: **`crypto.randomUUID` não existe em contexto não-seguro**
+(`http://IP-LAN`), que é exatamente como o chão de fábrica acessa o sistema.
+
+### ⚠ AÇÃO PRIORITÁRIA — `pages_rest.jsx:2088`: a saída de material morre em `http://IP-LAN`
+
+**Isto não é dívida de estilo nem chave degradada: é TELA MORTA numa operação que BAIXA ESTOQUE.**
+
+`pages_rest.jsx:2088` chama **`crypto.randomUUID()` CRU**, sem fallback, para gerar a chave do modal
+de **saída de material**: `onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}`.
+
+**Consequência medida.** `crypto.randomUUID` **não existe em contexto não-seguro**, e
+`http://IP-LAN` — sem TLS — é exatamente como o chão de fábrica acessa o sistema. Ali o clique em
+"Registrar saída" lança `TypeError` dentro do handler: o `setSaida` nunca roda, **o modal não abre**
+e a tela fica muda, sem mensagem de erro nenhuma. O operador clica, não acontece nada, e não há o
+que ele possa fazer. Não é a chave que degrada — é a operação inteira que não começa.
+
+**As outras quatro cópias do gerador têm fallback exatamente por causa disso** (`devGenKey`,
+`genKey`, `p3GenKey`, `pgGenKey`, todas com `?? 'prefixo-' + Date.now() + random` e o comentário
+"fallback p/ contexto não-seguro (http://IP-LAN)"). Este ponto ficou de fora do padrão.
+
+**Ordem de execução: LOTE PRÓPRIO, ANTES da unificação dos geradores.** O conserto é de uma linha
+(usar `window.pgGenKey()`, que já existe e tem fallback) e não depende de nenhuma decisão de
+arquitetura — a unificação pode esperar, esta tela não.
+
+**Saída da unificação (depois)**: promover um `frGenIdemKey` único ao `window` e trocar as quatro
+cópias por ele.
+
+## Inventário — o que o lote R2 deixou de fora, de propósito
+
+**Registrado em 17/08/2026.** A tela nova cobre recontagem de um item e planilha em lotes de 500.
+Três coisas ficaram nomeadas e fora:
+
+1. **Sem desfazer.** Recontagem errada se corrige recontando de novo (o `POST /stock/recount` é
+   absoluto e cada sessão tem chave própria, então a segunda contagem vale). Não há botão de
+   reversão porque não há rota de reversão — e inventar uma no front seria mentira de UI.
+2. **A lista "recontados nesta sessão" morre ao fechar o modal.** É estado de sessão, não
+   histórico: o histórico verdadeiro é o `audit_logs` (`STOCK_RECOUNT`) e o `stock_ledger`. Uma
+   aba de histórico de contagens é peça de produto, não detalhe desta tela.
+3. **A action `STOCK_RECOUNT` aparece CRUA na Auditoria** — pendência herdada do lote R1 (o mapa
+   `AUDIT_ACTIONS` de `src/lib/audit_format.js` não tem a entrada). O `details` já vem no formato
+   que a narrativa precisa: `{ idem_key, total_itens, aplicados, replays, com_diferenca, itens: [{ product_id, sku, old_qty, new_qty }] }`.
