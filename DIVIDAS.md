@@ -718,3 +718,37 @@ Três coisas ficaram nomeadas e fora:
 3. **A action `STOCK_RECOUNT` aparece CRUA na Auditoria** — pendência herdada do lote R1 (o mapa
    `AUDIT_ACTIONS` de `src/lib/audit_format.js` não tem a entrada). O `details` já vem no formato
    que a narrativa precisa: `{ idem_key, total_itens, aplicados, replays, com_diferenca, itens: [{ product_id, sku, old_qty, new_qty }] }`.
+
+## PROCEDIMENTO — desmonte de worktree com junction de `node_modules`
+
+**Promovido de régua a PROCEDIMENTO em 17/08/2026, depois de falhar DUAS VEZES no mesmo dia**
+(worktree do backend no lote W1 e worktree do front no R2), **estando já registrada**. Registrar
+não bastou: o que faltava era o passo 4.
+
+O worktree usa uma **junction** para reaproveitar o `node_modules` do repositório original. Junction
+não é cópia: quem apaga o link *seguindo-o* apaga **as dependências do repo de verdade**. O dano é
+silencioso — só aparece no lote seguinte, quando o build não acha o `vite`.
+
+```
+1. cd para FORA do worktree
+2. cmd /c rmdir "<worktree>\node_modules"      # remove o LINK, nunca o alvo
+3. git worktree remove <worktree>              # (ou rmdir sem -Recurse)
+4. VERIFICAR antes de declarar desmonte concluído:
+   ls <repo-original>/node_modules | wc -l     # tem de continuar na casa das dezenas
+```
+
+**Por que o passo 2 é literalmente esse comando** — as três alternativas óbvias estão erradas:
+
+| tentativa | o que acontece |
+|---|---|
+| `rm -rf <wt>/node_modules` (bash) | **SEGUE a junction e apaga o alvo** — foi assim que o `node_modules` do front morreu |
+| `Remove-Item -Recurse -Force` | idem: recursivo entra no alvo |
+| `Remove-Item -Force` (sem `-Recurse`) | pede confirmação para diretório não vazio e **FALHA em modo NonInteractive** — a junction fica de pé, e o `rm -rf` seguinte (que "só limpa o resto") destrói o alvo. Foi a causa da SEGUNDA ocorrência |
+
+**O passo 4 é o que faltou nas duas vezes.** Sem a contagem, o desmonte é declarado concluído com
+o repositório original já quebrado, e o custo cai no próximo lote — que perde tempo diagnosticando
+um build quebrado que não tem nada a ver com o trabalho dele.
+
+**Reparo, quando acontecer**: `npm ci` no repositório original (o `package-lock.json` é versionado,
+então a restauração é idêntica) e reinstalar as dependências efêmeras não salvas — no front, o
+`jsdom` do harness, que entra com `--no-save` e por isso não volta no `npm ci`.
