@@ -1423,8 +1423,10 @@ function cfAdapt(r) {
   return {
     id: r.id, done, stage: done ? 'reconciled' : 'pending',
     destino: r.city || '—',
-    // technicians é VARCHAR único no schema; a tela grava "A, B" e lê de volta em chips.
-    tecnicos: String(r.technicians || '').split(',').map((s) => s.trim()).filter(Boolean),
+    // technicians é VARCHAR único no schema. Separadores REAIS (D-F3): vírgula (o escritor
+    // desta tela grava "A, B") E barra (legado 2.0 gravou "ALEX GUERE / GABRIEL"). Token com
+    // parêntese ("WELITTON (FLOW)") fica INTEIRO — chip com texto cru, sem inventar identidade.
+    tecnicos: String(r.technicians || '').split(/[,/]/).map((s) => s.trim()).filter(Boolean),
     saida: cfData(r.created_at),
     itens: all.filter((i) => i.levou > 0),
     extras: all.filter((i) => i.levou <= 0 && (i.status === 'extra' || i.voltou > 0)),
@@ -1586,7 +1588,6 @@ function TripDetail({ t, trip, busy, onClose, onConfronto }) {
   const { mobile: tripMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: typeof window !== 'undefined' && window.innerWidth <= 640 });
   const stageInfo = TRIP_STAGES.find((s) => s.key === trip.stage);
   const chegou = trip.done;
-  const av = (n) => n.split(' ').map((x) => x[0]).slice(0, 2).join('');
   const levado = tripLevado(trip), retornado = tripRetornado(trip), consumo = levado - retornado;
   const tabBtn = (k, label, icon) => {
     const on = tab === k;
@@ -1628,13 +1629,15 @@ function TripDetail({ t, trip, busy, onClose, onConfronto }) {
         <div className="fr-scroll" style={{ overflowY: 'auto', padding: '22px 24px' }}>
           <div style={{ marginBottom: 22 }}><TripStepper t={t} stage={trip.stage} /></div>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Equipe em viagem</div>
+          {/* Chip com o texto CRU do token, SEM avatar de iniciais (D-F3): iniciais adivinhadas
+              sobre string livre produzem identidade errada — e o romaneio é documento de assinatura. */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
             {trip.tecnicos.map((n) => (
-              <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px 7px 7px', borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}` }}>
-                <span style={{ width: 28, height: 28, borderRadius: '50%', background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 10.5 }}>{av(n)}</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{n}</span>
-              </div>
+              <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, fontSize: 13, fontWeight: 700, color: t.text }}>
+                <Icon name="user" size={13} style={{ color: t.accentText }} /> {n}
+              </span>
             ))}
+            {trip.tecnicos.length === 0 && <span style={{ fontSize: 12.5, color: t.faint }}>Sem técnico registrado.</span>}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: chegou ? (tripMobile ? '1fr 1fr' : '1fr 1fr 1fr') : '1fr', gap: tripMobile ? 8 : 12, marginBottom: 22 }}>
             <div style={{ padding: 16, borderRadius: 14, background: t.elevated, border: `1px solid ${t.border}` }}>
