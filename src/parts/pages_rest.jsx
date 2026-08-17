@@ -645,12 +645,26 @@ function useFRReplenishments() {
 const repSepTot = (r) => r.itens.reduce((a, i) => a + i.sep, 0);
 const repQtdTot = (r) => r.itens.reduce((a, i) => a + i.qtd, 0);
 
+// Fonte ÚNICA do teto de separação (uma definição, N chamadas): o que o item já reservou
+// (sep SALVO do servidor) + o que segue livre no estoque, limitado ao pedido.
+const repTetoDe = (it) => Math.min(it.qtd, it.sep + it.disponivel);
+
+// Régua DUPLICADA de separacoes.jsx:441 (sepItemFlags) — aquela é a fonte da semântica.
+// Não compartilhada DE PROPÓSITO: os shapes divergem (lá o livre é `i.disp`, aqui é
+// `i.disponivel`) e amarrar via window.* criaria acoplamento de ordem de carga entre parts.
+// PENDENTE INDEPENDE DE ESTOQUE: item sem estoque segue pendente — ele é o motivo de o
+// pedido não fechar; estoque entra só no TETO (separável) e no rótulo "falta estoque".
+function repItemFlags(qtd, sepAtual, teto) {
+  const done = sepAtual >= qtd;
+  return { done, pend: !done, separavel: !done && sepAtual < teto };
+}
+
 function RepItemRow({ t, it, teto, onSep, readOnly }) {
   // Teto REAL de separação: o que este item já reservou + o que segue livre no estoque. Quando o
   // detalhe edita a separação localmente, `teto` vem ANCORADO no sep SALVO (rep.itens) — sem a
   // âncora o teto derivaria junto com o stepper (sep local + disponivel) e deixaria digitar além
   // do estoque; o backend barraria no reservar, mas a UI teria mentido antes.
-  const maxSep = teto != null ? teto : Math.min(it.qtd, it.sep + it.disponivel);
+  const maxSep = teto != null ? teto : repTetoDe(it);
   const completo = it.sep >= it.qtd;
   const semEstoque = maxSep < it.qtd;
   const disp = !readOnly && !completo && it.sep < maxSep;   // ainda dá para separar mais
@@ -798,12 +812,18 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
   const cancelada = rep.status === 'cancelada';
   const readOnly = concluido || cancelada || busy;
   // Teto por item ANCORADO no sep salvo do servidor (não no stepper local) — ver RepItemRow.
-  const tetos = rep.itens.map((i) => Math.min(i.qtd, i.sep + i.disponivel));
+  const tetos = rep.itens.map(repTetoDe);
   const sepTot = sep.reduce((a, b) => a + b, 0);
   const qtdTot = repQtdTot(rep);
   const pct = qtdTot ? Math.round((sepTot / qtdTot) * 100) : 0;
   const tudoSeparado = rep.itens.every((i, idx) => sep[idx] >= i.qtd);
-  const faltam = rep.itens.filter((i, idx) => sep[idx] < tetos[idx]).length;
+  // Três grandezas, régua de repItemFlags: pendente NÃO depende de estoque (era o bug do
+  // "0 itens pendentes" num pedido inteiro sem estoque); separável respeita o teto;
+  // bloqueado = pendente que não dá para separar agora (sem estoque).
+  const flags = rep.itens.map((i, idx) => repItemFlags(i.qtd, sep[idx], tetos[idx]));
+  const pendentes = flags.filter((f) => f.pend).length;
+  const separaveis = flags.filter((f) => f.separavel).length;
+  const bloqueados = pendentes - separaveis;
   const dirty = rep.itens.some((i, idx) => sep[idx] !== i.sep);
   // ENVIO PARCIAL PERMITIDO: basta ter separado ALGUMA coisa. O backend consome o separado e
   // libera a reserva remanescente sozinho. O ref exigia tudo separado, o que travava para
@@ -813,7 +833,14 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
   const itensPayload = () => rep.itens.map((i, idx) => ({ id: i.id, quantity: sep[idx] }));
   const separarTudo = () => setSep(rep.itens.map((i, idx) => tetos[idx]));
   const sm = repStatusMeta[rep.status] || [rep.status, 'gray'];
-  const linhas = rep.itens.map((it, idx) => ({ it, idx })).filter(({ idx }) => !soFalta || sep[idx] < tetos[idx]);
+  const linhas = rep.itens.map((it, idx) => ({ it, idx })).filter(({ idx }) => !soFalta || flags[idx].separavel);
+  // Motivo do CTA de envio travado (B6): travado = nada separado ainda. Com separáveis na mesa,
+  // o caminho é separar; sem nenhum separável, o motivo real é estoque — e salvar não perde nada.
+  const motivoEnvio = !podeEnviar
+    ? (separaveis > 0
+        ? `Separe todos os itens para concluir (${pendentes} ${pendentes === 1 ? 'pendente' : 'pendentes'})`
+        : `${bloqueados} ${bloqueados === 1 ? 'item' : 'itens'} sem estoque — nada separável agora. "Salvar separação" mantém o progresso.`)
+    : null;
   // Mexer na LISTA de itens (drawer) só em pendente — ver comentário do RepPickerDrawer.
   const podeMexerItens = rep.status === 'pendente';
   const mostraRodape = !concluido && !cancelada;
@@ -853,7 +880,7 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
             <div>
               <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.08em', color: 'rgba(255,255,255,.65)' }}>SEPARAÇÃO</div>
               <div style={{ fontSize: 19, fontWeight: 850, marginTop: 2 }}>{sepTot}<span style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,.65)' }}> / {qtdTot} un</span></div>
-              <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)', marginTop: 2 }}>{cancelada ? 'Pedido cancelado — reserva liberada' : concluido ? 'Pedido enviado' : tudoSeparado ? 'Pronto para o envio' : `${faltam} ${faltam === 1 ? 'item pendente' : 'itens pendentes'}`}</div>
+              <div style={{ fontSize: 11.5, color: 'rgba(255,255,255,.7)', marginTop: 2 }}>{cancelada ? 'Pedido cancelado — reserva liberada' : concluido ? 'Pedido enviado' : tudoSeparado ? 'Pronto para o envio' : `${pendentes} ${pendentes === 1 ? 'item pendente' : 'itens pendentes'}${bloqueados > 0 ? ` · ${bloqueados} sem estoque` : ''}`}</div>
             </div>
           </div>
         </div>
@@ -887,7 +914,7 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
           <>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
               <button onClick={() => setSoFalta((v) => !v)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 9, background: soFalta ? t.accent : t.elevated, color: soFalta ? t.onAccent : t.muted, border: `1px solid ${soFalta ? t.accent : t.border}` }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: soFalta ? t.onAccent : t.accent }} /> Disponível p/ separar {faltam ? `(${faltam})` : ''}
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: soFalta ? t.onAccent : t.accent }} /> Disponível p/ separar ({separaveis})
               </button>
               <button onClick={() => !readOnly && separarTudo()} disabled={readOnly} style={{ all: 'unset', cursor: readOnly ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '7px 12px', borderRadius: 9, background: t.accentSoft, opacity: readOnly ? 0.5 : 1 }}><Icon name="check" size={14} /> Separar tudo disponível</button>
             </div>
@@ -896,7 +923,14 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
                 <RepItemRow key={it.id} t={t} it={{ ...it, sep: sep[idx] }} teto={tetos[idx]} readOnly={busy}
                   onSep={(v) => setSep((xs) => xs.map((x, i) => (i === idx ? v : x)))} />
               ))}
-              {linhas.length === 0 && <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>Todos os itens disponíveis já foram separados. ✓</div>}
+              {linhas.length === 0 && (
+                // B7: vazio do filtro não pode mentir — sem estoque NÃO é "já separado".
+                <div style={{ padding: 24, textAlign: 'center', fontSize: 13, color: t.muted }}>
+                  {bloqueados > 0
+                    ? `Nada separável agora — ${bloqueados} ${bloqueados === 1 ? 'item pendente aguarda' : 'itens pendentes aguardam'} estoque.`
+                    : 'Todos os itens disponíveis já foram separados. ✓'}
+                </div>
+              )}
             </div>
             {podeMexerItens ? (
               <button onClick={() => setPickerOpen(true)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', marginTop: 12, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13.5, fontWeight: 800, color: t.accentText, border: `1.5px dashed ${frHexToRgba(t.accent, 0.5)}`, background: frHexToRgba(t.accent, 0.04) }}
@@ -995,13 +1029,15 @@ function RepDetail({ t, rep, busy, produtos, onClose, onReservar, onEntregar, on
               ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Separação alterada — "Salvar separação" grava a reserva no servidor.</span>
               : step === 'envio' && !metodo
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> Escolha o método de envio para confirmar.</span>
-                : <span>Total do pedido <b style={{ color: t.text }}>{repMoney(rep.valor)}</b></span>}
+                : step === 'separar' && motivoEnvio
+                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: uiTone(t, 'amber').fg, fontWeight: 700 }}><Icon name="alert" size={14} /> {motivoEnvio}</span>
+                  : <span>Total do pedido <b style={{ color: t.text }}>{repMoney(rep.valor)}</b></span>}
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             {step === 'separar' ? (
               <>
                 <Btn t={t} kind="ghost" icon="check" onClick={() => onReservar(rep, itensPayload())}>{busy ? 'Salvando…' : 'Salvar separação'}</Btn>
-                <button onClick={() => podeEnviar && setStep('envio')} disabled={!podeEnviar} style={{ all: 'unset', cursor: podeEnviar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: podeEnviar ? t.accent : t.elevated, color: podeEnviar ? t.onAccent : t.faint }}><Icon name="arrowRight" size={16} /> Ir para o envio</button>
+                <button onClick={() => podeEnviar && setStep('envio')} disabled={!podeEnviar} title={motivoEnvio || undefined} style={{ all: 'unset', cursor: podeEnviar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 9, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: podeEnviar ? t.accent : t.elevated, color: podeEnviar ? t.onAccent : t.faint }}><Icon name="arrowRight" size={16} /> Ir para o envio</button>
               </>
             ) : (
               <button onClick={() => metodo && podeEnviar && onEntregar(rep, itensPayload(), metodo, rastreio.trim())} disabled={!metodo || !podeEnviar || busy}
