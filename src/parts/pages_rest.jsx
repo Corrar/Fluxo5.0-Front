@@ -1390,7 +1390,11 @@ const TRIP_STAGES = [
   { key: 'reconciled', label: 'Finalizada', icon: 'check', sub: 'Confronto concluído.' },
 ];
 const STAGE_IDX = (s) => TRIP_STAGES.findIndex((x) => x.key === s);
-const fmtBRL = (n) => 'R$ ' + Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtBRL = (n) => {
+  // GUARD: valor não-numérico não rende número inventado ("R$ NaN") — vira travessão.
+  const v = Number(n || 0);
+  return Number.isFinite(v) ? 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+};
 const cfData = (iso) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -1917,24 +1921,49 @@ function PageConfronto({ t }) {
           const sm = stageMeta[tr.stage];
           const emViagem = !tr.done;
           return (
-            <Card t={t} key={tr.id} hover style={{ padding: 18, cursor: 'pointer', border: emViagem ? `1.5px solid ${t.accent}` : undefined, boxShadow: emViagem ? `0 0 0 4px ${frHexToRgba(t.accent, 0.1)}` : undefined }}>
+            <Card t={t} key={tr.id} hover style={{ padding: 0, overflow: 'hidden', cursor: 'pointer', border: emViagem ? `1.5px solid ${t.accent}` : undefined, boxShadow: emViagem ? `0 0 0 4px ${frHexToRgba(t.accent, 0.1)}` : undefined }}>
               <div onClick={() => setOpenId(tr.id)}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <Badge t={t} kind={sm[1]} dot>{sm[0]}</Badge>
-                  <span style={{ fontSize: 11.5, color: t.faint }}>{tr.saida}</span>
+                {/* faixa superior na cor do estágio (gabarito ref21:1965-1974; sem badge AJUSTADO —
+                    confronto de ajuste não existe no backend, ver DIVIDAS.md) */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px', background: frHexToRgba(uiTone(t, sm[1]).fg, t.panel === '#ffffff' ? 0.07 : 0.1), borderBottom: `1px solid ${t.border}` }}>
+                  <span style={{ width: 34, height: 34, borderRadius: 10, background: uiTone(t, sm[1]).bg, color: uiTone(t, sm[1]).fg, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                    <Icon name={tr.done ? 'check' : 'truck'} size={17} />
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {/* rótulo em t.text (desvio MEDIDO do gabarito: uiTone.fg dava 3.4:1 no claro;
+                        o tom do estágio segue no ícone e no fundo da faixa) */}
+                    <div style={{ fontSize: 12.5, fontWeight: 850, color: t.text }}>{sm[0]}</div>
+                    <div style={{ fontSize: 10.5, color: t.faint, fontWeight: 600 }}>saída {tr.saida}</div>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '14px 0 4px', fontSize: 15.5, fontWeight: 800, color: t.text }}>
-                  <Icon name="mapPin" size={16} style={{ color: t.accentText, flexShrink: 0 }} />
-                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tr.destino}</span>
+                <div style={{ padding: '14px 18px 0' }}>
+                  {/* destino sozinho — origem SEM FONTE no backend (F2): nada de trilha simulada */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12, fontSize: 15.5, fontWeight: 850, color: t.text }}>
+                    <Icon name="mapPin" size={16} style={{ color: t.accentText, flexShrink: 0 }} />
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tr.destino}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
+                    {tr.tecnicos.map((tc) => (
+                      <span key={tc} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, padding: '4px 10px', borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, color: t.text }}>
+                        <Icon name="user" size={11} style={{ color: t.accentText }} /> {tc}
+                      </span>
+                    ))}
+                    {tr.tecnicos.length === 0 && <span style={{ fontSize: 11.5, color: t.faint, fontWeight: 600 }}>sem técnico</span>}
+                    <span style={{ fontSize: 11, color: t.faint, fontWeight: 700 }}>· {tr.itens.length} {tr.itens.length === 1 ? 'item' : 'itens'}</span>
+                  </div>
+                  <TripStepper t={t} stage={tr.stage} compact />
                 </div>
-                <div style={{ fontSize: 12.5, color: t.muted, marginBottom: 18 }}>{tr.tecnicos.join(', ') || '—'}</div>
-                <TripStepper t={t} stage={tr.stage} compact />
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, paddingTop: 13, borderTop: `1px solid ${t.border}`, gap: 10 }}>
-                <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>LEVADO</div><div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{fmtBRL(tripLevado(tr))}</div></div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '16px 18px 0', paddingTop: 13, paddingBottom: 16, borderTop: `1px solid ${t.border}`, gap: 10 }}>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>LEVADO</div><div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{fmtBRL(tripLevado(tr))}</div></div>
+                  {/* RETORNADO/CONSUMO só onde o dado existe (F4): quantity_returned nasce no reconcile */}
+                  {tr.done && <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>RETORNADO</div><div style={{ fontSize: 15, fontWeight: 850, color: uiTone(t, 'green').fg }}>{fmtBRL(tripRetornado(tr))}</div></div>}
+                  {tr.done && <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>CONSUMO</div><div style={{ fontSize: 15, fontWeight: 850, color: uiTone(t, 'red').fg }}>{fmtBRL(tripLevado(tr) - tripRetornado(tr))}</div></div>}
+                </div>
                 {emViagem
-                  ? <button onClick={() => { setErroModal(null); setConfrontoId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}` }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
-                  : <button onClick={() => setOpenId(tr.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9 }}
+                  ? <button onClick={() => { setErroModal(null); setConfrontoId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}`, flexShrink: 0 }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
+                  : <button onClick={() => setOpenId(tr.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, flexShrink: 0 }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>Ver detalhes <Icon name="chevronRight" size={15} /></button>}
               </div>
             </Card>
