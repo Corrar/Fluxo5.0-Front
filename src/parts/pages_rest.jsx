@@ -1395,6 +1395,8 @@ const fmtBRL = (n) => {
   const v = Number(n || 0);
   return Number.isFinite(v) ? 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 };
+// Escape mínimo p/ os PDFs client-side (document.write com strings livres do banco).
+const cfEsc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const cfData = (iso) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -1586,8 +1588,42 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
   );
 }
 
-function TripDetail({ t, trip, busy, onClose, onConfronto }) {
+function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
   const [tab, setTab] = useStateR('levados');
+  const [romSel, setRomSel] = useStateR(false);
+  // Romaneio de saída p/ ASSINATURA (gabarito ref21:1497-1528, adaptado): client-side com o
+  // logo real via window.__asset (F8); rota = só destino (origem sem fonte, F2); assina o
+  // TOKEN CRU escolhido (D-F3). Popup bloqueado vira aviso — nunca falha silenciosa.
+  const romaneioPDF = (tecnico) => {
+    setRomSel(false);
+    const logo = window.__asset ? window.__asset('assets/logo-royale.png') : 'assets/logo-royale.png';
+    const rows = trip.itens.map((it, i) => `<tr><td>${i + 1}</td><td><b>${cfEsc(it.nome)}</b><br><span class="sub mono">SKU ${cfEsc(it.sku)}</span></td><td>${it.levou} ${cfEsc(it.un || 'un')}</td><td>${fmtBRL(it.price)}</td><td><b>${fmtBRL(it.price * it.levou)}</b></td><td class="chk"></td></tr>`).join('');
+    const w = window.open('', '_blank');
+    if (!w) { if (notify) notify('err', 'O navegador bloqueou a janela do romaneio — libere pop-ups para este site e tente de novo.'); return; }
+    const levadoTot = tripLevado(trip);
+    w.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Romaneio — ${cfEsc(trip.destino)}</title><style>
+      *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;color:#14161c;padding:34px 38px;display:flex;flex-direction:column;min-height:96vh}
+      .top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid #2e3192;padding-bottom:16px;margin-bottom:18px}
+      h1{font-size:21px;letter-spacing:-.02em}.sub{font-size:11.5px;color:#5a5f6b}.mono{font-family:ui-monospace,monospace;font-size:10.5px}
+      .tot{text-align:right}.tot .lbl{font-size:10px;font-weight:800;letter-spacing:.1em;color:#5a5f6b}.tot .val{font-size:22px;font-weight:850;color:#2e3192;white-space:nowrap}
+      .rota{font-size:13px;margin-top:6px}.rota b{font-size:15px}
+      table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;letter-spacing:.08em;color:#5a5f6b;border-bottom:2px solid #d8dbe4;padding:8px}
+      td{padding:9px 8px;border-bottom:1px solid #e8eaf0;vertical-align:top}tr:nth-child(even) td{background:#f7f8fb}
+      .chk{width:64px}.chk:after{content:'';display:block;width:16px;height:16px;border:1.5px solid #9aa0ad;border-radius:4px;margin:0 auto}
+      .assin{margin-top:38px}.assin .campo{text-align:center;max-width:340px;margin:0 auto;width:100%}.assin .linha{border-bottom:1.5px solid #14161c;height:36px}
+      .assin .nome{font-size:12px;font-weight:800;margin-top:7px}.assin .cargo{font-size:10px;color:#5a5f6b;letter-spacing:.06em}
+      .rodape{margin-top:auto;padding-top:60px}.rodape .inner{display:flex;align-items:center;gap:10px;border-top:1px solid #e8eaf0;padding-top:18px;width:100%;justify-content:center}
+      .rodape img{height:28px}.rodape span{font-size:10.5px;color:#8a8f9c}
+      @media print{body{padding:18px 22px}}</style></head><body>
+      <div class="top"><div><h1>Romaneio de Saída de Material</h1><div class="rota"><b>${cfEsc(trip.destino)}</b></div><div class="sub">Saída: ${cfEsc(trip.saida)} · Emitido em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</div></div>
+      <div class="tot"><div class="lbl">VALOR LEVADO</div><div class="val">${fmtBRL(levadoTot)}</div><div class="sub">${trip.itens.length} ${trip.itens.length === 1 ? 'item' : 'itens'} · ${trip.itens.reduce((a, it) => a + it.levou, 0)} un</div></div></div>
+      <table><thead><tr><th>#</th><th>MATERIAL</th><th>QTD</th><th>VALOR UNIT.</th><th>SUBTOTAL</th><th style="text-align:center">CONFERIDO</th></tr></thead><tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#8a8f9c;padding:24px">Viagem sem itens levados.</td></tr>'}</tbody></table>
+      <div class="assin"><div class="campo"><div class="linha"></div><div class="nome">${cfEsc(tecnico)}</div><div class="cargo">TÉCNICO RESPONSÁVEL · ASSINATURA</div></div></div>
+      <div class="rodape"><div class="inner"><img src="${logo}" alt="Fluxo Royale"><span>Fluxo Royale ERP · romaneio gerado automaticamente — arquivar após assinatura</span></div></div>
+    <\/body></html>`);
+    w.document.close();
+    w.onload = () => setTimeout(() => w.print(), 350);
+  };
   // reativo: o hook da Fase 1 responde ao resize (o window.innerWidth solto congelava no primeiro render)
   const { mobile: tripMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: typeof window !== 'undefined' && window.innerWidth <= 640 });
   const stageInfo = TRIP_STAGES.find((s) => s.key === trip.stage);
@@ -1657,6 +1693,25 @@ function TripDetail({ t, trip, busy, onClose, onConfronto }) {
               <Icon name="returnHome" size={18} /> Fazer confronto
             </button>
           )}
+
+          {/* Romaneio por TOKEN (D-F3): 1 técnico = PDF direto; N = escolher quem assina;
+              0 = desabilitado com o motivo (documento de assinatura precisa de assinante). */}
+          <div style={{ marginBottom: 18 }}>
+            <button onClick={() => { if (!trip.tecnicos.length) return; if (trip.tecnicos.length === 1) romaneioPDF(trip.tecnicos[0]); else setRomSel((v) => !v); }}
+              disabled={!trip.tecnicos.length}
+              title={trip.tecnicos.length ? 'Romaneio de saída para assinatura do técnico' : 'Sem técnico registrado na viagem — romaneio é documento de assinatura.'}
+              style={{ all: 'unset', boxSizing: 'border-box', cursor: trip.tecnicos.length ? 'pointer' : 'not-allowed', width: '100%', height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 800, color: trip.tecnicos.length ? t.accentText : t.faint, border: `1.5px dashed ${trip.tecnicos.length ? frHexToRgba(t.accent, 0.5) : t.border}`, background: trip.tecnicos.length ? frHexToRgba(t.accent, 0.04) : 'transparent' }}>
+              <Icon name="download" size={15} /> Gerar romaneio (PDF)
+            </button>
+            {romSel && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: t.faint }}>Quem assina?</span>
+                {trip.tecnicos.map((tc) => (
+                  <button key={tc} onClick={() => romaneioPDF(tc)} style={{ all: 'unset', cursor: 'pointer', padding: '7px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 700, background: t.elevated, border: `1px solid ${t.border}`, color: t.text }}>{tc}</button>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
             {tabBtn('levados', 'Itens Levados', 'upload')}
@@ -1905,6 +1960,38 @@ function PageConfronto({ t }) {
     } catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
   };
 
+  // Relatório PDF client-side (gabarito ref21:1909-1935, adaptado ao contrato REAL): sem
+  // origem (F2), 2 estágios (F1), RETORNADO/CONSUMO só em reconciled (F4). Opera sobre a
+  // VIEW (busca + filtro de estágio aplicados). Popup bloqueado vira toast, nunca silêncio.
+  const exportarPDF = () => {
+    const logo = window.__asset ? window.__asset('assets/logo-royale.png') : 'assets/logo-royale.png';
+    const rows = view.map((tr) => {
+      const lev = tripLevado(tr), ret = tripRetornado(tr);
+      return `<tr><td><b>${cfEsc(tr.destino)}</b><br><span class="sub">${cfEsc(tr.tecnicos.join(', ') || 'sem técnico')}</span></td><td>${cfEsc(tr.saida)}</td><td>${stageMeta[tr.stage][0]}</td><td>${fmtBRL(lev)}</td><td>${tr.done ? fmtBRL(ret) : '—'}</td><td><b>${tr.done ? fmtBRL(lev - ret) : '—'}</b></td></tr>`;
+    }).join('');
+    const totLev = view.reduce((a, tr) => a + tripLevado(tr), 0);
+    const totCons = view.filter((tr) => tr.done).reduce((a, tr) => a + tripLevado(tr) - tripRetornado(tr), 0);
+    const w = window.open('', '_blank');
+    if (!w) { setToast({ kind: 'err', msg: 'O navegador bloqueou a janela do PDF — libere pop-ups para este site e tente de novo.' }); return; }
+    w.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório de Confronto</title><style>
+      *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;color:#14161c;padding:34px 38px;display:flex;flex-direction:column;min-height:96vh}
+      .top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid #2e3192;padding-bottom:16px;margin-bottom:20px}
+      h1{font-size:21px;letter-spacing:-.02em}.sub{font-size:11px;color:#5a5f6b}
+      .tot{text-align:right}.tot .lbl{font-size:10px;font-weight:800;letter-spacing:.1em;color:#5a5f6b}.tot .val{font-size:22px;font-weight:850;color:#2e3192;white-space:nowrap}
+      table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;font-size:10px;letter-spacing:.08em;color:#5a5f6b;border-bottom:2px solid #d8dbe4;padding:8px}
+      td{padding:9px 8px;border-bottom:1px solid #e8eaf0;vertical-align:top}tr:nth-child(even) td{background:#f7f8fb}
+      .rodape{margin-top:auto;padding-top:24px;display:flex;align-items:center;justify-content:center;gap:10px;border-top:1px solid #e8eaf0}.rodape img{height:28px}.rodape span{font-size:10.5px;color:#8a8f9c}
+      @media print{body{padding:18px 22px}}</style></head><body>
+      <div class="top"><div><h1>Relatório de Confronto de Viagens</h1><div class="sub">${fStage ? stageMeta[fStage][0] + ' · ' : ''}${view.length} ${view.length === 1 ? 'viagem' : 'viagens'} · Emitido em ${new Date().toLocaleDateString('pt-BR')}</div></div>
+      <div class="tot"><div class="lbl">LEVADO / CONSUMO</div><div class="val">${fmtBRL(totLev)}</div><div class="sub">consumo confirmado: <b>${fmtBRL(totCons)}</b></div></div></div>
+      <table><thead><tr><th>VIAGEM</th><th>SAÍDA</th><th>STATUS</th><th>LEVADO</th><th>RETORNADO</th><th>CONSUMO</th></tr></thead><tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#8a8f9c;padding:24px">Sem viagens no filtro.</td></tr>'}</tbody></table>
+      <div class="rodape"><img src="${logo}" alt="Fluxo Royale"><span>Fluxo Royale ERP · relatório gerado automaticamente</span></div>
+    <\/body></html>`);
+    w.document.close();
+    w.onload = () => setTimeout(() => w.print(), 350);
+  };
+
+
   if (loading && trips.length === 0) return <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando viagens…</Card>;
   if (error) return (
     <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
@@ -1916,7 +2003,7 @@ function PageConfronto({ t }) {
   return (
     <div>
       <PageHeader t={t} title="Confronto de Viagens" subtitle="Registre a saída do material, acompanhe a viagem e faça o confronto do retorno."
-        actions={<><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}>Registrar saída</Btn></>} />
+        actions={<><Btn t={t} kind="ghost" icon="download" onClick={exportarPDF}>Relatório PDF</Btn><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}>Registrar saída</Btn></>} />
       {/* KPI clicável como filtro de estágio (A4, gabarito ref21:1941-1945) — UM por estágio REAL */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         {[['pending', 'truck', 'Em viagem', 'blue'], ['reconciled', 'check', 'Finalizadas', 'green']].map(([st, ic, lb, kd]) => (
@@ -1990,7 +2077,7 @@ function PageConfronto({ t }) {
           );
         })}
       </div>
-      {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} />}
+      {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} notify={(kind, msg) => setToast({ kind, msg })} />}
       {confrontoTrip && <ConfrontoEditor t={t} trip={confrontoTrip} produtos={produtos} salvando={busy} erro={erroModal} onClose={() => !busy && setConfrontoId(null)} onSave={confrontar} />}
       {saida && <SaidaModal t={t} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setSaida(null)} onSave={registrarSaida} />}
       {toast && (
