@@ -12,25 +12,43 @@ function shade(hex) {
   return `rgb(${r},${g},${b})`;
 }
 
+// GUARD DE TOKEN (só DEV): chave que não existe na fábrica vira console.error em vez de
+// undefined silencioso — foi um `background: t.bg` (chave inexistente) que pintou o detalhe
+// de Reposições transparente em produção. Em prod devolve o objeto cru: zero Proxy, zero
+// overhead. Chaves de protocolo (toJSON/then/valueOf/...) e Symbols não gritam, para não
+// sujar spread, JSON.stringify, await acidental e devtools.
+const FR_TOKEN_PROTOCOLO = ['toJSON', 'then', 'valueOf', 'toString', 'constructor', '$$typeof'];
+function frTokensGuard(t) {
+  if (!import.meta.env.DEV) return t;
+  return new Proxy(t, {
+    get(target, key) {
+      if (typeof key === 'string' && !(key in target) && FR_TOKEN_PROTOCOLO.indexOf(key) < 0) {
+        console.error('[tokens] chave inexistente: t.' + key);
+      }
+      return target[key];
+    },
+  });
+}
+
 function tokens(theme, accent, accentText) {
   if (theme === 'light') {
-    return {
+    return frTokensGuard({
       panel: '#ffffff', hover: '#f5f5f3', elevated: '#fafaf9',
       border: '#ededeb', borderStrong: '#e2e2df',
       text: '#1a1b1d', muted: '#9a9da3', faint: '#b7bac0',
       accent, accentText: shade(accentText), accentSoft: hexToRgba(accent, 0.12), onAccent: '#ffffff',
       activeShadow: `0 4px 12px ${hexToRgba(accent, 0.28)}`,
       shadow: '0 1px 2px rgba(20,20,25,.05), 0 10px 30px rgba(20,20,25,.08)',
-    };
+    });
   }
-  return {
+  return frTokensGuard({
     panel: '#0e0f12', hover: 'rgba(255,255,255,.05)', elevated: '#16181d',
     border: 'rgba(255,255,255,.07)', borderStrong: 'rgba(255,255,255,.12)',
     text: '#ededee', muted: '#8b8f98', faint: '#5c606a',
     accent, accentText, accentSoft: hexToRgba(accent, 0.16), onAccent: '#04130d',
     activeShadow: `0 4px 14px ${hexToRgba(accent, 0.4)}`,
     shadow: '0 1px 2px rgba(0,0,0,.4), 0 14px 36px rgba(0,0,0,.5)',
-  };
+  });
 }
 
 // ---------- Module switcher (Figma header) ----------
