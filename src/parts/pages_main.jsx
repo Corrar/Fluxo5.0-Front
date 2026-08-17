@@ -607,6 +607,7 @@ function InvMiniatura({ t, img, size = 40 }) {
 // conforme o item tenha ou não etiqueta.
 function InvLinhaProduto({ t, p, onSel }) {
   const zerado = window.FRAdapters.parseNumber(p.estoque) === 0;
+  const reservado = window.FRAdapters.parseNumber(p.reserved);
   return (
     <button onClick={() => onSel(p)} type="button"
       style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 11px', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated }}
@@ -620,9 +621,17 @@ function InvLinhaProduto({ t, p, onSel }) {
       <span style={{ width: 82, flexShrink: 0, display: 'inline-flex', justifyContent: 'flex-end' }}>
         {p.tag ? <Badge t={t} kind={p.kind}>{p.tag}</Badge> : null}
       </span>
-      <div style={{ width: 92, flexShrink: 0, textAlign: 'right' }}>
+      {/* Coluna do saldo com ALTURA e LARGURA fixas: a 2ª linha (reservado ou "zerado") existe só
+          para alguns itens, e sem a reserva de espaço a lista pularia entre um item e o seguinte —
+          mesmo cuidado do slot do badge acima. O reservado aparece DISCRETO e só quando > 0; é
+          parte do saldo exibido, nunca subtraído dele. */}
+      <div style={{ width: 116, flexShrink: 0, textAlign: 'right', minHeight: 34 }}>
         <div style={{ fontSize: 15, fontWeight: 850, color: zerado ? t.faint : t.text, whiteSpace: 'nowrap' }}>{p.estoque} <span style={{ fontSize: 10.5, fontWeight: 700, color: t.muted }}>{p.un}</span></div>
-        {zerado && <div style={{ fontSize: 10, fontWeight: 800, color: uiTone(t, 'amber').fg }}>ZERADO NO SISTEMA</div>}
+        {zerado
+          ? <div style={{ fontSize: 10, fontWeight: 800, color: uiTone(t, 'amber').fg }}>ZERADO NO SISTEMA</div>
+          : reservado > 0
+            ? <div style={{ fontSize: 10.5, fontWeight: 700, color: t.muted, whiteSpace: 'nowrap' }}>· {reservado} reservado{reservado === 1 ? '' : 's'}</div>
+            : null}
       </div>
     </button>
   );
@@ -708,6 +717,10 @@ function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegist
       const item = (res.data && res.data.items && res.data.items[0]) || null;
       // A linha da sessão é ESTADO CONGELADO DA RESPOSTA (nunca derivada de `produtos`: o hook
       // refaz o fetch a cada stock_updated e o "antes" seria reescrito pelo saldo novo).
+      // ⚠ A resposta do POST /stock/recount NÃO traz `reserved` — e a linha fica SEM ele de
+      // propósito. Buscar o reservado em `produtos` para completar reintroduziria exatamente o
+      // bug que esta régua evita: o valor viria do saldo de AGORA, não do instante da contagem,
+      // e a linha passaria a mentir sobre o que foi contado.
       onRegistrado({
         key: `${idemKey}:${sel.product_id}`,
         product_id: sel.product_id,
@@ -786,8 +799,12 @@ function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegist
         <div style={{ flex: 1, minWidth: 160, padding: '13px 15px', borderRadius: 13, border: `1px solid ${t.border}`, background: t.panel }}>
           <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>No sistema</div>
           <div style={{ fontSize: 26, fontWeight: 850, color: t.text, lineHeight: 1.2, marginTop: 4 }}>{noSistema} <span style={{ fontSize: 12, fontWeight: 700, color: t.muted }}>{sel.un}</span></div>
+          {/* DECOMPOSIÇÃO do saldo, não subtração: o reservado é uma PARTE do que está na
+              prateleira. Aqui NUNCA se exibe "disponível" (on_hand − reserved) — a contagem
+              física compara com o que EXISTE, não com o que está livre, e mostrar o disponível
+              induziria o operador a contar menos. Por isso `disp` é proibido neste fluxo. */}
           {reservado > 0 && (
-            <div style={{ fontSize: 11.5, color: cAmb.fg, fontWeight: 700, marginTop: 5 }}>{reservado} {sel.un} reservado — a contagem não pode ficar abaixo disso</div>
+            <div style={{ fontSize: 11.5, color: t.muted, fontWeight: 700, marginTop: 5 }}>dos quais <b style={{ color: cAmb.fg }}>{reservado} {sel.un}</b> reservado{reservado === 1 ? '' : 's'}</div>
           )}
         </div>
         <div style={{ flex: 1, minWidth: 160, padding: '13px 15px', borderRadius: 13, border: `1px solid ${t.accent}`, background: t.accentSoft }}>
@@ -800,6 +817,15 @@ function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegist
         </div>
       </div>
 
+      {/* MICROCOPY OBRIGATÓRIA — é o erro que este lote existe para evitar: o operador vê "1
+          reservado" e desconta da contagem, achando que reservado é material que saiu. Não saiu:
+          está na prateleira, com dono. Contar sem ele produz uma falta que não existe. Discreta
+          de propósito (não é alerta — é instrução), e sempre presente, não só quando há reserva. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginTop: 10, fontSize: 11.5, color: t.muted, lineHeight: 1.45 }}>
+        <Icon name="box" size={13} style={{ flexShrink: 0, marginTop: 2, color: t.faint }} />
+        <span>Material reservado está na prateleira: conte tudo o que encontrar, inclusive o reservado.</span>
+      </div>
+
       {fracaoInvalida && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg }}>
           <Icon name="alert" size={15} /> A unidade "{sel.un}" não aceita casas decimais.
@@ -807,7 +833,7 @@ function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegist
       )}
       {abaixoDoReservado && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cRed.bg, color: cRed.fg }}>
-          <Icon name="alert" size={15} /> Contagem ({nContado}) abaixo do reservado ({reservado}). O sistema recusaria o ajuste.
+          <Icon name="alert" size={15} /> Contagem ({nContado}) menor que o reservado ({reservado}). O sistema não permite ajustar abaixo do que está reservado.
         </div>
       )}
       {delta != null && delta !== 0 && !abaixoDoReservado && (
