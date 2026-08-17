@@ -1588,9 +1588,51 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
   );
 }
 
-function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
+// Detalhe da viagem em DRAWER LATERAL (C6): casca no padrão da casa (RepPickerDrawer,
+// pages_rest.jsx:741 — superfície OPACA t.panel, borderLeft t.borderStrong, sombra à
+// esquerda), largura do ref (min(600px,94vw)), raio ZERO no desktop (full-height colado à
+// borda) e sheet de baixo com drag-handle no mobile (mantido). Conteúdo no visual do
+// TripDetail do ref21:1489+, adaptado às réguas da rodada: SEM origem/trilha (F2), stepper
+// de 2 nós (F1), banner com 2 configs, chips crus (D-F3), balanço com barra SÓ pós-reconcile
+// (F4), SEM "Confronto de ajuste"/"Ajustes posteriores" (DIVIDAS.md).
+// Este drawer INAUGURA ESC + gestão de foco + trava do scroll de trás (ver DIVIDAS.md —
+// divergência consciente com os overlays antigos; o padrão vigente passa a ser este).
+function TripDetail({ t, trip, busy, onClose, onConfronto, notify, origemFoco }) {
   const [tab, setTab] = useStateR('levados');
   const [romSel, setRomSel] = useStateR(false);
+  // reativo: o hook da Fase 1 responde ao resize (o window.innerWidth solto congelava no primeiro render)
+  const { mobile: tripMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: typeof window !== 'undefined' && window.innerWidth <= 640 });
+  const stageInfo = TRIP_STAGES.find((s) => s.key === trip.stage);
+  const chegou = trip.done;
+  const levado = tripLevado(trip), retornado = tripRetornado(trip), consumo = levado - retornado;
+
+  const painelRef = React.useRef(null);
+  const overlayRef = React.useRef(null);
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    // FOCO: entra no painel ao abrir; ao fechar volta ao CARD ACIONADOR (ref vem do pai).
+    if (painelRef.current) painelRef.current.focus();
+    // ESC fecha — vale em desktop e no sheet mobile.
+    const onKey = (e) => { if (e.key === 'Escape') onCloseRef.current(); };
+    window.addEventListener('keydown', onKey);
+    // TRAVA DO SCROLL DE TRÁS: wheel/touchmove fora do painel são bloqueados no overlay.
+    // Listener NATIVO com passive:false — o onWheel sintético do React é passivo e não
+    // conseguiria preventDefault. O scroller interno usa overscrollBehavior:'contain' para
+    // o fim-de-lista não encadear na lista de trás.
+    const bloqueia = (e) => { if (painelRef.current && !painelRef.current.contains(e.target)) e.preventDefault(); };
+    const ov = overlayRef.current;
+    if (ov) { ov.addEventListener('wheel', bloqueia, { passive: false }); ov.addEventListener('touchmove', bloqueia, { passive: false }); }
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      if (ov) { ov.removeEventListener('wheel', bloqueia); ov.removeEventListener('touchmove', bloqueia); }
+      const alvo = origemFoco && origemFoco.current;
+      if (alvo && alvo.focus) alvo.focus();
+    };
+    // monta UMA vez por abertura; onClose entra por ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Romaneio de saída p/ ASSINATURA (gabarito ref21:1497-1528, adaptado): client-side com o
   // logo real via window.__asset (F8); rota = só destino (origem sem fonte, F2); assina o
   // TOKEN CRU escolhido (D-F3). Popup bloqueado vira aviso — nunca falha silenciosa.
@@ -1624,11 +1666,7 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
     w.document.close();
     w.onload = () => setTimeout(() => w.print(), 350);
   };
-  // reativo: o hook da Fase 1 responde ao resize (o window.innerWidth solto congelava no primeiro render)
-  const { mobile: tripMobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: typeof window !== 'undefined' && window.innerWidth <= 640 });
-  const stageInfo = TRIP_STAGES.find((s) => s.key === trip.stage);
-  const chegou = trip.done;
-  const levado = tripLevado(trip), retornado = tripRetornado(trip), consumo = levado - retornado;
+
   const tabBtn = (k, label, icon) => {
     const on = tab === k;
     return (
@@ -1637,10 +1675,11 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
       </button>
     );
   };
+
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: tripMobile ? 'flex' : 'grid', flexDirection: tripMobile ? 'column' : undefined, justifyContent: tripMobile ? 'flex-end' : undefined, placeItems: tripMobile ? undefined : 'center', padding: tripMobile ? 0 : 20, animation: tripMobile ? 'frTripFade .2s ease-out' : 'none' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: tripMobile ? '100%' : 'min(840px,96vw)', boxSizing: 'border-box', maxHeight: '92vh', flex: tripMobile ? '0 0 auto' : undefined, display: 'flex', flexDirection: 'column', background: t.panel, border: tripMobile ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: tripMobile ? '24px 24px 0 0' : 20, boxShadow: t.shadow, overflow: 'hidden', animation: tripMobile ? 'frTripUp .34s cubic-bezier(.22,1,.36,1)' : 'none', transition: tripMobile ? 'transform .18s ease-out' : 'none' }}>
-        <style>{`@keyframes frTripUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frTripFade{from{opacity:0}to{opacity:1}}`}</style>
+    <div ref={overlayRef} onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'flex', flexDirection: tripMobile ? 'column' : 'row', justifyContent: 'flex-end', animation: 'frTripFade .2s ease-out' }}>
+      <div ref={painelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ width: tripMobile ? '100%' : 'min(600px,94vw)', boxSizing: 'border-box', height: tripMobile ? undefined : '100%', maxHeight: tripMobile ? '92vh' : '100%', flex: tripMobile ? '0 0 auto' : undefined, display: 'flex', flexDirection: 'column', background: t.panel, border: 'none', borderLeft: tripMobile ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: tripMobile ? '24px 24px 0 0' : 0, boxShadow: tripMobile ? t.shadow : '-18px 0 44px rgba(0,0,0,.25)', overflow: 'hidden', outline: 'none', animation: tripMobile ? 'frTripUp .34s cubic-bezier(.22,1,.36,1)' : 'tripDrawerIn .28s cubic-bezier(.22,1,.36,1)', transition: tripMobile ? 'transform .18s ease-out' : 'none' }}>
+        <style>{`@keyframes frTripUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frTripFade{from{opacity:0}to{opacity:1}}@keyframes tripDrawerIn{from{transform:translateX(70px);opacity:0}to{transform:none;opacity:1}}`}</style>
         {tripMobile && (
           <div style={{ flexShrink: 0, background: t.accent, padding: '12px 0 8px', cursor: 'grab', touchAction: 'none' }}
             onPointerDown={(e) => {
@@ -1658,20 +1697,45 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
             <div style={{ width: 48, height: 5, borderRadius: 3, background: 'rgba(255,255,255,.45)', margin: '0 auto' }} />
           </div>
         )}
-        <div style={{ position: 'relative', padding: tripMobile ? '14px 24px 22px' : '22px 24px', background: tripMobile ? t.accent : `linear-gradient(135deg, ${t.accent}, ${frHexToRgba(t.accent, 0.7)})`, color: '#fff' }}>
-          {!tripMobile && <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', position: 'absolute', top: 16, right: 18, width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.18)', color: '#fff' }}><Icon name="x" size={16} /></button>}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)', marginBottom: 12 }}><Icon name={stageInfo.icon} size={13} /> {stageInfo.label}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 19, fontWeight: 850, letterSpacing: '-.01em', flexWrap: 'wrap' }}>
-            <Icon name="mapPin" size={17} style={{ opacity: .8 }} /> {trip.destino}
+        {/* hero do drawer (ref21:1560-1575, sem a rota origem→destino): badge de estado +
+            "saída <data>" + X (visível nos DOIS modos — o Escape/backdrop/X valem em ambos) */}
+        <div style={{ position: 'relative', padding: tripMobile ? '14px 24px 20px' : '20px 24px', background: tripMobile ? t.accent : `linear-gradient(135deg, ${t.accent}, ${frHexToRgba(t.accent, 0.7)})`, color: '#fff', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.2)' }}><Icon name={stageInfo.icon} size={13} /> {stageInfo.label}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, padding: '4px 11px', borderRadius: 999, background: 'rgba(8,10,16,.28)' }}><Icon name="clock" size={12} /> saída {trip.saida}</span>
+            <button onClick={onClose} title="Fechar (Esc)" style={{ all: 'unset', cursor: 'pointer', marginLeft: 'auto', width: 32, height: 32, borderRadius: '50%', display: 'grid', placeItems: 'center', background: 'rgba(255,255,255,.18)', color: '#fff' }}><Icon name="x" size={15} /></button>
           </div>
-          <div style={{ fontSize: 12.5, color: 'rgba(255,255,255,.85)', marginTop: 6 }}>Saída: {trip.saida}</div>
+          {/* destino SOZINHO com marcador — origem sem coluna no backend (F2): sem trilha, sem ponto vazio */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16 }}>
+            <span style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(255,255,255,.18)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="mapPin" size={17} /></span>
+            <div style={{ fontSize: 21, fontWeight: 850, letterSpacing: '-.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{trip.destino}</div>
+          </div>
         </div>
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: '22px 24px' }}>
-          <div style={{ marginBottom: 22 }}><TripStepper t={t} stage={trip.stage} /></div>
+        <div className="fr-scroll" style={{ overflowY: 'auto', flex: 1, minHeight: 0, padding: '22px 24px', overscrollBehavior: 'contain' }}>
+          <div style={{ marginBottom: 18 }}><TripStepper t={t} stage={trip.stage} /></div>
+
+          {/* banner "próximo passo" (ref21:1581-1599) — 2 configs REAIS; sem botão de ajuste */}
+          {(() => {
+            const cfg = trip.done
+              ? { kind: 'green', icon: 'check', titulo: 'Confronto concluído', txt: 'Tudo registrado — o estoque foi acertado no confronto.' }
+              : { kind: 'amber', icon: 'returnHome', titulo: 'Ação necessária: fazer o confronto', txt: 'Quando a equipe voltar, confira o que retornou e registre as quantidades.', btn: ['Fazer confronto agora', () => !busy && onConfronto(trip.id), 'returnHome'] };
+            const tone = uiTone(t, cfg.kind);
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 16px', borderRadius: 15, marginBottom: 20, background: tone.bg, border: `1.5px solid ${frHexToRgba(tone.fg, 0.35)}`, flexWrap: 'wrap' }}>
+                <span style={{ width: 40, height: 40, borderRadius: 12, background: t.panel, color: tone.fg, display: 'grid', placeItems: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(0,0,0,.1)' }}><Icon name={cfg.icon} size={19} /></span>
+                <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 850, color: tone.fg }}>{cfg.titulo}</div>
+                  <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>{cfg.txt}</div>
+                </div>
+                {cfg.btn && <button onClick={cfg.btn[1]} disabled={busy} style={{ all: 'unset', cursor: busy ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 18px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.35)}` }}><Icon name={cfg.btn[2]} size={16} /> {cfg.btn[0]}</button>}
+              </div>
+            );
+          })()}
+
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Equipe em viagem</div>
           {/* Chip com o texto CRU do token, SEM avatar de iniciais (D-F3): iniciais adivinhadas
               sobre string livre produzem identidade errada — e o romaneio é documento de assinatura. */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
             {trip.tecnicos.map((n) => (
               <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 999, background: t.elevated, border: `1px solid ${t.border}`, fontSize: 13, fontWeight: 700, color: t.text }}>
                 <Icon name="user" size={13} style={{ color: t.accentText }} /> {n}
@@ -1679,37 +1743,52 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
             ))}
             {trip.tecnicos.length === 0 && <span style={{ fontSize: 12.5, color: t.faint }}>Sem técnico registrado.</span>}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: chegou ? (tripMobile ? '1fr 1fr' : '1fr 1fr 1fr') : '1fr', gap: tripMobile ? 8 : 12, marginBottom: 22 }}>
-            <div style={{ padding: 16, borderRadius: 14, background: t.elevated, border: `1px solid ${t.border}` }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}><Icon name="upload" size={13} /> LEVADO</div>
-              <div style={{ fontSize: 20, fontWeight: 850, color: t.text, marginTop: 6 }}>{fmtBRL(levado)}</div>
-            </div>
-            {chegou && <div style={{ padding: 16, borderRadius: 14, background: t.elevated, border: `1px solid ${t.border}` }}><div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}><Icon name="shuffle" size={13} /> RETORNADO</div><div style={{ fontSize: 20, fontWeight: 850, color: uiTone(t, 'amber').fg, marginTop: 6 }}>{fmtBRL(retornado)}</div></div>}
-            {chegou && <div style={{ gridColumn: tripMobile ? '1 / -1' : 'auto', padding: 16, borderRadius: 14, background: uiTone(t, 'red').bg, border: `1px solid ${frHexToRgba('#ef4444', 0.25)}` }}><div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 10.5, fontWeight: 700, color: uiTone(t, 'red').fg, letterSpacing: '.04em' }}><Icon name="out" size={13} /> CONSUMIDO</div><div style={{ fontSize: 20, fontWeight: 850, color: uiTone(t, 'red').fg, marginTop: 6 }}>{fmtBRL(consumo)}</div></div>}
-          </div>
 
-          {!trip.done && (
-            <button onClick={() => !busy && onConfronto(trip.id)} disabled={busy} style={{ all: 'unset', boxSizing: 'border-box', cursor: busy ? 'not-allowed' : 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 6px 16px ${frHexToRgba(t.accent, 0.3)}`, marginBottom: 18 }}>
-              <Icon name="returnHome" size={18} /> Fazer confronto
-            </button>
-          )}
-
-          {/* Romaneio por TOKEN (D-F3): 1 técnico = PDF direto; N = escolher quem assina;
-              0 = desabilitado com o motivo (documento de assinatura precisa de assinante). */}
-          <div style={{ marginBottom: 18 }}>
-            <button onClick={() => { if (!trip.tecnicos.length) return; if (trip.tecnicos.length === 1) romaneioPDF(trip.tecnicos[0]); else setRomSel((v) => !v); }}
+          {/* Romaneio por TOKEN (D-F3), dropdown do ref21:1610-1628 (itens SEM avatar):
+              1 técnico = PDF direto; N = "Quem é o técnico responsável?"; 0 = desligado com motivo. */}
+          <div style={{ position: 'relative', marginBottom: 22 }}>
+            <button onClick={() => { if (!trip.tecnicos.length) return; if (trip.tecnicos.length === 1) romaneioPDF(trip.tecnicos[0]); else setRomSel((o) => !o); }}
               disabled={!trip.tecnicos.length}
               title={trip.tecnicos.length ? 'Romaneio de saída para assinatura do técnico' : 'Sem técnico registrado na viagem — romaneio é documento de assinatura.'}
-              style={{ all: 'unset', boxSizing: 'border-box', cursor: trip.tecnicos.length ? 'pointer' : 'not-allowed', width: '100%', height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 800, color: trip.tecnicos.length ? t.accentText : t.faint, border: `1.5px dashed ${trip.tecnicos.length ? frHexToRgba(t.accent, 0.5) : t.border}`, background: trip.tecnicos.length ? frHexToRgba(t.accent, 0.04) : 'transparent' }}>
-              <Icon name="download" size={15} /> Gerar romaneio (PDF)
+              style={{ all: 'unset', boxSizing: 'border-box', cursor: trip.tecnicos.length ? 'pointer' : 'not-allowed', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 44, borderRadius: 12, fontSize: 13, fontWeight: 800, color: trip.tecnicos.length ? t.text : t.faint, border: `1.5px dashed ${romSel ? t.accent : t.borderStrong}` }}
+              onMouseEnter={(e) => { if (trip.tecnicos.length) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+              <Icon name="file" size={16} style={{ color: trip.tecnicos.length ? t.accentText : t.faint }} /> Gerar romaneio para assinatura (PDF)
             </button>
             {romSel && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: t.faint }}>Quem assina?</span>
-                {trip.tecnicos.map((tc) => (
-                  <button key={tc} onClick={() => romaneioPDF(tc)} style={{ all: 'unset', cursor: 'pointer', padding: '7px 13px', borderRadius: 999, fontSize: 12.5, fontWeight: 700, background: t.elevated, border: `1px solid ${t.border}`, color: t.text }}>{tc}</button>
+              <div style={{ position: 'absolute', zIndex: 30, top: 'calc(100% + 6px)', left: 0, right: 0, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 13, boxShadow: t.shadow, padding: 8 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.07em', color: t.faint, textTransform: 'uppercase', padding: '6px 10px 8px' }}>Quem é o técnico responsável?</div>
+                {trip.tecnicos.map((n) => (
+                  <button key={n} onClick={() => romaneioPDF(n)} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 10 }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                    <Icon name="user" size={15} style={{ color: t.accentText, flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: t.text }}>{n}</span>
+                    <Icon name="chevronRight" size={15} style={{ color: t.faint }} />
+                  </button>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* balanço da viagem (ref21:1630-1648) — LEVADO sempre; barra retornou×consumiu SÓ
+              pós-reconcile (F4): antes disso, retornado 0 é indistinguível de "nada voltou" */}
+          <div style={{ padding: '16px 18px', borderRadius: 15, background: t.elevated, border: `1px solid ${t.border}`, marginBottom: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: chegou ? 12 : 0 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 850, letterSpacing: '.08em', color: t.faint, textTransform: 'uppercase' }}>Balanço da viagem</span>
+              <span style={{ fontSize: 17, fontWeight: 850, color: t.text }}>{fmtBRL(levado)} <span style={{ fontSize: 11, fontWeight: 700, color: t.faint }}>levados</span></span>
+            </div>
+            {chegou && (
+              <React.Fragment>
+                <div style={{ display: 'flex', height: 12, borderRadius: 7, overflow: 'hidden', background: t.hover }}>
+                  {retornado > 0 && <div style={{ width: `${(retornado / (levado || 1)) * 100}%`, background: uiTone(t, 'green').fg }} />}
+                  {consumo > 0 && <div style={{ width: `${(consumo / (levado || 1)) * 100}%`, background: uiTone(t, 'red').fg }} />}
+                </div>
+                {/* legendas em t.text (desvio MEDIDO do gabarito, precedente do C3/4ad9751:
+                    uiTone.fg dava 2.4:1 no claro); o quadradinho colorido carrega a semântica */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 9, flexWrap: 'wrap' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, color: t.text }}><span style={{ width: 9, height: 9, borderRadius: 3, background: uiTone(t, 'green').fg }} /> Retornou {fmtBRL(retornado)} ({Math.round((retornado / (levado || 1)) * 100)}%)</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, color: t.text }}><span style={{ width: 9, height: 9, borderRadius: 3, background: uiTone(t, 'red').fg }} /> Consumiu {fmtBRL(consumo)} ({Math.round((consumo / (levado || 1)) * 100)}%)</span>
+                </div>
+              </React.Fragment>
             )}
           </div>
 
@@ -1726,6 +1805,7 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify }) {
                   <div style={{ textAlign: 'right' }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>LEVOU</div><div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>{it.levou}</div></div>
                 </div>
               ))}
+              {trip.itens.length === 0 && <div style={{ padding: 18, textAlign: 'center', fontSize: 12.5, color: t.muted }}>Viagem sem itens levados.</div>}
             </div>
           ) : !chegou ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '16px', borderRadius: 12, background: uiTone(t, 'amber').bg, color: uiTone(t, 'amber').fg, fontSize: 13, fontWeight: 600 }}>
@@ -1934,6 +2014,8 @@ function PageConfronto({ t }) {
   const stageMeta = { pending: ['Em viagem', 'blue'], reconciled: ['Finalizada', 'green'] };
   const [fStage, setFStage] = useStateR(null);
   const [busca, setBusca] = useStateR('');
+  // FOCO do drawer: guarda o elemento acionador (card ou botão) p/ devolver o foco ao fechar.
+  const origemFocoRef = React.useRef(null);
   const bq = busca.trim().toLowerCase();
   // Busca CLIENT-SIDE sobre o que já está carregado (A3): destino + técnicos.
   // Origem NÃO entra — a coluna não existe no backend (F2).
@@ -2029,7 +2111,7 @@ function PageConfronto({ t }) {
           const emViagem = !tr.done;
           return (
             <Card t={t} key={tr.id} hover style={{ padding: 0, overflow: 'hidden', cursor: 'pointer', border: emViagem ? `1.5px solid ${t.accent}` : undefined, boxShadow: emViagem ? `0 0 0 4px ${frHexToRgba(t.accent, 0.1)}` : undefined }}>
-              <div onClick={() => setOpenId(tr.id)}>
+              <div tabIndex={-1} style={{ outline: 'none' }} onClick={(e) => { origemFocoRef.current = e.currentTarget; setOpenId(tr.id); }}>
                 {/* faixa superior na cor do estágio (gabarito ref21:1965-1974; sem badge AJUSTADO —
                     confronto de ajuste não existe no backend, ver DIVIDAS.md) */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px', background: frHexToRgba(uiTone(t, sm[1]).fg, t.panel === '#ffffff' ? 0.07 : 0.1), borderBottom: `1px solid ${t.border}` }}>
@@ -2070,14 +2152,14 @@ function PageConfronto({ t }) {
                 </div>
                 {emViagem
                   ? <button onClick={() => { setErroModal(null); setConfrontoId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}`, flexShrink: 0 }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
-                  : <button onClick={() => setOpenId(tr.id)} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, flexShrink: 0 }}
+                  : <button onClick={(e) => { origemFocoRef.current = e.currentTarget; setOpenId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, flexShrink: 0 }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>Ver detalhes <Icon name="chevronRight" size={15} /></button>}
               </div>
             </Card>
           );
         })}
       </div>
-      {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} notify={(kind, msg) => setToast({ kind, msg })} />}
+      {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} notify={(kind, msg) => setToast({ kind, msg })} origemFoco={origemFocoRef} />}
       {confrontoTrip && <ConfrontoEditor t={t} trip={confrontoTrip} produtos={produtos} salvando={busy} erro={erroModal} onClose={() => !busy && setConfrontoId(null)} onSave={confrontar} />}
       {saida && <SaidaModal t={t} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setSaida(null)} onSave={registrarSaida} />}
       {toast && (

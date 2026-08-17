@@ -633,3 +633,13 @@ rejeita por construção (`VIAGEM_JA_RECONCILIADA`, travels.controller.ts:133/:2
 havia sido REMOVIDO na rodada de 24/07/2026 que colapsou os 4 estágios do mock nos 2 reais.
 Decisão do arquiteto nesta rodada: **não volta nem desligado** — não há motivo novo. Reabrir é
 peça própria (rota de reabertura no backend + trilha no ledger), não um botão de front.
+
+## Overlays — o drawer do Confronto inaugura ESC + gestão de foco + trava de scroll de trás
+
+**Registrado em 17/08/2026** (C6, decisão do arquiteto). O TripDetail-drawer do Confronto é o
+PRIMEIRO overlay da casa com os três comportamentos: fechar por Escape, foco no painel ao abrir
+com devolução ao card acionador ao fechar, e trava do scroll de trás (wheel/touchmove com
+preventDefault no backdrop — listener nativo com passive:false, porque o onWheel sintético do
+React é passivo — mais overscrollBehavior:'contain' no scroll interno). **RepPickerDrawer e os
+demais overlays da casa NÃO têm esses comportamentos — divergência consciente, sem plano de
+conserto nesta entrada.** O padrão vigente para overlays novos passa a ser o deste drawer.
