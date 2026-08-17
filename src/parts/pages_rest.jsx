@@ -1398,9 +1398,17 @@ const cfData = (iso) => {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' · ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 };
 
-// Backend -> shape da tela. Itens com quantity_out>0 = levados; quantity_out=0 = "extra puro" do
-// confronto (voltou sem ter saído). `voltou` (quantity_returned) só tem significado após reconcile.
-// price = products.unit_price aninhado no GET — fonte real dos R$ (nada de preço chumbado).
+// Backend -> shape da tela. price = products.unit_price aninhado no GET — fonte real dos R$.
+// CLASSIFICAÇÃO por items[].status, o campo que o PRÓPRIO reconcile grava. Vocabulário REAL
+// do escritor (travels.controller.ts):
+//   criação (:71)                → status NULL (viagem pendente não tem status por item)
+//   reconcile de item levado (:146) → 'ok' | 'missing' | 'extra' — 'extra' aqui = voltou MAIS
+//                                  que levou, com quantity_out > 0 (é item LEVADO, não extra puro)
+//   reconcile de extra puro (:200)  → 'extra' com quantity_out = 0
+// Por isso o discriminante de "foi levado" segue sendo quantity_out > 0 (a verdade física da
+// saída) e o status entra para reconhecer o EXTRA PURO explicitamente. FALLBACK DECLARADO:
+// linha legada com status NULL pós-reconcile (dado anterior ao campo) cai na heurística
+// antiga — extra = não levou nada e voltou algo. `voltou` só tem significado após reconcile.
 function cfAdapt(r) {
   r = r || {};
   const all = (Array.isArray(r.items) ? r.items : []).map((i) => {
@@ -1408,6 +1416,7 @@ function cfAdapt(r) {
     return {
       id: i.id, product_id: i.product_id, nome: p.name || '—', sku: p.sku || '—', un: p.unit || '',
       price: repNum(p.unit_price), levou: repNum(i.quantity_out), voltou: repNum(i.quantity_returned),
+      status: i.status || null,
     };
   });
   const done = (r.status || 'pending') === 'reconciled';
@@ -1418,7 +1427,7 @@ function cfAdapt(r) {
     tecnicos: String(r.technicians || '').split(',').map((s) => s.trim()).filter(Boolean),
     saida: cfData(r.created_at),
     itens: all.filter((i) => i.levou > 0),
-    extras: all.filter((i) => !(i.levou > 0) && i.voltou > 0),
+    extras: all.filter((i) => i.levou <= 0 && (i.status === 'extra' || i.voltou > 0)),
   };
 }
 function useFRTravels() {

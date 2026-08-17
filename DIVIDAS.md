@@ -624,3 +624,12 @@ limite, zero rede). **Divergir disso — congelar as flags no salvo ou realiment
 stepper — reintroduz a divergência que o C2 matou.** A sub-asserção "flags não mudam sob
 incremento não salvo" foi descartada pelo próprio arquiteto: ela descrevia a assinatura do teto
 móvel, não a régua das flags.
+
+## Confronto — "Confronto de ajuste" é a única peça do ref21 deliberadamente ausente
+
+**Registrado em 17/08/2026** (D-C1 da rodada de transplante visual do Confronto). O ref21
+desenha um segundo confronto pós-finalização ("ajuste", com badge AJUSTADO no card). O backend
+rejeita por construção (`VIAGEM_JA_RECONCILIADA`, travels.controller.ts:133/:252) e o botão já
+havia sido REMOVIDO na rodada de 24/07/2026 que colapsou os 4 estágios do mock nos 2 reais.
+Decisão do arquiteto nesta rodada: **não volta nem desligado** — não há motivo novo. Reabrir é
+peça própria (rota de reabertura no backend + trilha no ledger), não um botão de front.
