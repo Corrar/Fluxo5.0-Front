@@ -1311,8 +1311,10 @@ function PageReposicoes({ t }) {
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 15, fontWeight: 850, color: t.text }}>{r.n}</div>
-                    <div style={{ fontSize: 12.5, color: t.muted, marginTop: 2 }}>{r.cliente}</div>
-                    <div style={{ fontSize: 11.5, color: t.faint }}>{r.cidade}</div>
+                    {/* Hierarquia (gabarito ref21:1291-1292): CLIENTE é o texto primário do card
+                        (t.text, 700); cidade é o secundário (t.muted). Estava invertido. */}
+                    <div style={{ fontSize: 15.5, fontWeight: 700, color: t.text, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.cliente}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: t.muted, marginTop: 3 }}><Icon name="mapPin" size={13} /> {r.cidade}</div>
                   </div>
                   <Badge t={t} kind={repStatusMeta[r.status] ? repStatusMeta[r.status][1] : 'gray'} dot>{repStatusMeta[r.status] ? repStatusMeta[r.status][0] : r.status}</Badge>
                 </div>
@@ -1327,6 +1329,24 @@ function PageReposicoes({ t }) {
                     <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.envio.rastreio || '—'}</span>
                   </div>
                 )}
+                {(() => {
+                  // CTA de entrada (gabarito ref21:1303-1315) com os ESTADOS REAIS do motor.
+                  // Não é um segundo handler: div DENTRO da área clicável do card — torna a
+                  // ação visível. Cancelada não tem rota de reabrir → sem ação inventada.
+                  if (r.status === 'cancelada') return null;
+                  const pronto = r.status === 'em_preparo' && r.itens.length > 0 && r.itens.every((i) => i.sep >= i.qtd);
+                  const [lb, icone, kind] = r.status === 'concluido'
+                    ? [(r.envio && r.envio.rastreio) ? 'Rastrear encomenda' : 'Ver envio', (r.envio && r.envio.rastreio) ? 'mapPin' : 'truck', 'green']
+                    : pronto ? ['Preencher embalagem & envio', 'truck', 'accent']
+                    : sepTot === 0 ? ['Começar separação', 'box', 'amber']
+                    : [`Continuar separação · ${pct}%`, 'box', 'blue'];
+                  const tn = kind === 'accent' ? { bg: t.accentSoft, fg: t.accentText } : uiTone(t, kind);
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14, height: 42, borderRadius: 11, fontSize: 13, fontWeight: 800, background: tn.bg, color: tn.fg }}>
+                      <Icon name={icone} size={15} /> {lb} <Icon name="chevronRight" size={15} />
+                    </div>
+                  );
+                })()}
               </div>
               {(podeEditar || podeCancelar) && (
                 <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.border}` }}>
