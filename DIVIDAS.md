@@ -947,3 +947,54 @@ código:
 > vermelho.** Vermelho manda investigar; verde falso encerra o assunto. Toda prova de tela deve ter
 > uma LINHA DE BASE que falha primeiro se o instrumento estiver mirando errado, e uma guarda de
 > cardinalidade nos seletores que podem casar mais de um elemento.
+
+## Editar viagem: o C3 liga o PUT, e SÓ para 'pending' com razão
+
+Registrado em 18/08/2026.
+
+`PUT /travel-orders/:id` existia desde sempre — com `FOR UPDATE`, movimento por DELTA e op_key
+content-addressed pelo alvo — e **nenhuma tela o chamava**. O C3 é sobretudo trabalho de tela.
+
+### O modal é BIMODAL, não duplicado
+
+`SaidaModal` sem `trip` = registrar saída (POST); com `trip` = editar (PUT). Um caminho de código
+só, de propósito: a edição herda **de graça** o decimal por unidade (C1), o teto reativo e o payload
+numérico (C2). Duplicar o modal duplicaria as três regras — e a próxima correção teria de ser feita
+em dois lugares, que foi exatamente o que produziu o regresso do C1 (payload convertido num modal e
+esquecido no outro).
+
+### O teto na edição soma o que a viagem JÁ segura
+
+O backend reserva só o **delta** (`updateTravelOrder:276-285`), então o `quantity_out` atual
+continua sendo desta viagem. Teto = **já reservado por ela + disponível de agora** — a mesma forma
+do `min(qtd, sep + disponivel)` que Separações e Reposições já usavam. Sem essa parcela, editar
+10 → 11 seria recusado pela tela sempre que o livre estivesse em 0, **mesmo com o backend
+aceitando** (ele só precisa de 1 a mais). Na criação o mapa é vazio e a fórmula colapsa no teto do
+C2, sem ramo extra.
+
+### Viagem legada: botão DESABILITADO com tooltip, não escondido
+
+Mesma doutrina do "esgotado" no C2. Esconder faria o operador concluir que a função não existe;
+desabilitado com o motivo escrito diz a verdade. O sinal vem do `has_ledger` do backend — e a
+composição `!done && hasLedger` mora no adaptador, visível, em vez de num booleano opaco do
+servidor. **Ausência do campo (backend velho) é tratada como `false`**: fail-closed, o botão não
+nasce habilitado contra um servidor que ainda não sabe responder.
+
+O detalhe do porquê (o que quebra ao editar uma legada) está no DIVIDAS do backend, junto do guard.
+
+### TOCTOU continua, por construção
+
+O teto reduz a frequência do 400; não o elimina. Entre a tela ler o disponível e o PUT chegar,
+outra pessoa pode consumir o saldo — e aí quem decide é o `FOR UPDATE` do motor. O
+`RESERVA_INSUFICIENTE` chega pelo `repErr` → `getErrorMessage` e é pintado na faixa de erro do
+modal, acima do botão. É a mesma porta por onde o `VIAGEM_LEGADA` apareceria se alguém driblasse o
+botão desabilitado.
+
+### Sem X-Idempotency-Key no PUT, de propósito
+
+A op_key do backend é content-addressed pelo ALVO (`update:setqty:${newQty}`), então repetir o mesmo
+alvo já é no-op por construção. Um header aqui não acrescentaria garantia — só uma segunda âncora
+para manter em sincronia. Fica registrado o trade-off que vem junto e **já era conhecido**
+(`travels.controller.ts:277-285`): a sequência 10 → 13 → 10 → 13 reusa a op_key `setqty:13`, então
+a segunda subida grava `quantity_out = 13` e **o saldo não acompanha**. É edição interativa sob
+`FOR UPDATE`, não rota de retry; aceito lá e continua aceito aqui. Provado no PB6 do backend.

@@ -1433,7 +1433,14 @@ function PageReposicoes({ t }) {
 // (legado, sem escritor hoje) cai em "Em viagem" — mesma doutrina do DELETE do backend
 // (reconciled vs resto). Origem: SEM FONTE (travel_orders não tem coluna) -> oculta; só destino
 // (city). Confronto de ajuste (2º confronto): o backend rejeita (VIAGEM_JA_RECONCILIADA) ->
-// adiado como peça própria, botão removido.
+// adiado como peça própria, botão removido. SEGUE ASSIM depois do lote C3 (que ligou o PUT): o C3
+// edita SÓ 'pending'. Editar/refazer o confronto de uma 'reconciled' move três livros e exige
+// re-reservar o qtyOut (que pode falhar por RESERVA_INSUFICIENTE) — o mapa inverso já está escrito
+// em deleteTravelOrder:339-364, mas falta essa perna. Ver DIVIDAS.md.
+//
+// EDITAR 'pending' (C3) ainda tem um recorte: só viagem COM razão. As importadas do 2.0 não têm
+// linha em stock_ledger e o botão nasce desabilitado (`tr.editavel`), com o backend recusando
+// igual (VIAGEM_LEGADA) — botão escondido não é trava.
 const TRIP_STAGES = [
   { key: 'pending', label: 'Em viagem', icon: 'truck', sub: 'Equipe em campo com o material reservado.' },
   { key: 'reconciled', label: 'Finalizada', icon: 'check', sub: 'Confronto concluído.' },
@@ -1486,8 +1493,17 @@ function cfAdapt(r) {
     };
   });
   const done = (r.status || 'pending') === 'reconciled';
+  // `has_ledger` (backend, lote C3): esta viagem movimenta estoque por ESTE sistema? Falso = veio
+  // do corte 2.0→5.0 e não tem uma linha sequer em stock_ledger — status 'pending' mas SEM reserva.
+  // Ausente na resposta (backend velho) => tratamos como FALSO: fail-closed, o botão não aparece
+  // habilitado contra um servidor que ainda não sabe responder a pergunta.
+  const hasLedger = r.has_ledger === true;
   return {
     id: r.id, done, stage: done ? 'reconciled' : 'pending',
+    hasLedger,
+    // Editar é `pending` E com razão. A composição fica AQUI, visível, em vez de escondida num
+    // booleano do servidor — se amanhã entrar permissão ou janela de tempo, muda nesta linha.
+    editavel: !done && hasLedger,
     destino: r.city || '—',
     // technicians é VARCHAR único no schema. Separadores REAIS (D-F3): vírgula (o escritor
     // desta tela grava "A, B") E barra (legado 2.0 gravou "ALEX GUERE / GABRIEL"). Token com
@@ -1935,13 +1951,35 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify, origemFoco })
 // Catálogo REAL via GET /products (nada de SAIDA_CAT chumbado). Equipe: texto livre em chips —
 // não existe cadastro de técnicos no backend (technicians é VARCHAR na viagem); o roster sugerido
 // vem dos nomes das viagens já existentes, nunca de nomes inventados.
-function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }) {
+// BIMODAL (lote C3): sem `trip` = REGISTRAR SAÍDA (POST); com `trip` = EDITAR (PUT /:id).
+// Um caminho de código só, de propósito — a edição herda de graça o decimal por unidade (C1), o
+// teto reativo e o payload numérico (C2). Duplicar o modal duplicaria as três regras e a próxima
+// correção teria de ser feita em dois lugares (foi exatamente o que produziu o regresso do C1).
+function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, trip }) {
+  const editando = !!trip;
   const { mobile: saMob } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
-  const [destino, setDestino] = useStateR('');
-  const [team, setTeam] = useStateR([]);
-  const [roster, setRoster] = useStateR(rosterSeed || []);
+  const [destino, setDestino] = useStateR(editando ? (trip.destino === '—' ? '' : trip.destino) : '');
+  const [team, setTeam] = useStateR(editando ? trip.tecnicos.slice() : []);
+  const [roster, setRoster] = useStateR(() => {
+    const base = rosterSeed || [];
+    if (!editando) return base;
+    return base.concat(trip.tecnicos.filter((n) => !base.includes(n)));
+  });
   const [novoTec, setNovoTec] = useStateR('');
-  const [itens, setItens] = useStateR([]);
+  // Na edição os itens nascem do que a viagem JÁ leva. `levou` vai como STRING (contrato do C1).
+  const [itens, setItens] = useStateR(() => (editando
+    ? trip.itens.map((it) => ({ product_id: it.product_id, sku: it.sku, nome: it.nome, un: it.un, preco: it.price, levou: String(it.levou) }))
+    : []));
+  // TETO NA EDIÇÃO: o backend reserva só o DELTA (updateTravelOrder:276-285), então o que ESTA
+  // viagem já segura continua sendo dela. Teto = já reservado por ela + disponível de agora —
+  // a mesma forma do `min(qtd, sep + disponivel)` que Separações e Reposições já usam. Sem esta
+  // parcela, editar 10 -> 11 seria recusado pela tela sempre que o disponível estivesse em 0,
+  // mesmo com o backend aceitando (ele só precisa de 1 a mais).
+  const jaReservado = React.useMemo(() => {
+    const m = {};
+    if (editando) trip.itens.forEach((it) => { m[it.product_id] = repNum(it.levou); });
+    return m;
+  }, [editando, trip]);
   const [q, setQ] = useStateR('');
   const ql = q.trim().toLowerCase();
   const catList = (ql ? (produtos || []).filter((c) => c.nome.toLowerCase().includes(ql) || String(c.sku).toLowerCase().includes(ql)) : (produtos || [])).slice(0, 40);
@@ -1973,7 +2011,9 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
   // tela não consegue mais afirmar.
   const dispAtual = (pid) => {
     const p = (produtos || []).find((x) => x.product_id === pid);
-    return p ? repNum(p.disponivel) : 0;
+    // `jaReservado` é 0 na criação (mapa vazio) e o quantity_out salvo na edição — ver o comentário
+    // do useMemo acima. Na criação a fórmula colapsa no teto do C2, sem ramo extra.
+    return (p ? repNum(p.disponivel) : 0) + (jaReservado[pid] || 0);
   };
   // Folga p/ erro de ponto flutuante: `disponivel` nasce de uma SUBTRAÇÃO em JS
   // (on_hand - reserved, carregarProdutos), e 10.3 - 7.8 dá 2.4999999999999996. Sem a folga, o
@@ -2023,7 +2063,7 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
         )}
         <div style={{ padding: saMob ? '8px 20px 14px' : '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
           <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="out" size={20} /></span>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>Registrar saída</div><div style={{ fontSize: 12.5, color: t.muted }}>Defina a viagem e o material que vai a campo — o estoque fica reservado até o confronto.</div></div>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{editando ? 'Editar viagem' : 'Registrar saída'}</div><div style={{ fontSize: 12.5, color: t.muted }}>{editando ? 'Ajuste a equipe, o destino e o material — a reserva de estoque acompanha a diferença.' : 'Defina a viagem e o material que vai a campo — o estoque fica reservado até o confronto.'}</div></div>
           {!saMob && <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>}
         </div>
 
@@ -2130,7 +2170,7 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
               modal. Corrigido aqui, com prova de corpo própria (P8). Ver DIVIDAS.md. */}
           <button onClick={() => valid && onSave({ technicians: team.join(', '), city: destino.trim(), items: itens.map((it) => ({ product_id: it.product_id, quantity: saQtdDe(it.levou) })) })} disabled={!valid}
             style={{ all: 'unset', boxSizing: 'border-box', cursor: valid ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 13, fontSize: 14, fontWeight: 800, background: valid ? t.accent : t.elevated, color: valid ? t.onAccent : t.faint, boxShadow: valid ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', width: saMob ? '100%' : 'auto' }}>
-            <Icon name="out" size={18} /> {salvando ? 'Registrando…' : (saTemInvalido ? 'Corrija as quantidades' : 'Registrar saída')}
+            <Icon name={editando ? 'check' : 'out'} size={18} /> {salvando ? (editando ? 'Salvando…' : 'Registrando…') : (saTemInvalido ? 'Corrija as quantidades' : (editando ? 'Salvar alterações' : 'Registrar saída'))}
           </button>
         </div>
       </div>
@@ -2145,6 +2185,7 @@ function PageConfronto({ t }) {
   // saida = { key } — X-Idempotency-Key gerada ao ABRIR o modal: re-tentar o MESMO envio reusa a
   // chave (o backend devolve a viagem já criada em vez de duplicar a reserva); modal novo = chave nova.
   const [saida, setSaida] = useStateR(null);
+  const [editandoId, setEditandoId] = useStateR(null);   // lote C3: viagem em edição (PUT /:id)
   const [busy, setBusy] = useStateR(false);
   const [erroModal, setErroModal] = useStateR(null);
   const [toast, setToast] = useStateR(null);
@@ -2171,6 +2212,9 @@ function PageConfronto({ t }) {
 
   const cur = trips.find((x) => x.id === openId) || null;
   const confrontoTrip = trips.find((x) => x.id === confrontoId) || null;
+  // Derivado de `trips`, não guardado: o `reload()` pós-save traz a viagem nova e o modal, se
+  // ainda estivesse aberto, veria os dados frescos. Guardar o objeto congelaria a cópia.
+  const tripEmEdicao = trips.find((x) => x.id === editandoId) || null;
   const stageMeta = { pending: ['Em viagem', 'blue'], reconciled: ['Finalizada', 'green'] };
   const [fStage, setFStage] = useStateR(null);
   const [busca, setBusca] = useStateR('');
@@ -2192,6 +2236,21 @@ function PageConfronto({ t }) {
     try {
       await window.FRApi.post('/travel-orders', payload, { headers: { 'X-Idempotency-Key': saida.key } });
       setSaida(null); reload(); setToast({ kind: 'ok', msg: 'Saída registrada — material reservado no estoque.' });
+    } catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
+  };
+  // EDIÇÃO (lote C3): PUT /travel-orders/:id, a rota que já existia e nenhuma tela chamava.
+  // SEM X-Idempotency-Key de propósito: a op_key do backend é content-addressed pelo ALVO
+  // (`update:setqty:${newQty}`, travels.controller.ts:277-285), então repetir o mesmo alvo já é
+  // no-op por construção. Header aqui não acrescentaria garantia, só uma segunda âncora a manter.
+  //
+  // O 400 do backend chega pelo `repErr` -> getErrorMessage e vai para o `erroModal`, que o modal
+  // pinta na faixa vermelha acima do botão. É por onde o operador vê RESERVA_INSUFICIENTE (o TOCTOU
+  // que o teto da tela reduz mas não elimina) e VIAGEM_LEGADA (se ele driblar o botão desabilitado).
+  const salvarEdicao = async (payload) => {
+    setErroModal(null); setBusy(true);
+    try {
+      await window.FRApi.put(`/travel-orders/${editandoId}`, payload);
+      setEditandoId(null); reload(); setToast({ kind: 'ok', msg: 'Viagem atualizada — a reserva acompanhou a diferença.' });
     } catch (e) { setErroModal(repErr(e)); } finally { setBusy(false); }
   };
   const confrontar = async (payload) => {
@@ -2311,7 +2370,23 @@ function PageConfronto({ t }) {
                   {tr.done && <div><div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>CONSUMO</div><div style={{ fontSize: 15, fontWeight: 850, color: uiTone(t, 'red').fg }}>{fmtBRL(tripLevado(tr) - tripRetornado(tr))}</div></div>}
                 </div>
                 {emViagem
-                  ? <button onClick={() => { setErroModal(null); setConfrontoId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}`, flexShrink: 0 }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
+                  ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      {/* EDITAR (lote C3). Viagem LEGADA: botão DESABILITADO com tooltip, nunca
+                          escondido — esconder faria o operador achar que a função não existe.
+                          O `title` é o tooltip nativo; o backend recusa igual mesmo se driblado. */}
+                      <button
+                        disabled={!tr.editavel}
+                        title={tr.editavel
+                          ? 'Editar equipe, destino e material desta viagem'
+                          : 'Viagem anterior a 15/08, importada do sistema antigo: não movimenta estoque e não pode ser editada.'}
+                        onClick={() => { if (!tr.editavel) return; setErroModal(null); setEditandoId(tr.id); }}
+                        style={{ all: 'unset', cursor: tr.editavel ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6, height: 40, padding: '0 13px', borderRadius: 11, fontSize: 13, fontWeight: 800, color: tr.editavel ? t.accentText : t.faint, border: `1px solid ${t.border}`, opacity: tr.editavel ? 1 : 0.6 }}>
+                        <Icon name="pencil" size={15} /> Editar
+                      </button>
+                      <button onClick={() => { setErroModal(null); setConfrontoId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, height: 40, padding: '0 16px', borderRadius: 11, fontSize: 13, fontWeight: 800, background: t.accent, color: t.onAccent, boxShadow: `0 4px 12px ${frHexToRgba(t.accent, 0.3)}`, flexShrink: 0 }}><Icon name="returnHome" size={16} /> Fazer confronto</button>
+                    </div>
+                  )
                   : <button onClick={(e) => { origemFocoRef.current = e.currentTarget; setOpenId(tr.id); }} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: t.accentText, padding: '6px 10px', borderRadius: 9, flexShrink: 0 }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = t.accentSoft; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>Ver detalhes <Icon name="chevronRight" size={15} /></button>}
               </div>
@@ -2322,6 +2397,7 @@ function PageConfronto({ t }) {
       {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} notify={(kind, msg) => setToast({ kind, msg })} origemFoco={origemFocoRef} />}
       {confrontoTrip && <ConfrontoEditor t={t} trip={confrontoTrip} produtos={produtos} salvando={busy} erro={erroModal} onClose={() => !busy && setConfrontoId(null)} onSave={confrontar} />}
       {saida && <SaidaModal t={t} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setSaida(null)} onSave={registrarSaida} />}
+      {tripEmEdicao && <SaidaModal t={t} trip={tripEmEdicao} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setEditandoId(null)} onSave={salvarEdicao} />}
       {toast && (
         <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
           <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
