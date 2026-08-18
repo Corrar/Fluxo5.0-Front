@@ -838,3 +838,112 @@ todas concordam, e o dia em que uma mudar sozinha a tela vai aceitar fração qu
 ⚠ A comparação normaliza com `trim()` + `toUpperCase()` e isso **não é cosmética**: produção tem
 `'UND '` **com espaço no fim** em `products.unit` (texto livre, 1 produto, 2 linhas de item).
 Comparação crua joga o item no ramo errado em silêncio. Há prova dedicada para esse caso (P2).
+
+## Confronto: teto de estoque na saída, e de onde ele bebe (lote C2)
+
+Registrado em 18/08/2026.
+
+**O backend nunca esteve desprotegido**: `createTravelOrder` passa por `StockService.reserve`, que
+compara contra `available = on_hand − reserved` **sob `FOR UPDATE`** e lança `RESERVA_INSUFICIENTE`,
+mapeado para 400. O furo era só de tela: o `setQtd` do SaidaModal tinha piso e nenhum teto, e o
+`valid` do botão não olhava estoque. O operador montava a saída, clicava, e só então descobria.
+
+### A fonte do teto, e por que ela é legítima
+
+`GET /products` (`products.controller.ts:64-68`, medido em `b114199`):
+
+```sql
+WITH pooled AS (
+  SELECT product_id, SUM(quantity_on_hand) AS on_hand, SUM(quantity_reserved) AS reserved
+    FROM stock WHERE op_id IS NULL AND warehouse_id = $1 GROUP BY product_id
+)
+```
+
+com `$1 = getAlmoxId`. É **exatamente a linha que o motor trava** — mesmo produto, mesmo armazém,
+mesmo `op_id IS NULL`. Por isso este teto vale: ele não é uma estimativa parecida, é o mesmo
+número. Vale registrar o contraste: há **5 leitores de disponível que NÃO filtram armazém**
+(`products.controller.ts:115`, `producao3d:34`, `system:28`, `system:241`,
+`replenishments:25`) — se a tela do Confronto bebesse de um deles, o teto inflaria assim que
+houvesse saldo em armazém de setor. Não é o caso; **é o caso das Reposições**, que leem de
+`/replenishments`. Fica anotado para quem for mexer lá.
+
+### O disponível é lido do `produtos`, NUNCA do item
+
+`addItem` faz `{ ...c, levou: '1' }` — `it.disponivel` é **cópia congelada** do instante em que o
+item entrou na lista. `produtos` é revalidado por `stock_updated` (`frUseStockReload`). O teto lê
+de `produtos` por `product_id`; ler do item deixaria o teto preso no valor velho enquanto uma NF
+ou outra tela mexe no saldo. Há prova dedicada (P4) que dispara o `stock_updated` pelo socket real
+e confirma que 3 passa antes e trava depois, com controle negativo mostrando que a cópia
+congelada teria deixado passar.
+
+**Fail-closed aceito**: produto que sumiu de `produtos` (inativado, ou o `.catch` do fetch que zera
+a lista) tem disponível 0 e trava o envio. Barrar é melhor que liberar contra um saldo que a tela
+não consegue mais afirmar.
+
+### Folga de ponto flutuante — 1e-9
+
+`disponivel` nasce de uma subtração em JS (`on_hand - reserved`), e `10.3 - 7.8` dá
+`2.500000000000001`. Sem folga, o operador que lê "livre 2,5" e digita 2,5 tomaria recusa por erro
+de binário. O backend compara em `NUMERIC` exato e não tem esse problema; a folga é só do lado de
+cá, e é 1e-9 — muito abaixo de qualquer granularidade real (o menor passo plausível é 0,001).
+
+### Item esgotado: DESABILITA, não esconde
+
+Decisão do lote. Esconder faria o operador concluir que o produto não existe no catálogo e ir
+procurá-lo em outro lugar; desabilitado com o rótulo **"sem saldo"** diz a verdade — existe e está
+zerado. O `addItem` também recusa por dentro, para o caso de clique em card com estado velho.
+
+### Recusar, não clampar
+
+O teto **não reescreve** o número digitado. Mesma doutrina do C1: quem digitou 15 vê
+`pediu 15, disponível 3 M` e corrige; não vê o 15 virar 3 pelas costas. A mensagem cita os DOIS
+números de propósito — só "inválido" diz ao operador que ele errou, mas não para quanto corrigir.
+
+### E o TOCTOU continua existindo, por construção
+
+Entre a tela ler o disponível e o clique chegar ao servidor, outra pessoa pode consumir o saldo. O
+teto do front reduz a frequência do 400; não o elimina, e não deveria. Quem decide é o
+`FOR UPDATE` do motor. O 400 já chega legível à tela pelo `repErr`/`getErrorMessage`.
+
+### ⚠ Defeito que o C1 introduziu e a prova dele não pegou
+
+O C1 passou `levou` de número para **string** (para guardar o "2," intermediário) e converteu o
+payload do **ConfrontoEditor** — mas deixou o do **SaidaModal** mandando `quantity: it.levou`, isto
+é, a string crua. `createTravelOrder:68` faz `Number(item.quantity)`, e `Number("2,5")` é **NaN**.
+
+Ou seja: o C1 consertou o ×10 do confronto e, no mesmo passo, quebrou a saída decimal — que estava
+quebrada de outro jeito antes, então ninguém notou. Corrigido aqui (`quantity: saQtdDe(it.levou)`)
+com prova de corpo própria (P8), que lê o objeto que seria enviado e exige `typeof === 'number'`
+em todos os itens.
+
+Este regresso esteve **no ar**, entre `679a8ed` e o commit deste lote.
+
+### RÉGUA — prova de corpo nos DOIS formulários
+
+> **Tela com DOIS formulários exige prova de corpo nos DOIS.** O C1 provou o payload do
+> `ConfrontoEditor` e ASSUMIU o do `SaidaModal` — mesma classe de erro que fixture pulando o
+> adaptador. **Provar uma via e inferir a outra não é prova.**
+
+O `PageConfronto` tem dois modais que escrevem (`SaidaModal` → `POST /travel-orders`,
+`ConfrontoEditor` → `POST /:id/reconcile`). Uma mudança de tipo no state (número → string) atinge
+os dois, e cobrir um deu falsa confiança sobre o outro. Quando um lote mexer em algo compartilhado
+pelos dois formulários, a prova tem de ler **os dois corpos**.
+
+### RÉGUA — instrumento mal mirado inverte o sinal das provas
+
+No próprio C2, duas rodadas inteiras de prova deram resultado FALSO por erro do medidor, não do
+código:
+
+1. **`btnEnviar()` pegava o botão "Registrar saída" da PÁGINA**, não o SUBMIT do modal — os dois
+   têm o mesmo texto, e o da página nunca desabilita. Resultado: **toda asserção de "TRAVA" passou
+   batido** (verde sem o teto existir). Corrigido mirando o ÚLTIMO no DOM, com guarda que assere
+   que existem exatamente 2 botões.
+2. **`$('input')[0]` era a busca da PÁGINA**, não o campo Destino do modal. O destino ficava vazio,
+   `valid` era falso por motivo alheio ao teto, e **toda asserção de "PASSA" falhou** (vermelho com
+   o código certo). Corrigido mirando pelo `placeholder`, mais uma LINHA DE BASE que exige o submit
+   habilitar com destino+equipe+1 item válido antes de qualquer asserção valer.
+
+> **Instrumento mal mirado inverte o sinal das provas — e verde por instrumento errado é pior que
+> vermelho.** Vermelho manda investigar; verde falso encerra o assunto. Toda prova de tela deve ter
+> uma LINHA DE BASE que falha primeiro se o instrumento estiver mirando errado, e uma guarda de
+> cardinalidade nos seletores que podem casar mais de um elemento.

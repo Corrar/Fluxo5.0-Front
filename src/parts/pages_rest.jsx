@@ -1950,11 +1950,47 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
   // `levou` é STRING (ver cfSanitizeQtd/cfParseQtd): guarda o intermediário "2," e deixa o campo
   // ficar VAZIO para redigitar. O piso saiu do onChange — antes o Math.max(1,...) por tecla
   // impedia apagar o conteúdo — e virou validação no `valid`, abaixo.
-  const addItem = (c) => { setItens((xs) => (xs.some((i) => i.product_id === c.product_id) ? xs : [...xs, { ...c, levou: '1' }])); setQ(''); };
+  const addItem = (c) => {
+    if (saEsgotado(c)) return;                                  // clique em card sem saldo é no-op
+    setItens((xs) => (xs.some((i) => i.product_id === c.product_id) ? xs : [...xs, { ...c, levou: '1' }]));
+    setQ('');
+  };
   const setQtd = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, levou: cfSanitizeQtd(v) } : it)));
   const delItem = (i) => setItens((xs) => xs.filter((_, j) => j !== i));
   const saQtdDe = (raw) => { const n = cfParseQtd(raw); return Number.isNaN(n) ? 0 : n; };
-  const saItemInvalido = (it) => cfQtdInvalida(it.levou, cfIsDecimal(it.un));
+
+  // =============================================================================================
+  // TETO DE ESTOQUE NA SAÍDA (lote C2) — "não levar o que não existe".
+  //
+  // ⚠ O DISPONÍVEL É LIDO DO `produtos`, NUNCA DO ITEM. `addItem` faz `{ ...c, levou: '1' }`, então
+  // `it.disponivel` é uma CÓPIA CONGELADA do instante em que o item entrou na lista. `produtos` é
+  // revalidado por `stock_updated` (frUseStockReload em PageConfronto) — se uma NF entra ou outra
+  // tela dá baixa enquanto o operador monta a saída, o teto tem de acompanhar. Ler do item
+  // deixaria o teto preso no valor velho, que é exatamente o furo que este lote evita.
+  //
+  // FAIL-CLOSED de propósito: produto que sumiu de `produtos` (inativado, ou o .catch do fetch que
+  // zera a lista) devolve 0 e trava o envio. Melhor barrar do que deixar passar contra saldo que a
+  // tela não consegue mais afirmar.
+  const dispAtual = (pid) => {
+    const p = (produtos || []).find((x) => x.product_id === pid);
+    return p ? repNum(p.disponivel) : 0;
+  };
+  // Folga p/ erro de ponto flutuante: `disponivel` nasce de uma SUBTRAÇÃO em JS
+  // (on_hand - reserved, carregarProdutos), e 10.3 - 7.8 dá 2.4999999999999996. Sem a folga, o
+  // operador que lê "livre 2,5" e digita 2,5 tomaria recusa por um erro de binário. O backend
+  // compara em NUMERIC exato e não tem esse problema; a folga é do lado de cá.
+  const CF_EPS = 1e-9;
+  const saAcimaDoTeto = (it) => {
+    const n = cfParseQtd(it.levou);
+    return Number.isFinite(n) && n > dispAtual(it.product_id) + CF_EPS;
+  };
+  const saEsgotado = (c) => dispAtual(c.product_id) <= 0;
+
+  // O teto entra como MAIS UMA condição do caminho que o C1 criou — não como reescrita do valor.
+  // NÃO clampamos silenciosamente o que o operador digitou: recusar e dizer o número certo é
+  // melhor que trocar o número dele pelas costas (mesma razão pela qual "2,5,3" é recusado em vez
+  // de "consertado" para 2,53).
+  const saItemInvalido = (it) => cfQtdInvalida(it.levou, cfIsDecimal(it.un)) || saAcimaDoTeto(it);
   const saTemInvalido = itens.some(saItemInvalido);
   const levado = itens.reduce((a, it) => a + it.preco * saQtdDe(it.levou), 0);
   const valid = destino.trim() && team.length && itens.length && !saTemInvalido && !salvando;
@@ -2032,12 +2068,17 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
               <div className="fr-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
                 {catList.map((c) => {
                   const added = itens.some((i) => i.product_id === c.product_id);
+                  // ESGOTADO: DESABILITA, não esconde (decisão do lote C2). Esconder faria o
+                  // operador concluir que o produto não existe no catálogo e ir procurar em outro
+                  // lugar; desabilitado com "sem saldo" diz a verdade — existe e está zerado.
+                  const esgotado = saEsgotado(c);
+                  const off = added || esgotado;
                   return (
-                    <button key={c.product_id} disabled={added} onClick={() => addItem(c)} style={{ all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${added ? t.accent : t.border}`, opacity: added ? 0.55 : 1 }}
-                      onMouseEnter={(e) => { if (!added) { e.currentTarget.style.background = t.hover; e.currentTarget.style.borderColor = t.borderStrong; } }} onMouseLeave={(e) => { e.currentTarget.style.background = t.elevated; e.currentTarget.style.borderColor = added ? t.accent : t.border; }}>
+                    <button key={c.product_id} disabled={off} onClick={() => addItem(c)} style={{ all: 'unset', boxSizing: 'border-box', cursor: added ? 'default' : (esgotado ? 'not-allowed' : 'pointer'), width: '100%', display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${added ? t.accent : t.border}`, opacity: off ? 0.55 : 1 }}
+                      onMouseEnter={(e) => { if (!off) { e.currentTarget.style.background = t.hover; e.currentTarget.style.borderColor = t.borderStrong; } }} onMouseLeave={(e) => { e.currentTarget.style.background = t.elevated; e.currentTarget.style.borderColor = added ? t.accent : t.border; }}>
                       <span style={{ width: 32, height: 32, borderRadius: 8, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={15} /></span>
-                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.nome}</div><div style={{ fontSize: 10.5, color: t.muted }}>SKU {c.sku} · livre {c.disponivel} · {fmtBRL(c.preco)}</div></div>
-                      <Icon name={added ? 'check' : 'plus'} size={16} style={{ color: added ? uiTone(t, 'green').fg : t.accentText, flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.nome}</div><div style={{ fontSize: 10.5, color: esgotado ? uiTone(t, 'amber').fg : t.muted }}>SKU {c.sku} · {esgotado ? 'sem saldo' : `livre ${cfFmtQtd(repNum(c.disponivel))} ${c.un || 'un'}`} · {fmtBRL(c.preco)}</div></div>
+                      <Icon name={added ? 'check' : (esgotado ? 'alert' : 'plus')} size={16} style={{ color: added ? uiTone(t, 'green').fg : (esgotado ? uiTone(t, 'amber').fg : t.accentText), flexShrink: 0 }} />
                     </button>
                   );
                 })}
@@ -2053,13 +2094,20 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
                 <div className="fr-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
                   {itens.map((it, i) => {
                     const dec = cfIsDecimal(it.un);
-                    const ruim = saItemInvalido(it);
                     const un = it.un || 'un';
+                    const disp = dispAtual(it.product_id);          // VIVO, não a cópia do item
+                    const acima = saAcimaDoTeto(it);
+                    const ruim = saItemInvalido(it);
+                    // A mensagem diz OS DOIS números: sem o disponível o operador sabe que errou,
+                    // mas não sabe para quanto corrigir.
+                    const aviso = acima
+                      ? ` · pediu ${cfFmtQtd(saQtdDe(it.levou))}, disponível ${cfFmtQtd(disp)} ${un}`
+                      : (ruim ? (dec ? ' · valor inválido' : ` · ${un} não aceita fração`) : ` · livre ${cfFmtQtd(disp)}`);
                     return (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
                       {/* UNIDADE no rótulo: é ela que decide se o campo aceita fração, então tem de
                           estar visível ao lado dele (mesma régua do ConfrontoEditor). */}
-                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div><div style={{ fontSize: 10.5, color: ruim ? uiTone(t, 'red').fg : t.muted }}>SKU {it.sku} · em {un}{ruim ? (dec ? ' · valor inválido' : ` · ${un} não aceita fração`) : ''}</div></div>
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div><div style={{ fontSize: 10.5, color: ruim ? uiTone(t, 'red').fg : t.muted }}>SKU {it.sku} · em {un}{aviso}</div></div>
                       <input value={it.levou} onChange={(e) => setQtd(i, e.target.value)} inputMode={dec ? 'decimal' : 'numeric'} style={{ boxSizing: 'border-box', width: 54, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${ruim ? uiTone(t, 'red').fg : t.border}`, background: t.panel, color: t.text, fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
                       <button onClick={() => delItem(i)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
                         onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={14} /></button>
@@ -2075,9 +2123,14 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
         {erro && <div style={{ padding: '10px 24px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
         <div style={{ padding: saMob ? '12px 20px calc(14px + env(safe-area-inset-bottom))' : '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: t.muted }}>{itens.length} {itens.length === 1 ? 'item' : 'itens'} · levado <b style={{ color: t.text }}>{fmtBRL(levado)}</b></div>
-          <button onClick={() => valid && onSave({ technicians: team.join(', '), city: destino.trim(), items: itens.map((it) => ({ product_id: it.product_id, quantity: it.levou })) })} disabled={!valid}
+          {/* ⚠ `quantity: saQtdDe(it.levou)` e NÃO `it.levou`: desde o C1 o state é STRING (para
+              guardar o "2," intermediário), e o backend faz `Number(item.quantity)`
+              (travels.controller.ts:68) — mandar a string "2,5" daria NaN lá. O C1 converteu o
+              payload do ConfrontoEditor e DEIXOU ESTE PASSAR; a prova de lá cobria só o outro
+              modal. Corrigido aqui, com prova de corpo própria (P8). Ver DIVIDAS.md. */}
+          <button onClick={() => valid && onSave({ technicians: team.join(', '), city: destino.trim(), items: itens.map((it) => ({ product_id: it.product_id, quantity: saQtdDe(it.levou) })) })} disabled={!valid}
             style={{ all: 'unset', boxSizing: 'border-box', cursor: valid ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 9, height: 48, padding: '0 24px', borderRadius: 13, fontSize: 14, fontWeight: 800, background: valid ? t.accent : t.elevated, color: valid ? t.onAccent : t.faint, boxShadow: valid ? `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` : 'none', width: saMob ? '100%' : 'auto' }}>
-            <Icon name="out" size={18} /> {salvando ? 'Registrando…' : 'Registrar saída'}
+            <Icon name="out" size={18} /> {salvando ? 'Registrando…' : (saTemInvalido ? 'Corrija as quantidades' : 'Registrar saída')}
           </button>
         </div>
       </div>
