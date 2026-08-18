@@ -73,8 +73,12 @@ function pgUseGet(path) {
 }
 
 // A fila do Recebimento: 1 linha por (separação, item) ainda não recebido por inteiro.
-function useFROpPendingReceipts(sector) {
-  return pgUseGet('/op-materials/pending-receipts' + (sector ? '?sector=' + encodeURIComponent(sector) : ''));
+// GUARD DE CUSTÓDIA POR SETOR (18/08/2026): o backend filtra pelo TOKEN, não por parâmetro — o
+// operador comum não manda nada e recebe só o próprio setor. `verTudo` é o toggle "Ver tudo" do
+// master (?scope=all); NÃO é segurança — é UX. O backend ignora scope=all pra quem não é
+// admin/almoxarife (fail-closed do lado de lá), então mandar true sem ser master não muda nada.
+function useFROpPendingReceipts(verTudo) {
+  return pgUseGet('/op-materials/pending-receipts' + (verTudo ? '?scope=all' : ''));
 }
 // A projeção do saldo da OP: 1 linha por produto.
 function useFROpBalance(csid) { return pgUseGet(csid ? '/op-materials/balance/' + csid : ''); }

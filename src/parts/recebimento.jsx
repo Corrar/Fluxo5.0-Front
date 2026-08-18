@@ -103,10 +103,14 @@ function RCEnvioCard({ t, env, onConfirm, busy }) {
 }
 
 function PGRecebimento({ t }) {
-  // Sem filtro de setor por ora: o backend não sabe o setor do caller de forma confiável
-  // (separations.destination é texto livre, sem allowlist, e não conversa com profiles.sector).
-  // A tela mostra a fila inteira; o recorte por setor entra quando o de-para existir. Ver RC_GAPS.
-  const { items: rows, loading, error, reload } = window.useFROpPendingReceipts(null);
+  // GUARD DE CUSTÓDIA POR SETOR (18/08/2026): o de-para setor->armazém existe desde o lote D1
+  // (src/services/setor.ts) e o backend agora filtra a fila pelo TOKEN — operador comum vê só o
+  // próprio setor, sem mandar nada. `isMaster` espelha a trava dupla do backend (auth.js:369-372);
+  // o toggle "Ver tudo" só existe pra quem tem o papel, e é UX, não segurança: o backend ignora
+  // ?scope=all de quem não é admin/almoxarife. Ver RC_GAPS.
+  const isMaster = !!(window.FRAuth && window.FRAuth.isMaster);
+  const [verTudo, setVerTudo] = useStateRC(false);
+  const { items: rows, loading, error, reload } = window.useFROpPendingReceipts(isMaster && verTudo);
   const [busyId, setBusyId] = useStateRC(null);
   const [keys, setKeys] = useStateRC({});          // âncora X-Idempotency-Key por separação
   const [toast, setToast] = useStateRC(null);
@@ -152,7 +156,14 @@ function PGRecebimento({ t }) {
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: '-.02em', color: t.text }}>Recebimento</h1>
           <p style={{ margin: '6px 0 0', fontSize: 13.5, color: t.muted }}>Confirme o material que a separação entregou. O que você confirmar entra no armazém da OP.</p>
         </div>
-        <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {isMaster && (
+            <Btn t={t} kind={verTudo ? 'primary' : 'ghost'} icon={verTudo ? 'eye' : 'eyeOff'} onClick={() => setVerTudo((v) => !v)}>
+              {verTudo ? 'Ver tudo: ligado' : 'Ver tudo'}
+            </Btn>
+          )}
+          <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
@@ -188,9 +199,12 @@ window.PGRecebimento = PGRecebimento;
 //     divergência — o restante fica na fila. Se divergência precisar virar exceção formal
 //     (alguém investiga o que sumiu), é status/coluna nova, não input de tela.
 //  2. OBSERVAÇÃO por item: decisão A — form enxuto, não coleta.
-//  3. FILTRO POR SETOR: o GET aceita ?sector=, mas o backend não sabe o setor do caller —
-//     separations.destination é texto livre sem allowlist e não conversa com profiles.sector nem
-//     com warehouses.sector (3 vocabulários independentes). A fila vem inteira até existir de-para.
+//  3. ✅ RESOLVIDO em 18/08/2026 (lote GUARD-RECEBIMENTO). Esta nota dizia que o backend não
+//     sabia o setor do caller e a fila vinha inteira "até existir de-para" — a premissa caducou:
+//     o de-para setor->armazém existe desde o lote D1 (src/services/setor.ts, canonSetor +
+//     SETOR_ARMAZEM). O guard usa canonSetor sobre separations.destination dos dois lados (GET
+//     filtra, POST recusa) — ver o comentário de topo de PGRecebimento e
+//     opMaterials.controller.ts (getPendingReceipts/receiveOpMaterial) para o desenho completo.
 //  4. BACKLOG HISTÓRICO: a fila inclui saída manual com OP (decisão D2 da peça 1), o que traz ~77
 //     separações / 276 itens desde 27/02 — material que saiu do almox há meses e já foi consumido
 //     no chão de fábrica. Não é bug: é a decisão. O corte (data de virada) é uma linha no backend.
