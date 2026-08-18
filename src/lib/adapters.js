@@ -21,6 +21,27 @@
     return Number.isFinite(n) ? n : 0;
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // UNIDADES QUE ACEITAM FRAÇÃO — metro, litro, quilo. Qualquer outra é de CONTAGEM (inteiro), que
+  // é o default seguro para unidade nova/desconhecida.
+  //
+  // MORA AQUI, e não numa 4ª cópia dentro da tela: `conferencia.jsx:11` e `pages_main.jsx:567` já
+  // declaram o mesmo Set como const de arquivo (a arquitetura window-globals do design não deixa
+  // um part importar do outro). `lib/` é a camada que os parts JÁ consomem — pages_rest.jsx chama
+  // `window.FRAdapters.parseNumber` via `repNum` desde sempre —, então é o único lugar onde esta
+  // régua pode ser de verdade compartilhada. Migrar as duas cópias restantes é lote próprio;
+  // está registrado no DIVIDAS.md.
+  //
+  // Espelha DECIMAL_UNITS do backend (requests.controller.ts:16) — se um lado mudar, o outro tem
+  // de mudar junto, senão a tela aceita fração que o servidor recusa (ou o contrário).
+  //
+  // ⚠ trim() + toUpperCase() NÃO são cosmética: produção tem 'UND ' COM ESPAÇO no fim
+  // (products.unit é texto livre). Comparação crua manda o item para o ramo errado EM SILÊNCIO.
+  const DECIMAL_UNITS = new Set(['M', 'MT', 'L', 'KG']);
+  function isDecimalUnit(un) {
+    return DECIMAL_UNITS.has(String(un === null || un === undefined ? '' : un).trim().toUpperCase());
+  }
+
   // unit_price (number) → 'R$ x,xx' pt-BR, 2 casas (mesmo formato do mock do design).
   function formatBRL(v) {
     return 'R$ ' + parseNumber(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -96,5 +117,5 @@
     };
   }
 
-  window.FRAdapters = { productToCard, parseNumber, formatBRL, parseTags, tagToKind };
+  window.FRAdapters = { productToCard, parseNumber, formatBRL, parseTags, tagToKind, isDecimalUnit, DECIMAL_UNITS };
 })();

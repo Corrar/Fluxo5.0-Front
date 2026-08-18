@@ -765,3 +765,76 @@ um build quebrado que não tem nada a ver com o trabalho dele.
 **Reparo, quando acontecer**: `npm ci` no repositório original (o `package-lock.json` é versionado,
 então a restauração é idêntica) e reinstalar as dependências efêmeras não salvas — no front, o
 `jsdom` do harness, que entra com `--no-save` e por isso não volta no `npm ci`.
+
+## Confronto: o campo de quantidade MULTIPLICAVA POR 10 (corrigido no lote C1)
+
+Registrado em 18/08/2026, ao ligar unidade decimal no Confronto de Viagens.
+
+**Não era truncamento — era corrupção por fator 10.** Os três campos de quantidade da tela
+(`setQtd` do SaidaModal, `setVoltou` e `setExtraQtd` do ConfrontoEditor) faziam
+`.replace(/[^0-9]/g,'')` **antes** do `parseInt`. A vírgula não era arredondada nem cortada: era
+**apagada**, e os dígitos colavam.
+
+Controle negativo, rodado na mesma fixture do harness do C1 (`prova_c1.mjs`):
+
+```
+ANTIGO: digitar "2,5" -> campo "25" -> envia 25
+NOVO:   digitar "2,5" -> campo "2,5" -> envia 2.5
+```
+
+O que fazia disso um problema de SALDO e não de UX: no ramo `extra` do confronto
+(`travels.controller.ts:184-189`) o valor vira `StockService.receive(...)`. Informar que voltaram
+2,5 m de cabo criava **25 m** no `stock_ledger` — 22,5 m de estoque nascidos do nada, num razão
+append-only que não tem UPDATE de correção. No ramo `consumed` a mesma entrada vira
+`reverseReceive`, e o guard `on_hand - qty >= reserved` recusaria a baixa inflada — falha barulhenta,
+que é a metade sortuda. O `extra` é a metade silenciosa.
+
+**Por que ninguém viu antes**: nenhum confronto do 5.0 chegou a rodar em produção. As 43 viagens
+`reconciled` do banco vêm do corte 2.0→5.0 e têm ZERO linha em `stock_ledger` (medido em
+`ep-steep-breeze`, 18/08). O bug estava armado, não disparado.
+
+### As 4 linhas fracionárias que o 5.0 não conseguia reproduzir
+
+Medido em produção no mesmo dia, `travel_order_items` tem 4 linhas com `quantity_returned`
+fracionário — todas unidade `M`, todas `extra`, todas em viagens sem razão (isto é: **dados
+herdados do 2.0**):
+
+| SKU | Produto | unit | returned |
+|---|---|---|---|
+| 3.04.0076 | CORRENTE ASA 40 PASSO 1/2 DUPLA SEM PINO | M | 3.9 |
+| 3.03.0001 | ESTEIRA AZUL E25C 2.2 L - 330,2MM | M | 13.5 |
+| 3.03.0004 | ESTEIRA AZUL E25C 2.2 L - 419,1MM | M | 8.6 |
+| 3.03.0098 | ESTEIRA UNIRONS E15 VAZADA ACETAL L=280MM POR METRO | M | 7.1 |
+
+O 2.0 conseguia gravar 3,9 m; o 5.0, não. **A capacidade foi perdida na portação**, e este lote a
+devolve. As colunas nunca foram o limite: `quantity_out` e `quantity_returned` são `numeric` sem
+escala, sem CHECK, e o backend só recusa negativo.
+
+### Regra adotada, e o que ela NÃO faz
+
+Unidade decimal (`M`/`MT`/`L`/`KG`) aceita fração; unidade de contagem segue inteira. Fração em
+unidade de contagem é **recusada, não arredondada** — mesma escolha do backend
+(`requests.controller.ts:482` lança `VALIDACAO_QTD` em vez de arredondar): arredondar decide pelo
+operador uma quantidade que ele não digitou. Dois separadores (`"2,5,3"`) também são recusados, e
+pela mesma razão — reescrever para `2,53` seria a corrupção silenciosa de novo, com outra cara.
+
+Piso: `> 0` para unidade decimal (levar 0,5 m de cabo é legítimo) e `>= 1` para contagem. O piso
+saiu do `onChange` e virou validação de envio — antes o `Math.max(1, …)` por tecla impedia
+**apagar o campo** para redigitar.
+
+### DECIMAL_UNITS: a 4ª cópia foi evitada, DUAS continuam de pé
+
+`conferencia.jsx:11` e `pages_main.jsx:567` (`INV_DECIMAL_UNITS`) declaram o mesmo
+`new Set(['M','MT','L','KG'])` como const de arquivo — a arquitetura window-globals do design não
+deixa um `part` importar do outro. Em vez de plantar uma terceira cópia dentro de
+`pages_rest.jsx`, a régua foi para **`src/lib/adapters.js`** (`window.FRAdapters.isDecimalUnit`),
+que é a camada que os parts já consomem — `pages_rest.jsx` chama `FRAdapters.parseNumber` via
+`repNum` desde sempre.
+
+**Fica a dívida**: migrar `conferencia.jsx` e `pages_main.jsx` para `FRAdapters.isDecimalUnit`.
+São 3 definições do mesmo Set no front e mais uma no backend (`requests.controller.ts:16`); hoje
+todas concordam, e o dia em que uma mudar sozinha a tela vai aceitar fração que o servidor recusa.
+
+⚠ A comparação normaliza com `trim()` + `toUpperCase()` e isso **não é cosmética**: produção tem
+`'UND '` **com espaço no fim** em `products.unit` (texto livre, 1 produto, 2 linhas de item).
+Comparação crua joga o item no ramo errado em silêncio. Há prova dedicada para esse caso (P2).

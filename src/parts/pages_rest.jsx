@@ -601,6 +601,55 @@ function repErr(e) { const g = window.FRApiUtil && window.FRApiUtil.getErrorMess
 function repNum(v) { const f = window.FRAdapters && window.FRAdapters.parseNumber; return f ? f(v) : (parseFloat(v) || 0); }
 function repMoney(v) { return 'R$ ' + repNum(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
+// =================================================================================================
+// QUANTIDADE DIGITADA — o parse do Confronto (lote C1).
+//
+// O QUE ESTAVA ERRADO, e não era truncamento: os três campos faziam
+// `.replace(/[^0-9]/g,'')` ANTES do `parseInt`. Digitar "2,5" perdia a vírgula e virava "25" —
+// DEZ VEZES o valor, não 2. No ramo `extra` do confronto isso vira `StockService.receive(25)`:
+// 22,5 unidades de estoque criadas do nada, no razão imutável. Ver DIVIDAS.md.
+//
+// A régua por unidade vem de `window.FRAdapters.isDecimalUnit` (lib/adapters.js) — fonte única,
+// com trim()+toUpperCase() porque produção tem 'UND ' com espaço. Fallback local no mesmo padrão
+// do `repNum` acima: se a lib não carregou, ninguém quebra, e o default é CONTAGEM (o seguro).
+const cfIsDecimal = (un) => {
+  const f = window.FRAdapters && window.FRAdapters.isDecimalUnit;
+  return f ? f(un) : false;
+};
+
+// Mantém no campo o que o operador digitou (dígitos + separador), sem reescrever a cada tecla:
+// "2," é estado intermediário LEGÍTIMO — quem reescreve durante a digitação impede de chegar em
+// "2,5". Quem decide se o valor presta é o cfParseQtd, no submit/render, não o onChange.
+const cfSanitizeQtd = (raw) => String(raw === null || raw === undefined ? '' : raw).replace(/[^0-9.,]/g, '');
+
+// String do campo -> número. Vazio = 0 (envio). Inválido = NaN (o chamador decide o que fazer).
+// Vírgula E ponto valem como separador — o operador digita vírgula.
+// DOIS separadores ("2,5,3") são RECUSADOS, não "consertados": reescrever para 2,53 seria a mesma
+// classe de corrupção silenciosa que este lote está matando.
+function cfParseQtd(raw) {
+  const s = String(raw === null || raw === undefined ? '' : raw).trim().replace(',', '.');
+  if (s === '') return 0;
+  if (!/^\d*\.?\d*$/.test(s)) return NaN;   // sobrou separador => havia mais de um
+  const n = parseFloat(s);                  // "2." -> 2 (intermediário aceito); "." -> NaN
+  return Number.isFinite(n) ? n : NaN;
+}
+
+// A regra por unidade, num lugar só. Unidade de CONTAGEM com fração é RECUSADA, não arredondada —
+// é a mesma escolha do backend (requests.controller.ts:482 lança VALIDACAO_QTD em vez de arredondar):
+// arredondar decide pelo operador uma quantidade que ele não digitou.
+// PISO: decimal aceita qualquer valor > 0 (levar 0,5 m de cabo é legítimo); contagem exige >= 1.
+// O piso é validado AQUI, não no onChange — senão o campo nunca pode ficar vazio para redigitar.
+function cfQtdInvalida(raw, decimal, { permiteZero = false } = {}) {
+  const n = cfParseQtd(raw);
+  if (Number.isNaN(n)) return true;
+  if (!decimal && !Number.isInteger(n)) return true;
+  if (permiteZero) return n < 0;
+  return decimal ? !(n > 0) : n < 1;
+}
+
+// Exibição: 2.5 -> "2,5" e 2 -> "2" (pt-BR, sem casas forçadas). Usado ao lado da unidade.
+const cfFmtQtd = (n) => (Number.isFinite(n) ? n.toLocaleString('pt-BR', { maximumFractionDigits: 3 }) : '—');
+
 // Backend -> shape da tela. `id` (uuid) é a identidade; `order_number` é só rótulo.
 function repAdapt(r) {
   r = r || {};
@@ -1512,17 +1561,26 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
   const ql = q.trim().toLowerCase();
   const naViagem = (pid) => trip.itens.some((i) => i.product_id === pid) || extras.some((e) => e.product_id === pid);
   const cat = ql ? (produtos || []).filter((p) => !naViagem(p.product_id) && (p.nome.toLowerCase().includes(ql) || String(p.sku).toLowerCase().includes(ql))).slice(0, 8) : [];
-  const setVoltou = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, voltou: v.replace(/[^0-9]/g, '') } : it)));
-  const addExtra = (p) => { setExtras((xs) => xs.concat([{ product_id: p.product_id, nome: p.nome, sku: p.sku, price: p.preco, qtd: 1 }])); setQ(''); };
-  const setExtraQtd = (i, v) => setExtras((xs) => xs.map((e, j) => (j === i ? { ...e, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : e)));
+  // `voltou`/`qtd` são STRING de propósito: guardam o que está no campo, inclusive o
+  // intermediário "2,". Quem converte é o cfParseQtd, na leitura — nunca o onChange.
+  const setVoltou = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, voltou: cfSanitizeQtd(v) } : it)));
+  const addExtra = (p) => { setExtras((xs) => xs.concat([{ product_id: p.product_id, nome: p.nome, sku: p.sku, un: p.un || '', price: p.preco, qtd: '1' }])); setQ(''); };
+  const setExtraQtd = (i, v) => setExtras((xs) => xs.map((e, j) => (j === i ? { ...e, qtd: cfSanitizeQtd(v) } : e)));
   const delExtra = (i) => setExtras((xs) => xs.filter((_, j) => j !== i));
+  // "voltou 0" é resposta legítima do confronto (não voltou nada) -> permiteZero nos itens levados.
+  // Extra é material que apareceu: precisa ser > 0 (é o que vira receive no motor).
+  const itemInvalido = (it) => cfQtdInvalida(it.voltou, cfIsDecimal(it.un), { permiteZero: true });
+  const extraInvalido = (e) => cfQtdInvalida(e.qtd, cfIsDecimal(e.un));
+  const temInvalido = itens.some(itemInvalido) || extras.some(extraInvalido);
+  const qtdDe = (raw) => { const n = cfParseQtd(raw); return Number.isNaN(n) ? 0 : n; };
   const levado = tripLevado(trip);
-  const retornado = itens.reduce((a, it) => a + it.price * (parseInt(it.voltou) || 0), 0) + extras.reduce((a, e) => a + e.price * e.qtd, 0);
+  const retornado = itens.reduce((a, it) => a + it.price * qtdDe(it.voltou), 0) + extras.reduce((a, e) => a + e.price * qtdDe(e.qtd), 0);
   const consumo = levado - retornado;
   const inp = { boxSizing: 'border-box', width: 64, height: 36, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 14, fontWeight: 800, fontFamily: 'inherit', outline: 'none' };
+  const inpErro = { ...inp, border: `1px solid ${uiTone(t, 'red').fg}` };
   const payload = () => ({
-    returnedItems: itens.map((it) => ({ product_id: it.product_id, returnedQuantity: parseInt(it.voltou) || 0 }))
-      .concat(extras.map((e) => ({ product_id: e.product_id, returnedQuantity: e.qtd }))),
+    returnedItems: itens.map((it) => ({ product_id: it.product_id, returnedQuantity: qtdDe(it.voltou) }))
+      .concat(extras.map((e) => ({ product_id: e.product_id, returnedQuantity: qtdDe(e.qtd) }))),
   });
   return (
     <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'center', padding: 20 }}>
@@ -1539,15 +1597,25 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Itens levados — quanto voltou?</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {itens.map((it, i) => {
-              const usado = it.levou - (parseInt(it.voltou) || 0);
+              const dec = cfIsDecimal(it.un);
+              const ruim = itemInvalido(it);
+              const usado = it.levou - qtdDe(it.voltou);
+              const un = it.un || 'un';
               return (
                 <div key={it.product_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{it.nome}</div>
-                    <div style={{ fontSize: 11, color: t.muted }}>SKU {it.sku} · levou {it.levou}</div>
+                    {/* UNIDADE ao lado do levado: sem ela o operador digita "quanto voltou" sem saber
+                        se o campo é peça, metro ou quilo — e é justamente a unidade que decide se
+                        o campo aceita fração. */}
+                    <div style={{ fontSize: 11, color: t.muted }}>SKU {it.sku} · levou {cfFmtQtd(it.levou)} {un}</div>
                   </div>
-                  <div style={{ textAlign: 'center' }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint, marginBottom: 3 }}>VOLTOU</div><input value={it.voltou} onChange={(e) => setVoltou(i, e.target.value)} inputMode="numeric" placeholder="0" style={inp} /></div>
-                  <div style={{ textAlign: 'right', minWidth: 56 }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>USOU</div><div style={{ fontSize: 15, fontWeight: 800, color: usado < 0 ? uiTone(t, 'red').fg : t.text }}>{usado}</div></div>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: t.faint, marginBottom: 3 }}>VOLTOU ({un})</div>
+                    <input value={it.voltou} onChange={(e) => setVoltou(i, e.target.value)} inputMode={dec ? 'decimal' : 'numeric'} placeholder="0" style={ruim ? inpErro : inp} />
+                    {ruim && <div style={{ fontSize: 9.5, fontWeight: 700, color: uiTone(t, 'red').fg, marginTop: 3 }}>{dec ? 'valor inválido' : `${un} não aceita fração`}</div>}
+                  </div>
+                  <div style={{ textAlign: 'right', minWidth: 56 }}><div style={{ fontSize: 9, fontWeight: 700, color: t.faint }}>USOU</div><div style={{ fontSize: 15, fontWeight: 800, color: usado < 0 ? uiTone(t, 'red').fg : t.text }}>{cfFmtQtd(usado)}</div></div>
                 </div>
               );
             })}
@@ -1574,13 +1642,21 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
           {ql && cat.length === 0 && <div style={{ fontSize: 12.5, color: t.faint, padding: '2px 2px 10px' }}>Nenhum material fora da viagem com esse termo.</div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {extras.length === 0 && !ql && <div style={{ fontSize: 12.5, color: t.faint, padding: '4px 2px' }}>Nenhum material extra.</div>}
-            {extras.map((e, i) => (
-              <div key={e.product_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.25)}` }}>
-                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{e.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {e.sku} · extra</div></div>
-                <input value={e.qtd} onChange={(ev) => setExtraQtd(i, ev.target.value)} inputMode="numeric" style={inp} />
-                <button onClick={() => delExtra(i)} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="trash" size={15} /></button>
-              </div>
-            ))}
+            {extras.map((e, i) => {
+              const dec = cfIsDecimal(e.un);
+              const ruim = extraInvalido(e);
+              const un = e.un || 'un';
+              return (
+                <div key={e.product_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 12, background: uiTone(t, 'amber').bg, border: `1px solid ${frHexToRgba('#f59e0b', 0.25)}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{e.nome}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {e.sku} · extra · em {un}</div></div>
+                  <div style={{ textAlign: 'center' }}>
+                    <input value={e.qtd} onChange={(ev) => setExtraQtd(i, ev.target.value)} inputMode={dec ? 'decimal' : 'numeric'} style={ruim ? inpErro : inp} />
+                    {ruim && <div style={{ fontSize: 9.5, fontWeight: 700, color: uiTone(t, 'red').fg, marginTop: 3 }}>{dec ? 'valor inválido' : `${un} não aceita fração`}</div>}
+                  </div>
+                  <button onClick={() => delExtra(i)} style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="trash" size={15} /></button>
+                </div>
+              );
+            })}
           </div>
         </div>
         {erro && <div style={{ padding: '10px 24px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
@@ -1590,8 +1666,10 @@ function ConfrontoEditor({ t, trip, produtos, salvando, erro, onClose, onSave })
             <span style={{ fontSize: 12.5, color: t.muted }}>Retornado <b style={{ color: uiTone(t, 'amber').fg }}>{fmtBRL(retornado)}</b></span>
             <span style={{ fontSize: 12.5, color: t.muted }}>Consumido <b style={{ color: uiTone(t, 'red').fg }}>{fmtBRL(consumo)}</b></span>
           </div>
-          <button onClick={() => !salvando && onSave(payload())} disabled={salvando} style={{ all: 'unset', boxSizing: 'border-box', cursor: salvando ? 'not-allowed' : 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: salvando ? t.elevated : t.accent, color: salvando ? t.faint : '#fff', boxShadow: salvando ? 'none' : `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` }}>
-            <Icon name="check" size={18} /> {salvando ? 'Registrando…' : 'Concluir confronto'}
+          {/* TRAVA no valor inválido: o campo aceita o intermediário ("2,") mas o envio, não —
+              este confronto vira receive/reverseReceive no razão imutável. */}
+          <button onClick={() => !salvando && !temInvalido && onSave(payload())} disabled={salvando || temInvalido} style={{ all: 'unset', boxSizing: 'border-box', cursor: (salvando || temInvalido) ? 'not-allowed' : 'pointer', width: '100%', height: 48, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 14, fontWeight: 800, background: (salvando || temInvalido) ? t.elevated : t.accent, color: (salvando || temInvalido) ? t.faint : '#fff', boxShadow: (salvando || temInvalido) ? 'none' : `0 6px 16px ${frHexToRgba(t.accent, 0.3)}` }}>
+            <Icon name="check" size={18} /> {salvando ? 'Registrando…' : temInvalido ? 'Corrija as quantidades' : 'Concluir confronto'}
           </button>
         </div>
       </div>
@@ -1869,11 +1947,17 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
   const catList = (ql ? (produtos || []).filter((c) => c.nome.toLowerCase().includes(ql) || String(c.sku).toLowerCase().includes(ql)) : (produtos || [])).slice(0, 40);
   const toggleTeam = (n) => setTeam((xs) => (xs.includes(n) ? xs.filter((x) => x !== n) : [...xs, n]));
   const addTec = () => { const n = novoTec.trim(); if (!n) return; setRoster((xs) => (xs.includes(n) ? xs : [...xs, n])); setTeam((xs) => (xs.includes(n) ? xs : [...xs, n])); setNovoTec(''); };
-  const addItem = (c) => { setItens((xs) => (xs.some((i) => i.product_id === c.product_id) ? xs : [...xs, { ...c, levou: 1 }])); setQ(''); };
-  const setQtd = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, levou: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : it)));
+  // `levou` é STRING (ver cfSanitizeQtd/cfParseQtd): guarda o intermediário "2," e deixa o campo
+  // ficar VAZIO para redigitar. O piso saiu do onChange — antes o Math.max(1,...) por tecla
+  // impedia apagar o conteúdo — e virou validação no `valid`, abaixo.
+  const addItem = (c) => { setItens((xs) => (xs.some((i) => i.product_id === c.product_id) ? xs : [...xs, { ...c, levou: '1' }])); setQ(''); };
+  const setQtd = (i, v) => setItens((xs) => xs.map((it, j) => (j === i ? { ...it, levou: cfSanitizeQtd(v) } : it)));
   const delItem = (i) => setItens((xs) => xs.filter((_, j) => j !== i));
-  const levado = itens.reduce((a, it) => a + it.preco * it.levou, 0);
-  const valid = destino.trim() && team.length && itens.length && !salvando;
+  const saQtdDe = (raw) => { const n = cfParseQtd(raw); return Number.isNaN(n) ? 0 : n; };
+  const saItemInvalido = (it) => cfQtdInvalida(it.levou, cfIsDecimal(it.un));
+  const saTemInvalido = itens.some(saItemInvalido);
+  const levado = itens.reduce((a, it) => a + it.preco * saQtdDe(it.levou), 0);
+  const valid = destino.trim() && team.length && itens.length && !saTemInvalido && !salvando;
   const field = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none', width: '100%' };
   const lab = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 };
 
@@ -1967,14 +2051,21 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave }
                 <div style={{ padding: '28px 16px', textAlign: 'center', borderRadius: 12, border: `1px dashed ${t.borderStrong}`, color: t.muted, fontSize: 13 }}>Toque nos itens do catálogo para adicioná-los à viagem.</div>
               ) : (
                 <div className="fr-scroll" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
-                  {itens.map((it, i) => (
+                  {itens.map((it, i) => {
+                    const dec = cfIsDecimal(it.un);
+                    const ruim = saItemInvalido(it);
+                    const un = it.un || 'un';
+                    return (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
-                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div><div style={{ fontSize: 10.5, color: t.muted }}>SKU {it.sku}</div></div>
-                      <input value={it.levou} onChange={(e) => setQtd(i, e.target.value)} inputMode="numeric" style={{ boxSizing: 'border-box', width: 54, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+                      {/* UNIDADE no rótulo: é ela que decide se o campo aceita fração, então tem de
+                          estar visível ao lado dele (mesma régua do ConfrontoEditor). */}
+                      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.nome}</div><div style={{ fontSize: 10.5, color: ruim ? uiTone(t, 'red').fg : t.muted }}>SKU {it.sku} · em {un}{ruim ? (dec ? ' · valor inválido' : ` · ${un} não aceita fração`) : ''}</div></div>
+                      <input value={it.levou} onChange={(e) => setQtd(i, e.target.value)} inputMode={dec ? 'decimal' : 'numeric'} style={{ boxSizing: 'border-box', width: 54, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${ruim ? uiTone(t, 'red').fg : t.border}`, background: t.panel, color: t.text, fontSize: 13.5, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
                       <button onClick={() => delItem(i)} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
                         onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={14} /></button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2014,6 +2105,11 @@ function PageConfronto({ t }) {
     window.FRApi.get('/products', { skipLoading: true })
       .then((r) => setProdutos((Array.isArray(r.data) ? r.data : []).map((p) => ({
         product_id: p.id, sku: p.sku || '—', nome: p.name || '—', preco: repNum(p.unit_price),
+        // `un` ENTRA no mapa (lote C1): é a unidade REAL do produto (products.unit) e é ela que
+        // decide se o campo de quantidade aceita fração — na saída e no extra do confronto. Sem
+        // ela o SaidaModal não tinha como saber que "CABO ... (BOBINA)" é metro. O mesmo mapa do
+        // PageReposicoes (:1210) NÃO foi tocado: aquele é o lote das Reposições, não este.
+        un: p.unit || '',
         disponivel: Math.max(0, repNum(p.stock && p.stock.quantity_on_hand) - repNum(p.stock && p.stock.quantity_reserved)),
       })))).catch(() => setProdutos([]));
   }, []);
