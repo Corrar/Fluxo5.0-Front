@@ -998,3 +998,119 @@ para manter em sincronia. Fica registrado o trade-off que vem junto e **já era 
 (`travels.controller.ts:277-285`): a sequência 10 → 13 → 10 → 13 reusa a op_key `setqty:13`, então
 a segunda subida grava `quantity_out = 13` e **o saldo não acompanha**. É edição interativa sob
 `FOR UPDATE`, não rota de retry; aceito lá e continua aceito aqui. Provado no PB6 do backend.
+
+## Drawer: a casca foi EXTRAÍDA, e sobraram 2 overlays por migrar (lote C4)
+
+Registrado em 18/08/2026, ao trocar o modal de saída/edição por drawer lateral.
+
+### Procedência da referência — resolvido ANTES de escrever
+
+A tela pedida ("Editar viagem", com Materiais a levar / Catálogo / Selecionados / Salvar
+alterações) **NÃO vem do ref21**. Medido:
+
+- `grep "Editar viagem"` em `ref21/` e em `design-export-9/` → **zero ocorrências**. A string nasceu
+  no C3 (9dd066c), é nossa.
+- o `SaidaModal` do ref21 (`ref21/pages_rest.jsx:1734`) tem assinatura `({ t, onClose, onSave })` —
+  **só criação, sem `trip`, sem edição** — e é modal CENTRALIZADO (`placeItems: 'center'`), igual ao
+  que rodava aqui até este lote.
+- "Materiais a levar" + Catálogo + Selecionados existem nos dois porque o layout do repo já
+  descende do design.
+
+Logo: **não é transplante do ref21, é o render do que o C3 pôs no ar.** O pedido é só trocar
+modal centralizado por drawer — apresentação. A régua "repo lidera o ref" não chegou a ser
+exercida porque não houve divergência a arbitrar.
+
+### FRDrawer: extraído, não a terceira cópia
+
+Este arquivo já tinha DOIS overlays laterais, e nenhum servia de casca:
+
+| | ESC | foco | trava de scroll | reaproveitável? |
+|---|---|---|---|---|
+| `RepPickerDrawer` (:775) | ❌ | ❌ | ❌ | não — é uma TELA das Reposições |
+| `TripDetail` (:1705) | ✅ | ✅ | ✅ | não — inline, preso ao conteúdo (inaugurou o padrão no C6) |
+| **`FRDrawer` (novo)** | ✅ | ✅ | ✅ | **é só a casca** |
+
+Copiar o `useEffect` do TripDetail para o SaidaModal seria a terceira cópia do mesmo comportamento
+de acessibilidade. Agora ele tem UM lugar.
+
+**⚠ FICA A DÍVIDA**: `TripDetail` e `RepPickerDrawer` **não foram migrados**. São telas que
+funcionam, e este é lote de apresentação — migrá-las junto misturaria risco sem necessidade. Então
+hoje há **3 overlays laterais e 2 implementações do comportamento** (a do `FRDrawer` e a do
+`TripDetail`).
+
+**⚠⚠ E O QUE ISSO SIGNIFICA HOJE, DITO SEM EUFEMISMO: o `RepPickerDrawer` é uma REGRESSÃO DE
+ACESSIBILIDADE VIVA.** Não é "ainda não adotou o padrão novo" — é um drawer em produção, na tela de
+Reposições, **sem ESC, sem gestão de foco e sem trava de scroll**. Quem abre aquele drawer não
+consegue fechá-lo pelo teclado, o foco fica na página de trás e a lista de trás rola por baixo.
+Existe desde antes do C6; o C6 inaugurou o padrão sem migrá-lo, e o C4 extraiu a casca sem migrá-lo
+também.
+
+Migrar é barato agora: trocar o overlay dele pelo `FRDrawer` e ele ganha os três **de graça**. Está
+escrito aqui porque "fica para depois" só não vira "ninguém sabe que falta" quando alguém escreve
+que falta.
+
+Mora em `pages_rest.jsx` e não em `ui.jsx` porque os três drawers da casa vivem neste arquivo. Se
+aparecer um quarto em outro part, sobe para `ui.jsx` — mesmo critério do `isDecimalUnit` no C1.
+
+### A casca PEDE, não fecha
+
+`aoFechar` é chamado pelo ESC, pelo backdrop, pelo X e pelo arraste do sheet; quem decide é quem
+usa. Foi o que permitiu a confirmação de descarte sem a casca saber o que é "sujo".
+
+Diferença deliberada em relação ao `TripDetail`: lá o arraste do sheet some com a folha
+(`translateY(100%)`) ANTES de fechar. Aqui a folha volta ao lugar e só então pede — porque o pedido
+pode ser **recusado**, e uma folha que já saiu da tela com edição não salva seria mentira visual.
+
+### Descarte: pergunta antes, e a pergunta é INLINE
+
+Fechar drawer é um clique fora. Perder a montagem inteira de uma saída por um clique errado é caro
+demais para ser silencioso, então: sem alteração pendente fecha direto (zero atrito); **com**
+alteração pendente aparece uma barra de confirmação dentro do próprio drawer.
+
+Inline e não `window.confirm`: o diálogo nativo trava a thread, não é estilizável e não sobrevive a
+prova de tela. A barra não fecha nada sozinha — a saída é sempre por clique explícito em
+"Descartar", e **nenhum dos dois botões dispara requisição** (provado no PD5).
+
+O "sujo" é uma assinatura do que o operador pode PERDER: destino, equipe e a lista de itens com
+quantidade. `roster` e a busca do catálogo ficam de fora — não são trabalho a salvar.
+
+### O que NÃO mudou (e é o ponto do lote)
+
+Nenhuma regra de C1/C2/C3 mudou de lugar: decimal por unidade, teto simples na criação, teto
+composto (jáReservado + disponível) na edição, teto reativo por `stock_updated`, payload numérico,
+esgotado desabilitado e guard de legada. Todas reprovadas DENTRO do drawer (PD2/PD3), e o modal
+segue **bimodal** — drawer só na edição criaria dois caminhos de apresentação sobre a mesma lógica,
+que é a duplicação que produziu o regresso do C1.
+
+### RÉGUA — escopo de seletor com drawer sobre página
+
+> **Com drawer sobre página, seletor sem raiz não é escopo, é ILUSÃO de escopo** — o helper caía no
+> `document` sem painel aberto e o submit achava o gatilho da página. Quem pegou foi a linha de base
+> (PD0), que existe exatamente para isso.
+
+O helper era `(raiz || w.document).querySelectorAll(sel)`. Com o drawer fechado, `raiz` é `null`, o
+`||` cai no documento inteiro e `btnSubmit()` encontrava o botão "Registrar saída" do CABEÇALHO da
+página — que nunca desabilita. Toda asserção sobre o estado do submit teria medido o botão errado.
+Corrigido para devolver **vazio** quando não há raiz. A asserção que pegou é literalmente
+`ok('btnSubmit() é null sem painel — o escopo não vaza para a página', ...)`: uma linha de base que
+falha ANTES das provas de conteúdo, exatamente o que o C2 mandou passar a fazer.
+
+### RÉGUA — âncora de edição em arquivo com componentes parecidos
+
+> **Busca por padrão genérico em arquivo com N componentes parecidos não é mira**: `s.index()`
+> pegou a 1ª ocorrência e editou o `ConfrontoEditor`. Correção: reverter o arquivo inteiro e refazer
+> com âncora **ÚNICA**, que **FALHA** quando o alvo não é único.
+
+`pages_rest.jsx` tem três overlays com a mesma abertura (`position: 'fixed', inset: 0, zIndex: 65`).
+O `s.index()` do primeiro corte casou o `ConfrontoEditor` e trocou a casca DELE. O erro não apareceu
+como exceção — o arquivo continuou sintaticamente válido; só o componente errado tinha mudado.
+
+Duas coisas fizeram a diferença:
+- **reverter inteiro** (`git checkout -- <arquivo>`) em vez de tentar desfazer por cima. Edição
+  errada sobre edição errada não converge;
+- **refazer com `Edit` de âncora única**, que ERRA quando o alvo casa mais de uma vez. A ferramenta
+  que falha alto vale mais que a que "dá certo" no lugar errado — é a mesma lógica do verde por
+  instrumento errado ser pior que vermelho (régua do C2).
+
+A âncora que serviu foi `display: saMob ? 'flex' : 'grid'` — presente só no `SaidaModal`. Antes de
+editar, `grep -c` da âncora: se não der exatamente 1, a âncora não presta.

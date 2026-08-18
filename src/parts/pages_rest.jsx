@@ -1947,6 +1947,87 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify, origemFoco })
   );
 }
 
+// =================================================================================================
+// FRDrawer — a CASCA de drawer lateral, extraída (lote C4).
+//
+// POR QUE EXTRAIR EM VEZ DE ESCREVER A TERCEIRA: este arquivo já tinha DOIS overlays laterais, e
+// nenhum servia de casca reaproveitável —
+//   • RepPickerDrawer (:775) é uma TELA inteira das Reposições (estado, item, toggle e onConcluir
+//     próprios) e NÃO tem ESC, foco nem trava de scroll;
+//   • TripDetail (:1705) TEM os três, mas inline, presos ao conteúdo dele — foi ele que inaugurou
+//     o padrão no C6.
+// Copiar o `useEffect` do TripDetail para cá seria a terceira cópia do MESMO comportamento de
+// acessibilidade. Aqui ele vira UM lugar; o TripDetail passa a poder adotá-lo, e o RepPickerDrawer
+// a ganhar ESC/foco/scroll de graça ao adotar. Nenhum dos dois foi migrado NESTE lote (mexeriam em
+// telas que funcionam, e isto é lote de apresentação) — registrado no DIVIDAS.
+//
+// Mora neste arquivo, e não em ui.jsx, porque os três drawers da casa vivem aqui. Se aparecer um
+// quarto em outro part, aí sim sobe para ui.jsx.
+//
+// CONTRATO: a casca não sabe fechar — ela PEDE. `aoFechar` é chamado pelo ESC, pelo backdrop e pelo
+// arraste do sheet; quem decide se fecha mesmo (ou se pergunta antes) é quem a usa.
+function FRDrawer({ t, aoFechar, origemFoco, largura, children }) {
+  const { mobile } = (window.useFRViewport ? window.useFRViewport() : { mobile: typeof window !== 'undefined' && window.innerWidth <= 640 });
+  const painelRef = React.useRef(null);
+  const overlayRef = React.useRef(null);
+  const aoFecharRef = React.useRef(aoFechar);
+  aoFecharRef.current = aoFechar;
+
+  React.useEffect(() => {
+    // FOCO: entra no painel ao abrir; ao fechar volta ao elemento ACIONADOR (ref vem do pai).
+    if (painelRef.current) painelRef.current.focus();
+    // ESC pede fechamento — vale em desktop e no sheet mobile.
+    const onKey = (e) => { if (e.key === 'Escape') aoFecharRef.current(); };
+    window.addEventListener('keydown', onKey);
+    // TRAVA DO SCROLL DE TRÁS: wheel/touchmove fora do painel são bloqueados no overlay. Listener
+    // NATIVO com passive:false — o onWheel sintético do React é passivo e não conseguiria
+    // preventDefault. O scroller interno usa overscrollBehavior:'contain' p/ o fim-de-lista não
+    // encadear na lista de trás. (Idem TripDetail:1724-1730, agora num lugar só.)
+    const bloqueia = (e) => { if (painelRef.current && !painelRef.current.contains(e.target)) e.preventDefault(); };
+    const ov = overlayRef.current;
+    if (ov) { ov.addEventListener('wheel', bloqueia, { passive: false }); ov.addEventListener('touchmove', bloqueia, { passive: false }); }
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      if (ov) { ov.removeEventListener('wheel', bloqueia); ov.removeEventListener('touchmove', bloqueia); }
+      const alvo = origemFoco && origemFoco.current;
+      if (alvo && alvo.focus) alvo.focus();
+    };
+    // monta UMA vez por abertura; aoFechar entra por ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div ref={overlayRef} onClick={() => aoFecharRef.current()}
+      style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: 'flex', flexDirection: mobile ? 'column' : 'row', justifyContent: 'flex-end', animation: 'frTripFade .2s ease-out' }}>
+      <div ref={painelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}
+        style={{ width: mobile ? '100%' : (largura || 'min(600px,94vw)'), boxSizing: 'border-box', height: mobile ? undefined : '100%', maxHeight: mobile ? '92vh' : '100%', flex: mobile ? '0 0 auto' : undefined, display: 'flex', flexDirection: 'column', background: t.panel, borderLeft: mobile ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: mobile ? '24px 24px 0 0' : 0, boxShadow: mobile ? t.shadow : '-18px 0 44px rgba(0,0,0,.25)', overflow: 'hidden', animation: mobile ? 'frTripUp .34s cubic-bezier(.22,1,.36,1)' : 'tripDrawerIn .26s ease-out' }}>
+        <style>{`@keyframes frTripUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frTripFade{from{opacity:0}to{opacity:1}}@keyframes tripDrawerIn{from{transform:translateX(70px);opacity:0}to{transform:none;opacity:1}}`}</style>
+        {mobile && (
+          <div style={{ flexShrink: 0, background: t.panel, padding: '12px 0 8px', cursor: 'grab', touchAction: 'none' }}
+            onPointerDown={(e) => {
+              const sheet = e.currentTarget.parentElement; const startY = e.clientY; let dy = 0;
+              sheet.style.transition = 'none';
+              const move = (ev) => { dy = Math.max(0, ev.clientY - startY); sheet.style.transform = `translateY(${dy}px)`; };
+              const up = () => {
+                window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+                sheet.style.transition = 'transform .22s ease-out';
+                // arrastou o bastante: PEDE fechamento (quem usa decide) e devolve a folha ao lugar.
+                // O TripDetail some com a folha antes de saber a resposta; aqui não dá — pode haver
+                // edição não salva e o pedido pode ser recusado.
+                sheet.style.transform = '';
+                if (dy > 110) aoFecharRef.current();
+              };
+              window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+            }}>
+            <div style={{ width: 48, height: 5, borderRadius: 3, background: t.borderStrong, margin: '0 auto' }} />
+          </div>
+        )}
+        {children}
+      </div>
+    </div>
+  );
+}
+
 // Registrar saída = POST /travel-orders (cria a viagem e RESERVA cada item — StockService.reserve).
 // Catálogo REAL via GET /products (nada de SAIDA_CAT chumbado). Equipe: texto livre em chips —
 // não existe cadastro de técnicos no backend (technicians é VARCHAR na viagem); o roster sugerido
@@ -1955,7 +2036,11 @@ function TripDetail({ t, trip, busy, onClose, onConfronto, notify, origemFoco })
 // Um caminho de código só, de propósito — a edição herda de graça o decimal por unidade (C1), o
 // teto reativo e o payload numérico (C2). Duplicar o modal duplicaria as três regras e a próxima
 // correção teria de ser feita em dois lugares (foi exatamente o que produziu o regresso do C1).
-function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, trip }) {
+// APRESENTAÇÃO (lote C4): o conteúdo abaixo é o MESMO — muda só a casca, de modal centralizado para
+// DRAWER LATERAL (FRDrawer). Vale nos DOIS modos: drawer só na edição deixaria a criação no modal
+// antigo, e seriam dois caminhos de apresentação sobre a mesma lógica — a duplicação de caminho que
+// produziu o regresso do C1. Nenhuma regra de C1/C2/C3 mudou de lugar.
+function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, trip, origemFoco }) {
   const editando = !!trip;
   const { mobile: saMob } = (window.useFRViewport ? window.useFRViewport() : { mobile: false });
   const [destino, setDestino] = useStateR(editando ? (trip.destino === '—' ? '' : trip.destino) : '');
@@ -1981,6 +2066,13 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, 
     return m;
   }, [editando, trip]);
   const [q, setQ] = useStateR('');
+  // DESCARTE (C4): backdrop, ESC e arraste do sheet PEDEM fechamento; com alteração pendente a
+  // gente pergunta antes. Fechar drawer é um clique fora — perder a montagem inteira de uma saída
+  // por um clique errado é caro demais para ser silencioso.
+  // Confirmação INLINE, não window.confirm: diálogo nativo trava a thread, não é estilizável e não
+  // sobrevive a prova de tela.
+  const [confirmandoDescarte, setConfirmandoDescarte] = useStateR(false);
+  const assinaturaInicial = React.useRef(null);   // congelada no 1º render; ver `sujo` abaixo
   const ql = q.trim().toLowerCase();
   const catList = (ql ? (produtos || []).filter((c) => c.nome.toLowerCase().includes(ql) || String(c.sku).toLowerCase().includes(ql)) : (produtos || [])).slice(0, 40);
   const toggleTeam = (n) => setTeam((xs) => (xs.includes(n) ? xs.filter((x) => x !== n) : [...xs, n]));
@@ -2034,40 +2126,34 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, 
   const saTemInvalido = itens.some(saItemInvalido);
   const levado = itens.reduce((a, it) => a + it.preco * saQtdDe(it.levou), 0);
   const valid = destino.trim() && team.length && itens.length && !saTemInvalido && !salvando;
+
+  // Assinatura do que o operador pode PERDER: destino, equipe e a lista de itens com quantidade.
+  // Só o que ele digitou — `roster` e a busca do catálogo não são trabalho a salvar.
+  const assinatura = JSON.stringify({ d: destino.trim(), e: team.slice().sort(), i: itens.map((it) => [it.product_id, it.levou]) });
+  if (assinaturaInicial.current === null) assinaturaInicial.current = assinatura;
+  const sujo = assinatura !== assinaturaInicial.current;
+  // Chamado pelo backdrop, pelo ESC, pelo X e pelo arraste do sheet (a casca só PEDE — ver FRDrawer).
+  const pedirFechamento = () => {
+    if (salvando) return;                       // gravando: nem fecha nem pergunta
+    if (!sujo) { onClose(); return; }           // nada a perder: fecha direto, sem atrito
+    setConfirmandoDescarte(true);
+  };
   const field = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none', width: '100%' };
   const lab = { display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.04em', color: t.muted, textTransform: 'uppercase', marginBottom: 8 };
 
   return (
-    <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 65, background: 'rgba(8,10,16,.6)', backdropFilter: 'blur(2px)', display: saMob ? 'flex' : 'grid', flexDirection: saMob ? 'column' : undefined, justifyContent: saMob ? 'flex-end' : undefined, placeItems: saMob ? undefined : 'center', padding: saMob ? 0 : 20, animation: saMob ? 'frTripFade .2s ease-out' : 'none' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: saMob ? '100%' : 'min(820px,96vw)', boxSizing: 'border-box', maxHeight: '92vh', flex: saMob ? '0 0 auto' : undefined, display: 'flex', flexDirection: 'column', background: t.panel, border: saMob ? 'none' : `1px solid ${t.borderStrong}`, borderRadius: saMob ? '24px 24px 0 0' : 20, boxShadow: t.shadow, overflow: 'hidden', animation: saMob ? 'frTripUp .34s cubic-bezier(.22,1,.36,1)' : 'none', transition: saMob ? 'transform .18s ease-out' : 'none' }}>
-        {/* keyframes repetidos de propósito: no desenho eles moram só no TripDetail, e a saída
-            abre SEM viagem aberta — sem esta cópia a folha entraria seca no mobile. */}
-        <style>{`@keyframes frTripUp{from{transform:translateY(100%)}to{transform:none}}@keyframes frTripFade{from{opacity:0}to{opacity:1}}`}</style>
-        {saMob && (
-          <div style={{ flexShrink: 0, background: t.panel, padding: '12px 0 8px', cursor: 'grab', touchAction: 'none' }}
-            onPointerDown={(e) => {
-              if (salvando) return;   // gravando: a folha não sai de baixo do dedo
-              const sheet = e.currentTarget.parentElement; const startY = e.clientY; let dy = 0;
-              sheet.style.transition = 'none';
-              const move = (ev) => { dy = Math.max(0, ev.clientY - startY); sheet.style.transform = `translateY(${dy}px)`; };
-              const up = () => {
-                window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
-                sheet.style.transition = 'transform .22s ease-out';
-                if (dy > 110) { sheet.style.transform = 'translateY(100%)'; setTimeout(onClose, 200); }
-                else sheet.style.transform = '';
-              };
-              window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
-            }}>
-            <div style={{ width: 48, height: 5, borderRadius: 3, background: t.borderStrong, margin: '0 auto' }} />
-          </div>
-        )}
+    // CASCA: FRDrawer (lote C4) — ESC, foco, trava de scroll e o sheet mobile moram lá; aqui fica
+    // só o conteúdo, que não mudou. `pedirFechamento` porque a casca PEDE, não fecha.
+    <FRDrawer t={t} aoFechar={pedirFechamento} origemFoco={origemFoco} largura="min(820px,96vw)">
         <div style={{ padding: saMob ? '8px 20px 14px' : '20px 24px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 13 }}>
           <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="out" size={20} /></span>
           <div style={{ flex: 1 }}><div style={{ fontSize: 18, fontWeight: 850, color: t.text }}>{editando ? 'Editar viagem' : 'Registrar saída'}</div><div style={{ fontSize: 12.5, color: t.muted }}>{editando ? 'Ajuste a equipe, o destino e o material — a reserva de estoque acompanha a diferença.' : 'Defina a viagem e o material que vai a campo — o estoque fica reservado até o confronto.'}</div></div>
-          {!saMob && <button onClick={() => !salvando && onClose()} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>}
+          {/* X existe nos DOIS modos agora (o drawer não tem "clicar fora" óbvio no mobile) e PEDE
+              fechamento, como o ESC e o backdrop — um caminho só para sair. */}
+          <button onClick={pedirFechamento} title="Fechar (Esc)" style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
         </div>
 
-        <div className="fr-scroll" style={{ overflowY: 'auto', padding: '20px 24px', flex: 1 }}>
+        <div className="fr-scroll" style={{ overflowY: 'auto', padding: '20px 24px', flex: 1, minHeight: 0, overscrollBehavior: 'contain' }}>
           <div style={{ marginBottom: 20 }}>
             <label style={lab}>Destino</label>
             <input value={destino} onChange={(e) => setDestino(e.target.value)} placeholder="Ex: Obra Centro" style={field} />
@@ -2160,6 +2246,20 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, 
           </div>
         </div>
 
+        {/* CONFIRMAÇÃO DE DESCARTE (C4): aparece quando o operador pede para sair com alteração
+            pendente. Inline, dentro do drawer, e NÃO fecha nada sozinha — a saída é sempre por um
+            clique explícito. Nenhum dos dois botões dispara requisição. */}
+        {confirmandoDescarte && (
+          <div style={{ padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: uiTone(t, 'amber').bg, borderTop: `1px solid ${frHexToRgba('#f59e0b', 0.35)}` }}>
+            <Icon name="alert" size={17} style={{ color: uiTone(t, 'amber').fg, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 160, fontSize: 12.5, fontWeight: 700, color: t.text }}>
+              {editando ? 'Sair sem salvar as alterações desta viagem?' : 'Sair sem registrar esta saída?'}
+              <span style={{ fontWeight: 500, color: t.muted }}> O que você montou aqui será perdido.</span>
+            </div>
+            <button onClick={() => setConfirmandoDescarte(false)} style={{ all: 'unset', cursor: 'pointer', height: 34, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 800, color: t.text, border: `1px solid ${t.border}`, background: t.panel }}>Continuar editando</button>
+            <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', height: 34, padding: '0 14px', borderRadius: 10, fontSize: 12.5, fontWeight: 800, color: '#fff', background: uiTone(t, 'red').fg }}>Descartar</button>
+          </div>
+        )}
         {erro && <div style={{ padding: '10px 24px', fontSize: 12.5, fontWeight: 600, color: uiTone(t, 'red').fg, background: uiTone(t, 'red').bg }}>{erro}</div>}
         <div style={{ padding: saMob ? '12px 20px calc(14px + env(safe-area-inset-bottom))' : '14px 24px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: t.muted }}>{itens.length} {itens.length === 1 ? 'item' : 'itens'} · levado <b style={{ color: t.text }}>{fmtBRL(levado)}</b></div>
@@ -2173,8 +2273,7 @@ function SaidaModal({ t, produtos, rosterSeed, salvando, erro, onClose, onSave, 
             <Icon name={editando ? 'check' : 'out'} size={18} /> {salvando ? (editando ? 'Salvando…' : 'Registrando…') : (saTemInvalido ? 'Corrija as quantidades' : (editando ? 'Salvar alterações' : 'Registrar saída'))}
           </button>
         </div>
-      </div>
-    </div>
+    </FRDrawer>
   );
 }
 
@@ -2304,7 +2403,7 @@ function PageConfronto({ t }) {
   return (
     <div>
       <PageHeader t={t} title="Confronto de Viagens" subtitle="Registre a saída do material, acompanhe a viagem e faça o confronto do retorno."
-        actions={<><Btn t={t} kind="ghost" icon="download" onClick={exportarPDF}>Relatório PDF</Btn><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: tsGenKey() }); }}>Registrar saída</Btn></>} />
+        actions={<><Btn t={t} kind="ghost" icon="download" onClick={exportarPDF}>Relatório PDF</Btn><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={(e) => { origemFocoRef.current = (e && e.currentTarget) || null; setErroModal(null); setSaida({ key: tsGenKey() }); }}>Registrar saída</Btn></>} />
       {/* KPI clicável como filtro de estágio (A4, gabarito ref21:1941-1945) — UM por estágio REAL */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         {[['pending', 'truck', 'Em viagem', 'blue'], ['reconciled', 'check', 'Finalizadas', 'green']].map(([st, ic, lb, kd]) => (
@@ -2380,7 +2479,7 @@ function PageConfronto({ t }) {
                         title={tr.editavel
                           ? 'Editar equipe, destino e material desta viagem'
                           : 'Viagem anterior a 15/08, importada do sistema antigo: não movimenta estoque e não pode ser editada.'}
-                        onClick={() => { if (!tr.editavel) return; setErroModal(null); setEditandoId(tr.id); }}
+                        onClick={(e) => { if (!tr.editavel) return; origemFocoRef.current = e.currentTarget; setErroModal(null); setEditandoId(tr.id); }}
                         style={{ all: 'unset', cursor: tr.editavel ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 6, height: 40, padding: '0 13px', borderRadius: 11, fontSize: 13, fontWeight: 800, color: tr.editavel ? t.accentText : t.faint, border: `1px solid ${t.border}`, opacity: tr.editavel ? 1 : 0.6 }}>
                         <Icon name="pencil" size={15} /> Editar
                       </button>
@@ -2396,8 +2495,8 @@ function PageConfronto({ t }) {
       </div>
       {cur && <TripDetail t={t} trip={cur} busy={busy} onClose={() => setOpenId(null)} onConfronto={(id) => { setOpenId(null); setErroModal(null); setConfrontoId(id); }} notify={(kind, msg) => setToast({ kind, msg })} origemFoco={origemFocoRef} />}
       {confrontoTrip && <ConfrontoEditor t={t} trip={confrontoTrip} produtos={produtos} salvando={busy} erro={erroModal} onClose={() => !busy && setConfrontoId(null)} onSave={confrontar} />}
-      {saida && <SaidaModal t={t} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setSaida(null)} onSave={registrarSaida} />}
-      {tripEmEdicao && <SaidaModal t={t} trip={tripEmEdicao} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} onClose={() => !busy && setEditandoId(null)} onSave={salvarEdicao} />}
+      {saida && <SaidaModal t={t} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} origemFoco={origemFocoRef} onClose={() => !busy && setSaida(null)} onSave={registrarSaida} />}
+      {tripEmEdicao && <SaidaModal t={t} trip={tripEmEdicao} produtos={produtos} rosterSeed={rosterSeed} salvando={busy} erro={erroModal} origemFoco={origemFocoRef} onClose={() => !busy && setEditandoId(null)} onSave={salvarEdicao} />}
       {toast && (
         <div style={{ position: 'fixed', zIndex: 90, bottom: 22, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 13, background: toast.kind === 'err' ? uiTone(t, 'red').fg : t.text, color: '#fff', boxShadow: '0 18px 40px rgba(0,0,0,.3)', maxWidth: '92vw' }}>
           <Icon name={toast.kind === 'err' ? 'alert' : 'check'} size={18} style={{ flexShrink: 0 }} />
