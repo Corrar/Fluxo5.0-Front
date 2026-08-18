@@ -1390,6 +1390,17 @@ const TRIP_STAGES = [
   { key: 'reconciled', label: 'Finalizada', icon: 'check', sub: 'Confronto concluído.' },
 ];
 const STAGE_IDX = (s) => TRIP_STAGES.findIndex((x) => x.key === s);
+// Âncora X-Idempotency-Key da SAÍDA DE MATERIAL (POST /travel-orders), gerada ao ABRIR o modal.
+// O fallback NÃO é enfeite: `crypto.randomUUID` é [SecureContext] e vem `undefined` em
+// http://IP-LAN — que é como o chão de fábrica acessa o sistema. Sem ele o clique lança
+// TypeError dentro do handler, o setSaida nunca roda e o modal NÃO ABRE: tela muda numa
+// operação que reserva estoque. Forma copiada de producaoger.jsx:29 / producao3d.jsx:176.
+// Cópia LOCAL de propósito: `window.pgGenKey` existe, mas é membro da família `pg*` da Produção
+// (mesmo Object.assign de pgOpsAbertas/pgErr/pgDateTime/pgNum) — usá-lo aqui acrescentaria
+// acoplamento de DOMÍNIO por cima do de ORDEM (main.jsx importa pages_rest :45 ANTES de
+// producaoger :55; só funcionaria porque o onClick difere a leitura). Unificar as cinco cópias
+// num `frGenIdemKey` único é lote próprio, já registrado em DIVIDAS.md.
+const tsGenKey = () => (crypto.randomUUID?.() ?? `ts-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 const fmtBRL = (n) => {
   // GUARD: valor não-numérico não rende número inventado ("R$ NaN") — vira travessão.
   const v = Number(n || 0);
@@ -2085,7 +2096,7 @@ function PageConfronto({ t }) {
   return (
     <div>
       <PageHeader t={t} title="Confronto de Viagens" subtitle="Registre a saída do material, acompanhe a viagem e faça o confronto do retorno."
-        actions={<><Btn t={t} kind="ghost" icon="download" onClick={exportarPDF}>Relatório PDF</Btn><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}>Registrar saída</Btn></>} />
+        actions={<><Btn t={t} kind="ghost" icon="download" onClick={exportarPDF}>Relatório PDF</Btn><Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn><Btn t={t} icon="out" onClick={() => { setErroModal(null); setSaida({ key: tsGenKey() }); }}>Registrar saída</Btn></>} />
       {/* KPI clicável como filtro de estágio (A4, gabarito ref21:1941-1945) — UM por estágio REAL */}
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         {[['pending', 'truck', 'Em viagem', 'blue'], ['reconciled', 'check', 'Finalizadas', 'green']].map(([st, ic, lb, kd]) => (
