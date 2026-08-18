@@ -670,39 +670,52 @@ Duas decisões de vocabulário que as quatro cópias hoje respeitam e que precis
 **Saída**: um único módulo (`src/lib/units.js` + o espelho no backend) exportando o Set e o
 `isDecimalUnit`, com um smoke que compara as duas pontas. Lote próprio.
 
-## Geradores de chave de idempotência — quatro cópias, e uma delas sem fallback
+## Geradores de chave de idempotência — cinco cópias, todas com fallback
 
-**Registrado em 17/08/2026** (lote R2). O front tem **quatro** geradores locais da âncora
-`X-Idempotency-Key`, todos idênticos: `devGenKey` (`devolucao.jsx:31`), `genKey`
-(`pages_admin.jsx:127`), `p3GenKey` (`producao3d.jsx:176`) e `pgGenKey` (`producaoger.jsx:29`) —
-este último é o **único exposto no `window`**, e é o que o Inventário reusa (o lote R2 não criou a
-quinta cópia). Os quatro fazem `crypto.randomUUID?.() ?? 'prefixo-' + Date.now() + random`, com o
-fallback existindo por um motivo concreto: **`crypto.randomUUID` não existe em contexto não-seguro**
+**Registrado em 17/08/2026** (lote R2); **atualizado em 18/08/2026** (lote F1). O front tem **cinco**
+geradores locais da âncora `X-Idempotency-Key`: `devGenKey` (`devolucao.jsx:31`), `genKey`
+(`pages_admin.jsx:127`), `p3GenKey` (`producao3d.jsx:176`), `pgGenKey` (`producaoger.jsx:29`) e
+`tsGenKey` (`pages_rest.jsx:1403`, criado pelo F1) — `pgGenKey` é o **único exposto no `window`**, e é
+o que o Inventário e o Recebimento reusam. Todos fazem
+`crypto.randomUUID?.() ?? 'prefixo-' + Date.now() + random`, com o fallback existindo por um motivo
+concreto: **`crypto.randomUUID` é `[SecureContext]` e não existe em contexto não-seguro**
 (`http://IP-LAN`), que é exatamente como o chão de fábrica acessa o sistema.
 
-### ⚠ AÇÃO PRIORITÁRIA — `pages_rest.jsx:2088`: a saída de material morre em `http://IP-LAN`
+Uma divergência de forma que sobra: `devGenKey` usa o ternário antigo
+(`crypto.randomUUID ? crypto.randomUUID() : ...`), sem o comentário que nomeia o motivo; as outras
+quatro usam `?.() ?? `. Equivalentes na prática — o `crypto` em si existe em qualquer contexto, só
+`randomUUID`/`subtle` são gated —, mas é uma forma a menos para a unificação padronizar.
 
-**Isto não é dívida de estilo nem chave degradada: é TELA MORTA numa operação que BAIXA ESTOQUE.**
+### ✅ RESOLVIDO em 18/08/2026 (lote F1) — `pages_rest.jsx:2088`: a saída de material morria em `http://IP-LAN`
 
-`pages_rest.jsx:2088` chama **`crypto.randomUUID()` CRU**, sem fallback, para gerar a chave do modal
-de **saída de material**: `onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}`.
+**Ficava aqui como AÇÃO PRIORITÁRIA. Foi consertado; o registro fica pelo aprendizado.**
 
-**Consequência medida.** `crypto.randomUUID` **não existe em contexto não-seguro**, e
-`http://IP-LAN` — sem TLS — é exatamente como o chão de fábrica acessa o sistema. Ali o clique em
-"Registrar saída" lança `TypeError` dentro do handler: o `setSaida` nunca roda, **o modal não abre**
-e a tela fica muda, sem mensagem de erro nenhuma. O operador clica, não acontece nada, e não há o
-que ele possa fazer. Não é a chave que degrada — é a operação inteira que não começa.
+`pages_rest.jsx:2088` chamava **`crypto.randomUUID()` CRU**, sem fallback, para gerar a chave do modal
+de **saída de material** (`POST /travel-orders`, a rota que RESERVA estoque):
+`onClick={() => { setErroModal(null); setSaida({ key: crypto.randomUUID() }); }}`. Como `saida` é o
+próprio interruptor de montagem do modal (`{saida && <SaidaModal …/>}`), o `TypeError` no handler
+deixava a tela **muda**: o operador clicava e não acontecia nada — sem toast, sem erro, sem saída.
+Não era chave degradada; era a operação inteira que não começava.
 
-**As outras quatro cópias do gerador têm fallback exatamente por causa disso** (`devGenKey`,
-`genKey`, `p3GenKey`, `pgGenKey`, todas com `?? 'prefixo-' + Date.now() + random` e o comentário
-"fallback p/ contexto não-seguro (http://IP-LAN)"). Este ponto ficou de fora do padrão.
+**Conserto**: `tsGenKey`, cópia local em escopo de módulo (`pages_rest.jsx:1403`), forma
+`crypto.randomUUID?.() ?? 'ts-' + Date.now() + random`. **Cópia local, não `window.pgGenKey`** —
+`pgGenKey` é membro da família `pg*` da Produção (mesmo `Object.assign` de
+`pgOpsAbertas`/`pgErr`/`pgDateTime`/`pgNum`), não helper geral: usá-lo no Confronto acrescentaria
+acoplamento de DOMÍNIO por cima do de ORDEM (`main.jsx` importa `pages_rest` :45 ANTES de
+`producaoger` :55 — funcionaria só porque o `onClick` difere a leitura). É o mesmo argumento que
+barrou o compartilhamento de `sepItemFlags` no C2 das Reposições.
 
-**Ordem de execução: LOTE PRÓPRIO, ANTES da unificação dos geradores.** O conserto é de uma linha
-(usar `window.pgGenKey()`, que já existe e tem fallback) e não depende de nenhuma decisão de
-arquitetura — a unificação pode esperar, esta tela não.
+**O que a prova mediu** (jsdom sobre o `dist` real, clique no botão renderizado, nos dois estados):
+ANTES → `Uncaught [TypeError: crypto.randomUUID is not a function]`, modal não monta, zero chaves.
+DEPOIS → modal monta, 1000/1000 chaves únicas no formato de fallback, zero vazias. Em `https` o
+caminho normal segue sendo o `randomUUID` (1002 chamadas, nenhuma chave `ts-`).
 
-**Saída da unificação (depois)**: promover um `frGenIdemKey` único ao `window` e trocar as quatro
-cópias por ele.
+**A lição que fica**: o defeito era invisível em qualquer teste feito por `https`. Toda tela que
+nasce com âncora de idempotência precisa ser exercitada **também** em contexto não-seguro, porque
+`http://IP-LAN` é o acesso real do chão de fábrica — não um cenário de borda.
+
+**Saída da unificação (ainda pendente)**: promover um `frGenIdemKey` único ao `window` e trocar as
+**cinco** cópias por ele. Continua sendo lote próprio: agora é dívida de forma, não tela morta.
 
 ## Inventário — o que o lote R2 deixou de fora, de propósito
 
