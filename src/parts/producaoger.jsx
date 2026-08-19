@@ -1,4 +1,21 @@
 // producaoger.jsx — "Produção" module: Painel, Ordens de Produção (kanban), Apontamentos.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStatePG } = React;
 const PG_ACCENT = '#7c3aed', PG_ACCENT_T = '#a78bfa';
 
@@ -436,7 +453,7 @@ function PGAponta({ t }) {
                 </div>
                 <div style={{ width: 130 }}>
                   <label style={{ display: 'block', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: t.muted, textTransform: 'uppercase', marginBottom: 7 }}>Quantidade</label>
-                  <input ref={qtdRef} value={qtd} onChange={(e) => setQtd(e.target.value.replace(/[^0-9]/g, ''))}
+                  <input ref={qtdRef} value={qtd} onChange={(e) => setQtd(frSanQtd(e.target.value))}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmar(); } }}
                     inputMode="numeric" style={{ ...field, width: '100%', fontWeight: 800 }} />
                 </div>

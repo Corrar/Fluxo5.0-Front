@@ -16,6 +16,23 @@
 // editar itens precisa do product_id (uuid). O picker de OP também é REAL desde este lote
 // (window.useFRClients → GET /clients, filtrado por pgOpsAbertas): esta foi a ÚLTIMA tela presa
 // ao CLIENTES_SEED, e com a morte dela o seed saiu do bundle.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateSep, useMemo: useMemoSep, useEffect: useEffectSep, useRef: useRefSep } = React;
 
 const SEP_BRL = (n) => 'R$ ' + Number(n || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -772,7 +789,7 @@ function SepNovaModal({ t, catalog, busy, onClose, onCreate }) {
   const disponiveis = catalog.filter((c) => !ql || c.nome.toLowerCase().includes(ql) || c.sku.includes(ql));
   const naLista = (pid) => itens.some((i) => i.product_id === pid);
   const addItem = (c) => { if (!naLista(c.product_id)) setItens((xs) => [...xs, { product_id: c.product_id, sku: c.sku, nome: c.nome, qtd: 1, preco: c.preco, disp: c.disp }]); };
-  const setQtd = (pid, v) => setItens((xs) => xs.map((i) => (i.product_id === pid ? { ...i, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : i)));
+  const setQtd = (pid, v) => setItens((xs) => xs.map((i) => (i.product_id === pid ? { ...i, qtd: frInt(v, 1) } : i)));
   const delItem = (pid) => setItens((xs) => xs.filter((i) => i.product_id !== pid));
   const valid = op.trim() && cliente.trim() && itens.length && !busy;
   const total = itens.reduce((a, i) => a + i.preco * i.qtd, 0);

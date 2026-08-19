@@ -1,4 +1,21 @@
 // producao3d.jsx — "Fábrica 3D" module pages: Dashboard, Histórico, Demandas, Catálogo.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateP3 } = React;
 const P3_ACCENT = '#6366f1', P3_ACCENT_T = '#818cf8';
 
@@ -227,9 +244,9 @@ function P3ProdModal({ t, parts, onClose, onSubmit, enviando, erro }) {
             )}
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ width: 120 }}><label style={lab}>Quantidade <span style={{ color: uiTone(t, 'red').fg }}>*</span></label><input value={f.qtd} onChange={(e) => setQtd(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="1" style={field} /></div>
-            <div style={{ flex: 1 }}><label style={lab}>Filamento total (g)</label><input value={f.gramas} onChange={(e) => setF((s) => ({ ...s, gramas: e.target.value.replace(/[^0-9]/g, ''), gT: true }))} inputMode="numeric" placeholder="0" style={field} /></div>
-            <div style={{ flex: 1 }}><label style={lab}>Tempo total (min)</label><input value={f.minutes} onChange={(e) => setF((s) => ({ ...s, minutes: e.target.value.replace(/[^0-9]/g, ''), mT: true }))} inputMode="numeric" placeholder="0" style={field} /></div>
+            <div style={{ width: 120 }}><label style={lab}>Quantidade <span style={{ color: uiTone(t, 'red').fg }}>*</span></label><input value={f.qtd} onChange={(e) => setQtd(frSanQtd(e.target.value))} inputMode="numeric" placeholder="1" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Filamento total (g)</label><input value={f.gramas} onChange={(e) => setF((s) => ({ ...s, gramas: frSanQtd(e.target.value), gT: true }))} inputMode="numeric" placeholder="0" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Tempo total (min)</label><input value={f.minutes} onChange={(e) => setF((s) => ({ ...s, minutes: frSanQtd(e.target.value), mT: true }))} inputMode="numeric" placeholder="0" style={field} /></div>
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 13px', borderRadius: 11, background: t.elevated, border: `1px solid ${t.border}` }}>
             <Icon name="zap" size={15} style={{ color: t.accentText, flexShrink: 0, marginTop: 1 }} />
@@ -787,8 +804,8 @@ function P3PartModal({ t, peca, onClose, onSave, salvando, erro }) {
             <div style={{ width: 140 }}><label style={lab}>SKU</label><div style={{ ...field, lineHeight: '44px', color: t.muted }}>{peca.code}</div></div>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lab}>Filamento gasto (g/un)</label><input value={f.gramas} onChange={(e) => set('gramas', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="0" style={field} /></div>
-            <div style={{ flex: 1 }}><label style={lab}>Tempo de impressão (min/un)</label><input value={f.minutes} onChange={(e) => set('minutes', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="0" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Filamento gasto (g/un)</label><input value={f.gramas} onChange={(e) => set('gramas', frSanQtd(e.target.value))} inputMode="numeric" placeholder="0" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Tempo de impressão (min/un)</label><input value={f.minutes} onChange={(e) => set('minutes', frSanQtd(e.target.value))} inputMode="numeric" placeholder="0" style={field} /></div>
           </div>
           <div><label style={lab}>Descrição</label><textarea value={f.descricao} onChange={(e) => set('descricao', e.target.value)} rows={3} placeholder="Ex: peça do descedor, imprimir com suporte…" style={ta} /></div>
           {erro && <div style={{ padding: '11px 13px', borderRadius: 11, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 12.5, fontWeight: 700 }}>{erro}</div>}
@@ -991,7 +1008,7 @@ function P3ImpressoraModal({ t, imp, onClose, onSave, salvando, erro }) {
     power_watts: imp ? String(imp.power_watts) : '', notes: imp ? imp.notes || '' : '',
   });
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
-  const watts = parseInt(String(f.power_watts).replace(/[^0-9]/g, ''), 10);
+  const watts = frInt(f.power_watts, 0);   // INTEIRO: trunca a fração, nunca multiplica (lote V)
   // Bordas ESPELHADAS do backend: nome obrigatório e watts inteiro > 0.
   const valid = f.name.trim() && Number.isInteger(watts) && watts > 0;
   const field = { boxSizing: 'border-box', width: '100%', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 14, fontFamily: 'inherit', outline: 'none' };
@@ -1010,7 +1027,7 @@ function P3ImpressoraModal({ t, imp, onClose, onSave, salvando, erro }) {
             <div><label style={lab}>Modelo</label><input value={f.model} maxLength={100} onChange={(e) => set('model', e.target.value)} placeholder="Ex: Ender-3 V2" style={field} /></div>
             <div>
               <label style={lab}>Potência (W)</label>
-              <input value={f.power_watts} onChange={(e) => set('power_watts', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="300" style={field} />
+              <input value={f.power_watts} onChange={(e) => set('power_watts', frSanQtd(e.target.value))} inputMode="numeric" placeholder="300" style={field} />
             </div>
           </div>
           <div><label style={lab}>Observações</label><input value={f.notes} maxLength={1000} onChange={(e) => set('notes', e.target.value)} placeholder="Opcional" style={field} /></div>
@@ -1060,7 +1077,7 @@ function P3ManutencoesModal({ t, imp, onClose, onAdd, onDel, busy, erro }) {
           <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 120px', gap: 10, alignItems: 'end', marginBottom: 14 }}>
             <div><label style={lab}>Data</label><input type="date" value={f.date} onChange={(e) => set('date', e.target.value)} style={field} /></div>
             <div><label style={lab}>Descrição</label><input value={f.description} maxLength={500} onChange={(e) => set('description', e.target.value)} placeholder="Ex: troca de bico 0.4mm" style={field} /></div>
-            <div><label style={lab}>Custo (R$)</label><input value={f.cost} onChange={(e) => set('cost', e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" placeholder="0,00" style={field} /></div>
+            <div><label style={lab}>Custo (R$)</label><input value={f.cost} onChange={(e) => set('cost', frSanQtd(e.target.value))} inputMode="decimal" placeholder="0,00" style={field} /></div>
           </div>
           <Btn t={t} icon="plus" onClick={() => valid && !busy && onAdd({ date: f.date, description: f.description.trim(), cost: Number(String(f.cost).replace(',', '.')) || 0 })}>{busy ? 'Registrando…' : 'Registrar manutenção'}</Btn>
           {erro && <div style={{ marginTop: 12, fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erro}</div>}
@@ -1206,7 +1223,7 @@ function P3ValoresReal({ t }) {
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input autoFocus value={tarifaEdit} onChange={(e) => setTarifaEdit(e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" placeholder="0,95"
+                <input autoFocus value={tarifaEdit} onChange={(e) => setTarifaEdit(frSanQtd(e.target.value))} inputMode="decimal" placeholder="0,95"
                   style={{ boxSizing: 'border-box', width: 120, height: 42, borderRadius: 10, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 12px', fontSize: 15, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
                 <Btn t={t} icon="check" onClick={() => salvarSetting('energia_kwh_brl', String(tarifaEdit).replace(',', '.'), 'Tarifa salva.')}>{busy ? 'Salvando…' : 'Salvar'}</Btn>
                 <Btn t={t} kind="ghost" onClick={() => setTarifaEdit(null)}>Cancelar</Btn>
@@ -1358,8 +1375,8 @@ function P3FichaModal({ t, peca, filamentos, onClose, onSave, salvando, erro }) 
         </div>
         <div style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <div><label style={lab}>Filamento por peça (g)</label><input value={f.gramas} onChange={(e) => set('gramas', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
-            <div><label style={lab}>Tempo por peça (min)</label><input value={f.minutos} onChange={(e) => set('minutos', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
+            <div><label style={lab}>Filamento por peça (g)</label><input value={f.gramas} onChange={(e) => set('gramas', frSanQtd(e.target.value))} inputMode="numeric" style={field} /></div>
+            <div><label style={lab}>Tempo por peça (min)</label><input value={f.minutos} onChange={(e) => set('minutos', frSanQtd(e.target.value))} inputMode="numeric" style={field} /></div>
           </div>
           {/* O diagnóstico: a realidade ao lado da ficha, SEM entrar na conta. */}
           {media && (
@@ -1378,7 +1395,7 @@ function P3FichaModal({ t, peca, filamentos, onClose, onSave, salvando, erro }) 
               <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} />
             </div>
           </div>
-          <div style={{ maxWidth: 180 }}><label style={lab}>Margem de lucro (%)</label><input value={f.margem} onChange={(e) => set('margem', e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" style={field} /></div>
+          <div style={{ maxWidth: 180 }}><label style={lab}>Margem de lucro (%)</label><input value={f.margem} onChange={(e) => set('margem', frSanQtd(e.target.value))} inputMode="decimal" style={field} /></div>
           {erro && <div style={{ fontSize: 13, fontWeight: 700, color: uiTone(t, 'red').fg }}>{erro}</div>}
         </div>
         <div style={{ padding: '14px 22px', borderTop: `1px solid ${t.border}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>

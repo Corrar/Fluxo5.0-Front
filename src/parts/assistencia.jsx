@@ -3,6 +3,23 @@
 // Deslocamento→Atendimento→Concluído→Faturado, apontamentos (mão de obra/peças/
 // deslocamento), laudo técnico, agenda/despacho, contratos & SLA, base instalada
 // com histórico, técnicos. Botões funcionais via estado no container ATModule.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateAT } = React;
 const AT_ACCENT = '#0d9488', AT_ACCENT_T = '#2dd4bf';
 
@@ -270,9 +287,9 @@ function ATApontaForm({ t, kind, onAdd }) {
   const add = () => { if (!ok) return; if (kind === 'mao') onAdd({ desc: v.desc.trim(), horas: +v.horas, valorHora: +v.valorHora || 0 }); else if (kind === 'peca') onAdd({ nome: v.nome.trim(), sku: v.sku.trim(), qtd: +v.qtd, valor: +v.valor }); else onAdd({ desc: v.desc.trim(), valor: +v.valor }); setV(kind === 'mao' ? { desc: '', horas: '', valorHora: '120' } : kind === 'peca' ? { nome: '', sku: '', qtd: '1', valor: '' } : { desc: '', valor: '' }); };
   return (
     <div style={{ display: 'flex', gap: 7, marginTop: 8, flexWrap: 'wrap' }}>
-      {kind === 'mao' && <><input value={v.desc} onChange={(e) => set('desc', e.target.value)} placeholder="Serviço" style={{ ...mini, flex: 2, minWidth: 120 }} /><input value={v.horas} onChange={(e) => set('horas', e.target.value.replace(/[^0-9.]/g, ''))} placeholder="h" style={{ ...mini, width: 52, textAlign: 'center' }} /><input value={v.valorHora} onChange={(e) => set('valorHora', e.target.value.replace(/[^0-9.]/g, ''))} placeholder="R$/h" style={{ ...mini, width: 64, textAlign: 'center' }} /></>}
-      {kind === 'peca' && <><input value={v.nome} onChange={(e) => set('nome', e.target.value)} placeholder="Peça" style={{ ...mini, flex: 2, minWidth: 110 }} /><input value={v.sku} onChange={(e) => set('sku', e.target.value)} placeholder="SKU" style={{ ...mini, width: 80 }} /><input value={v.qtd} onChange={(e) => set('qtd', e.target.value.replace(/[^0-9]/g, ''))} placeholder="qtd" style={{ ...mini, width: 48, textAlign: 'center' }} /><input value={v.valor} onChange={(e) => set('valor', e.target.value.replace(/[^0-9.]/g, ''))} placeholder="R$ un" style={{ ...mini, width: 64, textAlign: 'center' }} /></>}
-      {kind === 'desloc' && <><input value={v.desc} onChange={(e) => set('desc', e.target.value)} placeholder="Descrição" style={{ ...mini, flex: 2, minWidth: 120 }} /><input value={v.valor} onChange={(e) => set('valor', e.target.value.replace(/[^0-9.]/g, ''))} placeholder="R$" style={{ ...mini, width: 70, textAlign: 'center' }} /></>}
+      {kind === 'mao' && <><input value={v.desc} onChange={(e) => set('desc', e.target.value)} placeholder="Serviço" style={{ ...mini, flex: 2, minWidth: 120 }} /><input value={v.horas} onChange={(e) => set('horas', frSanQtd(e.target.value))} placeholder="h" style={{ ...mini, width: 52, textAlign: 'center' }} /><input value={v.valorHora} onChange={(e) => set('valorHora', frSanQtd(e.target.value))} placeholder="R$/h" style={{ ...mini, width: 64, textAlign: 'center' }} /></>}
+      {kind === 'peca' && <><input value={v.nome} onChange={(e) => set('nome', e.target.value)} placeholder="Peça" style={{ ...mini, flex: 2, minWidth: 110 }} /><input value={v.sku} onChange={(e) => set('sku', e.target.value)} placeholder="SKU" style={{ ...mini, width: 80 }} /><input value={v.qtd} onChange={(e) => set('qtd', frSanQtd(e.target.value))} placeholder="qtd" style={{ ...mini, width: 48, textAlign: 'center' }} /><input value={v.valor} onChange={(e) => set('valor', frSanQtd(e.target.value))} placeholder="R$ un" style={{ ...mini, width: 64, textAlign: 'center' }} /></>}
+      {kind === 'desloc' && <><input value={v.desc} onChange={(e) => set('desc', e.target.value)} placeholder="Descrição" style={{ ...mini, flex: 2, minWidth: 120 }} /><input value={v.valor} onChange={(e) => set('valor', frSanQtd(e.target.value))} placeholder="R$" style={{ ...mini, width: 70, textAlign: 'center' }} /></>}
       <button onClick={add} disabled={!ok} style={{ all: 'unset', cursor: ok ? 'pointer' : 'not-allowed', display: 'grid', placeItems: 'center', width: 38, height: 38, borderRadius: 9, background: ok ? t.accent : t.elevated, color: ok ? t.onAccent : t.faint, flexShrink: 0 }}><Icon name="plus" size={16} /></button>
     </div>
   );
@@ -491,7 +508,7 @@ function ATContratos({ t, contratos, setContratos, flash }) {
             <div style={{ gridColumn: '1/-1' }}><label style={atLab(t)}>Cliente</label><input value={f.cliente} onChange={(e) => set('cliente', e.target.value)} placeholder="Nome do cliente" style={atField(t)} /></div>
             <div><label style={atLab(t)}>Tipo</label><div style={{ position: 'relative' }}><select value={f.tipo} onChange={(e) => set('tipo', e.target.value)} style={{ ...atField(t), appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}>{['Premium', 'Anual', 'Básico'].map((x) => <option key={x}>{x}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} /></div></div>
             <div><label style={atLab(t)}>SLA</label><input value={f.sla} onChange={(e) => set('sla', e.target.value)} placeholder="4h" style={atField(t)} /></div>
-            <div><label style={atLab(t)}>Equipamentos</label><input value={f.equip} onChange={(e) => set('equip', e.target.value.replace(/[^0-9]/g, ''))} placeholder="1" style={atField(t)} /></div>
+            <div><label style={atLab(t)}>Equipamentos</label><input value={f.equip} onChange={(e) => set('equip', frSanQtd(e.target.value))} placeholder="1" style={atField(t)} /></div>
             <div><label style={atLab(t)}>Preventiva</label><div style={{ position: 'relative' }}><select value={f.prev} onChange={(e) => set('prev', e.target.value)} style={{ ...atField(t), appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}>{['Mensal', 'Trimestral', 'Semestral', 'Anual'].map((x) => <option key={x}>{x}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} /></div></div>
             <div style={{ gridColumn: '1/-1' }}><label style={atLab(t)}>Cobertura</label><input value={f.cobertura} onChange={(e) => set('cobertura', e.target.value)} style={atField(t)} /></div>
             <div><label style={atLab(t)}>Vigência até</label><input value={f.venc} onChange={(e) => set('venc', e.target.value)} placeholder="12/2026" style={atField(t)} /></div>

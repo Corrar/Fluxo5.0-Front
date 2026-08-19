@@ -2,14 +2,37 @@
 // Cada item de uma ordem de separação gera uma etiqueta com código para colar no
 // material; no almoxarifado o leitor (keyboard-wedge) preenche o campo e dá a baixa,
 // trazendo destino, OP e armazém na hora.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateCf, useRef: useRefCf, useEffect: useEffectCf, useMemo: useMemoCf } = React;
 
 const CF_ACCENT = '#2563eb';
 
 // Unidades que aceitam quantidade fracionada (metro, litro, quilo). Qualquer outra → inteiro
 // (default seguro p/ unidades novas/desconhecidas). Espelha DECIMAL_UNITS do backend (requests.controller.ts).
-const DECIMAL_UNITS = new Set(['M', 'MT', 'L', 'KG']);
-const isDecimalUnit = (un) => DECIMAL_UNITS.has(String(un || '').trim().toUpperCase());
+// UNIFICADO no lote V: a régua por unidade vive em `window.FRAdapters.isDecimalUnit`
+// (lib/adapters.js), que por sua vez espelha DECIMAL_UNITS do backend. Havia TRÊS cópias deste
+// Set no front — esta era uma delas. Fallback local no padrão da casa: se a lib não carregou,
+// ninguém quebra, e o default é CONTAGEM (o seguro).
+const isDecimalUnit = (un) => {
+  const f = window.FRAdapters && window.FRAdapters.isDecimalUnit;
+  return f ? f(un) : false;
+};
 // Alvo da conferência = quantidade APROVADA (delivered ?? requested), já resolvida em `it.qtd`
 // pelo adapter. O nome antigo (`pedidaOf`) passou a mentir quando a conferência virou passo da
 // aprovação: o teto do conferente é o que foi aprovado, não o que o setor pediu.
@@ -298,7 +321,7 @@ function ConferenciaEnvioTab({ t, setActive }) {
       const parts = s.split('.');
       s = parts[0] + (parts.length > 1 ? '.' + parts.slice(1).join('').slice(0, 2) : '');
     } else {
-      s = s.replace(/[^0-9]/g, '');
+      s = frSanQtd(s);
     }
     const store = (qtd) => setBiped((b) => ({ ...b, [key]: { ...(b[key] || { just: '' }), qtd } }));
     if (s === '' || s === '.') { store(''); return; }
@@ -900,7 +923,7 @@ function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
   const [step, setStep] = useStateCf('ident');
   const [faltam, setFaltam] = useStateCf(() => order.itens.map(() => ''));
   const [vol, setVol] = useStateCf(String(order.itens.length || 1));
-  const setQ = (i, v) => setFaltam((xs) => xs.map((x, j) => (j === i ? v.replace(/[^0-9]/g, '') : x)));
+  const setQ = (i, v) => setFaltam((xs) => xs.map((x, j) => (j === i ? frSanQtd(v) : x)));
   const fillAll = () => setFaltam(order.itens.map((it) => String(it.qtd)));
   const clearAll = () => setFaltam(order.itens.map(() => '0'));
   const total = faltam.reduce((s, v) => s + (parseInt(v) || 0), 0);
@@ -977,7 +1000,7 @@ function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                   <button onClick={() => setVol(String(Math.max(1, n - 1)))} style={{ all: 'unset', cursor: 'pointer', width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 20, color: t.text, border: `1px solid ${t.border}` }}>–</button>
-                  <input value={vol} onChange={(e) => setVol(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={{ width: 70, height: 44, textAlign: 'center', borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 20, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
+                  <input value={vol} onChange={(e) => setVol(frSanQtd(e.target.value))} inputMode="numeric" style={{ width: 70, height: 44, textAlign: 'center', borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 20, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
                   <button onClick={() => setVol(String(n + 1))} style={{ all: 'unset', cursor: 'pointer', width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 20, color: CF_ACCENT, border: `1px solid ${t.border}` }}>+</button>
                 </div>
               </div>

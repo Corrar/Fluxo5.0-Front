@@ -1,6 +1,23 @@
 // pages_rest.jsx — remaining ERP pages (Tarefas, Elétrica, Avisos, Calculadora,
 // Encomendar 3D, Quadro Gestão, Reposições, Confronto, Controle de Saída,
 // Críticos, Permissões, Auditoria, Painel TI).
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateR } = React;
 
 // ---------- shared: Kanban ----------
@@ -155,10 +172,10 @@ function PageCalculadora({ t }) {
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'stretch' }}>
         <Card t={t} style={{ padding: 24, flex: '1 1 360px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div><label style={lab}>Quantidade</label><input value={qtd} onChange={(e) => setQtd(e.target.value.replace(/[^0-9.]/g, ''))} style={field} /></div>
-            <div><label style={lab}>Custo unitário (R$)</label><input value={custo} onChange={(e) => setCusto(e.target.value.replace(/[^0-9.]/g, ''))} style={field} /></div>
-            <div><label style={lab}>Perda (%)</label><input value={perda} onChange={(e) => setPerda(e.target.value.replace(/[^0-9.]/g, ''))} style={field} /></div>
-            <div><label style={lab}>Margem (%)</label><input value={margem} onChange={(e) => setMargem(e.target.value.replace(/[^0-9.]/g, ''))} style={field} /></div>
+            <div><label style={lab}>Quantidade</label><input value={qtd} onChange={(e) => setQtd(frSanQtd(e.target.value))} style={field} /></div>
+            <div><label style={lab}>Custo unitário (R$)</label><input value={custo} onChange={(e) => setCusto(frSanQtd(e.target.value))} style={field} /></div>
+            <div><label style={lab}>Perda (%)</label><input value={perda} onChange={(e) => setPerda(frSanQtd(e.target.value))} style={field} /></div>
+            <div><label style={lab}>Margem (%)</label><input value={margem} onChange={(e) => setMargem(frSanQtd(e.target.value))} style={field} /></div>
           </div>
         </Card>
         <Card t={t} style={{ padding: 24, flex: '1 1 280px', display: 'flex', flexDirection: 'column', justifyContent: 'center', background: `linear-gradient(135deg, ${t.accent}, ${frHexToRgba(t.accent, 0.7)})`, border: 'none' }}>
@@ -278,7 +295,7 @@ function SolicitarPecaModal({ t, peca, onClose, onConfirm }) {
             <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase', marginBottom: 10 }}>Quantidade desejada</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={() => setQtd((x) => Math.max(1, x - 1))} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', fontSize: 20, fontWeight: 700, color: t.text, border: `1px solid ${t.border}` }}>–</button>
-              <input value={n} onChange={(e) => setQtd(Math.max(1, parseInt(e.target.value.replace(/[^0-9]/g, '')) || 1))} inputMode="numeric" style={{ width: 90, height: 44, textAlign: 'center', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 20, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
+              <input value={n} onChange={(e) => setQtd(frInt(e.target.value, 1))} inputMode="numeric" style={{ width: 90, height: 44, textAlign: 'center', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, fontSize: 20, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
               <button onClick={() => setQtd((x) => x + 1)} style={{ all: 'unset', cursor: 'pointer', width: 44, height: 44, borderRadius: 12, display: 'grid', placeItems: 'center', fontSize: 20, fontWeight: 700, color: t.accentText, border: `1px solid ${t.border}` }}>+</button>
               <span style={{ fontSize: 13, color: t.muted }}>unidades</span>
             </div>
@@ -620,19 +637,28 @@ const cfIsDecimal = (un) => {
 // Mantém no campo o que o operador digitou (dígitos + separador), sem reescrever a cada tecla:
 // "2," é estado intermediário LEGÍTIMO — quem reescreve durante a digitação impede de chegar em
 // "2,5". Quem decide se o valor presta é o cfParseQtd, no submit/render, não o onChange.
-const cfSanitizeQtd = (raw) => String(raw === null || raw === undefined ? '' : raw).replace(/[^0-9.,]/g, '');
+// PROMOVIDOS no lote V para window.FRAdapters (lib/adapters.js) — nasceram aqui no C1 e agora
+// servem as 55 ocorrências que a varredura mapeou. Estes dois viraram alias, com o mesmo fallback
+// local do `cfIsDecimal` acima: se a lib não carregou, ninguém quebra.
+const cfSanitizeQtd = (raw) => {
+  const f = window.FRAdapters && window.FRAdapters.sanitizeQtd;
+  return f ? f(raw) : String(raw === null || raw === undefined ? '' : raw).replace(/[^0-9.,]/g, '');
+};
 
 // String do campo -> número. Vazio = 0 (envio). Inválido = NaN (o chamador decide o que fazer).
 // Vírgula E ponto valem como separador — o operador digita vírgula.
 // DOIS separadores ("2,5,3") são RECUSADOS, não "consertados": reescrever para 2,53 seria a mesma
 // classe de corrupção silenciosa que este lote está matando.
 function cfParseQtd(raw) {
+  const f = window.FRAdapters && window.FRAdapters.parseQtd;
+  if (f) return f(raw);
   const s = String(raw === null || raw === undefined ? '' : raw).trim().replace(',', '.');
   if (s === '') return 0;
-  if (!/^\d*\.?\d*$/.test(s)) return NaN;   // sobrou separador => havia mais de um
-  const n = parseFloat(s);                  // "2." -> 2 (intermediário aceito); "." -> NaN
+  if (!/^\d*\.?\d*$/.test(s)) return NaN;
+  const n = parseFloat(s);
   return Number.isFinite(n) ? n : NaN;
 }
+
 
 // A regra por unidade, num lugar só. Unidade de CONTAGEM com fração é RECUSADA, não arredondada —
 // é a mesma escolha do backend (requests.controller.ts:482 lança VALIDACAO_QTD em vez de arredondar):
@@ -730,7 +756,7 @@ function RepItemRow({ t, it, teto, onSep, readOnly }) {
     : (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         <button onClick={() => set(it.sep - 1)} disabled={it.sep <= 0} style={{ all: 'unset', cursor: it.sep > 0 ? 'pointer' : 'not-allowed', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.muted, opacity: it.sep > 0 ? 1 : 0.4 }}><Icon name="minus" size={16} /></button>
-        <input value={it.sep} onChange={(e) => set(parseInt(String(e.target.value).replace(/[^0-9]/g, '')) || 0)} inputMode="numeric" style={{ boxSizing: 'border-box', width: 64, height: 42, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 17, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
+        <input value={it.sep} onChange={(e) => set(frInt(e.target.value, 0))} inputMode="numeric" style={{ boxSizing: 'border-box', width: 64, height: 42, textAlign: 'center', borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 17, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
         <button onClick={() => set(it.sep + 1)} disabled={it.sep >= maxSep} style={{ all: 'unset', cursor: it.sep < maxSep ? 'pointer' : 'not-allowed', width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: t.panel, border: `1px solid ${t.border}`, color: t.accentText, opacity: it.sep < maxSep ? 1 : 0.4 }}><Icon name="plus" size={16} /></button>
         <span style={{ fontSize: 13, color: t.faint, minWidth: 34, textAlign: 'right' }}>/{it.qtd}</span>
       </div>
@@ -784,7 +810,7 @@ function RepPickerDrawer({ t, rep, produtos, salvando, onClose, onConcluir }) {
     if (inList(c.product_id)) setItens((xs) => xs.filter((i) => i.product_id !== c.product_id));
     else setItens((xs) => xs.concat([{ product_id: c.product_id, sku: c.sku, nome: c.nome, qtd: 1, preco: c.preco, disponivel: c.disponivel }]));
   };
-  const setQtd = (id, v) => setItens((xs) => xs.map((i) => (i.product_id === id ? { ...i, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : i)));
+  const setQtd = (id, v) => setItens((xs) => xs.map((i) => (i.product_id === id ? { ...i, qtd: frInt(v, 1) } : i)));
   const nLista = itens.length;
   return (
     <div onClick={() => !salvando && onClose()} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(8,10,16,.55)', backdropFilter: 'blur(2px)', display: 'flex', justifyContent: 'flex-end' }}>
@@ -1118,7 +1144,7 @@ function RepNovoModal({ t, edit, sugestaoNumero, produtos, salvando, erro, onClo
   const cat = (produtos || []).filter((p) => !ql || p.nome.toLowerCase().includes(ql) || String(p.sku).toLowerCase().includes(ql)).slice(0, 40);
   const naLista = (id) => itens.some((i) => i.product_id === id);
   const addItem = (p) => !naLista(p.product_id) && setItens((xs) => xs.concat([{ ...p, qtd: 1 }]));
-  const setQtd = (id, v) => setItens((xs) => xs.map((i) => (i.product_id === id ? { ...i, qtd: Math.max(1, parseInt(String(v).replace(/[^0-9]/g, '')) || 1) } : i)));
+  const setQtd = (id, v) => setItens((xs) => xs.map((i) => (i.product_id === id ? { ...i, qtd: frInt(v, 1) } : i)));
   const delItem = (id) => setItens((xs) => xs.filter((i) => i.product_id !== id));
   const total = itens.reduce((a, i) => a + i.qtd * i.preco, 0);
   const valid = numero.trim() && cliente.trim() && cidade.trim() && itens.length;

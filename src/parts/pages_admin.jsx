@@ -1,4 +1,21 @@
 // pages_admin.jsx — Entradas, Saídas, Usuários, Relatórios, Placeholder + router.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 import * as XLSX from 'xlsx';   // leitura de planilha .xlsx na Entrada por NF (import de itens)
 const { useState: useStateA } = React;
 
@@ -99,7 +116,14 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
   const [nf, setNf] = useStateA('');
   const [armazem, setArmazem] = useStateA(ARMAZENS[0]);
   const [setor, setSetor] = useStateA('');   // Setor de destino da SAÍDA (enum VALID_SECTORS do backend); '' obriga escolha explícita
-  const [rows, setRows] = useStateA([{ sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }, { sku: '', qtd: '', etiq: '', etiqT: false }]);
+  // ── ETIQUETA DESACOPLADA DA QUANTIDADE (lote V, item 1) ──────────────────────────────────
+  // O campo NASCE COM 1 e NUNCA espelha a quantidade. Antes ele copiava `qtd` a cada tecla
+  // (`etiq: r.etiqT ? r.etiq : v`), então um erro de vírgula na quantidade virava erro de
+  // CONTAGEM DE IMPRESSÃO multiplicado por 10: digitar "16,0" num produto em metros sanitizava
+  // para "160" e a impressora recebia 160 jobs. Foi o que aconteceu de verdade.
+  // Quem quer 160 etiquetas digita 160 — a intenção de imprimir passa a ser explícita.
+  // `etiqT` (o "o operador editou") deixou de existir: sem espelho, não há o que rastrear.
+  const [rows, setRows] = useStateA([{ sku: '', qtd: '', etiq: '1' }, { sku: '', qtd: '', etiq: '1' }, { sku: '', qtd: '', etiq: '1' }]);
   const [drag, setDrag] = useStateA(false);
   const [done, setDone] = useStateA(false);
   // ≥980px: formulário + dropzone à esquerda (sticky) e itens à direita; abaixo disso empilha (mobile).
@@ -109,15 +133,18 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
   const { items: frProdutos, loading: catLoading, error: catError } = window.useFRProducts();
   const prodBySku = (sku) => frProdutos.find((p) => p.sku === sku);
   const filled = rows.filter((r) => r.sku.trim());
-  const totalUn = filled.reduce((s, r) => s + (parseInt(r.qtd) || 0), 0);
-  const totalEtiq = filled.reduce((s, r) => s + (parseInt(r.etiq != null && r.etiq !== '' ? r.etiq : r.qtd) || 0), 0);
+  const totalUn = filled.reduce((s, r) => s + frNumQtd(r.qtd), 0);
+  // ETIQUETA É CONTAGEM DE REPETIÇÃO: continua INTEIRA, mínimo 1 — é o único campo deste lote
+  // onde `parseInt` é o certo. Sem fallback para `qtd`: campo vazio conta 1, não a quantidade.
+  const etiqDe = (r) => frInt(r.etiq, 1);   // CONTAGEM: trunca a fração, piso 1 (lote V)
+  const totalEtiq = filled.reduce((s, r) => s + etiqDe(r), 0);
   const update = (i, k, v) => { setRows((rs) => rs.map((r, j) => {
     if (j !== i) return r;
-    if (k === 'qtd') return { ...r, qtd: v, etiq: r.etiqT ? r.etiq : v };   // etiquetas acompanham a quantidade até serem editadas
-    if (k === 'etiq') return { ...r, etiq: v, etiqT: true };
+    if (k === 'qtd') return { ...r, qtd: v };                 // NÃO toca a etiqueta (lote V)
+    if (k === 'etiq') return { ...r, etiq: v };
     return { ...r, [k]: v };
   })); setDone(false); setAvisoEtiqueta(null); };
-  const addRow = () => setRows((rs) => [...rs, { sku: '', qtd: '', etiq: '', etiqT: false }]);
+  const addRow = () => setRows((rs) => [...rs, { sku: '', qtd: '', etiq: '1' }]);
   const removeRow = (i) => setRows((rs) => (rs.length > 1 ? rs.filter((_, j) => j !== i) : rs));
   // importSample (mock que preenchia rows com SKUs fixos) REMOVIDO — a dropzone agora importa .xlsx real
   // via handleImportXlsx (casa código→product_id no catálogo). Ver dropzone abaixo.
@@ -155,7 +182,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
   const dispDe = (r) => { const p = prodDaRow(r); return p ? Number(p.disp) : null; };
   // Linhas da SAÍDA que estouram o disponível. Só faz sentido no modo saída — ver acima do input.
   const acimaDoDisp = saida
-    ? filled.filter((r) => { const d = dispDe(r); return d != null && Number(r.qtd) > d; })
+    ? filled.filter((r) => { const d = dispDe(r); return d != null && frNumQtd(r.qtd) > d; })
     : [];
   const ql = q.trim().toLowerCase();
   const filtered = q.trim() ? frProdutos.filter((p) => (p.nome || '').toLowerCase().includes(ql) || (p.sku || '').includes(q.trim())) : [];
@@ -163,7 +190,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
     setRows((rs) => {
       if (rs.some((r) => r.product_id && r.product_id === p.product_id)) return rs;   // dedup por product_id
       const idx = rs.findIndex((r) => !r.sku?.trim());
-      const novaRow = { product_id: p.product_id, sku: p.sku, nome: p.nome, un: p.un, qtd: '', etiq: '', etiqT: false };
+      const novaRow = { product_id: p.product_id, sku: p.sku, nome: p.nome, un: p.un, qtd: '', etiq: '1' };
       if (idx >= 0) return rs.map((r, j) => (j === idx ? { ...r, ...novaRow } : r));
       return [...rs, novaRow];
     });
@@ -186,7 +213,9 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
   // Na REIMPRESSÃO o sucesso também é reportado (toast verde): sem isso o operador não sabe se o
   // retry pegou — o sumiço do aviso é sinal fraco demais para caminho crítico.
   const onFlashReimpressao = (kind, msg) => { if (kind === 'error') setAvisoEtiqueta(msg); else setOkMsg(msg); };
-  const itensEtiquetaDeFilled = () => filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: parseInt(r.etiq !== '' && r.etiq != null ? r.etiq : r.qtd) || 0 }));
+  // `faltam` é o número de JOBS que a impressora vai receber (conferencia.jsx enfileira 1 por
+  // etiqueta). Sai do campo de etiqueta e SÓ dele — nunca mais da quantidade.
+  const itensEtiquetaDeFilled = () => filled.map((r) => ({ sku: r.sku, nome: rowName(r), faltam: etiqDe(r) }));
   // Reimpressão NÃO toca no backend. A entrada já foi persistida (o 201 veio ANTES da impressão);
   // repetir o POST duplicaria estoque. Aqui só reenvia o ZPL dos MESMOS itens que já estão na tela.
   const handleReimprimir = async () => {
@@ -209,7 +238,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
     if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
     const invalidRows = filled.filter((r) => !resolvePid(r));
     if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar entrada.'); return; }
-    const qtdRuim = filled.filter((r) => !(Number(r.qtd) > 0));
+    const qtdRuim = filled.filter((r) => { const n = frNumQtd(r.qtd); return !Number.isFinite(n) || !(n > 0); });
     if (qtdRuim.length) { setEnvErro('Todos os itens precisam de quantidade maior que zero.'); return; }
     setEnviando(true);
     try {
@@ -217,7 +246,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
       await window.FRApi.post('/stock/entries', {
         nf_number: nf.trim(),
         type: 'NFe',
-        entries: filled.map((r) => ({ product_id: resolvePid(r), quantity: Number(r.qtd) })),
+        entries: filled.map((r) => ({ product_id: resolvePid(r), quantity: frNumQtd(r.qtd) })),
       });
       // 2. IMPRESSÃO (só após 201) — etiqueta de material ZPL, com NF real + data de hoje.
       const dataEntrada = new Date().toLocaleDateString('pt-BR');
@@ -243,14 +272,14 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
     if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
     const invalidRows = filled.filter((r) => !resolvePid(r));
     if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar entrada.'); return; }
-    const qtdRuim = filled.filter((r) => !(Number(r.qtd) > 0));
+    const qtdRuim = filled.filter((r) => { const n = frNumQtd(r.qtd); return !Number.isFinite(n) || !(n > 0); });
     if (qtdRuim.length) { setEnvErro('Todos os itens precisam de quantidade maior que zero.'); return; }
     setEnviando(true);
     try {
       // ENTRADA de reaproveitamento — SEM nf_number; header carrega a âncora de idempotência.
       await window.FRApi.post('/stock/entries', {
         type: 'REAPROVEITAMENTO',
-        entries: filled.map((r) => ({ product_id: resolvePid(r), quantity: Number(r.qtd) })),
+        entries: filled.map((r) => ({ product_id: resolvePid(r), quantity: frNumQtd(r.qtd) })),
       }, { headers: { 'X-Idempotency-Key': idemKey } });
       // IMPRESSÃO (só após 201) — mesma regra de etiqueta da NF; banner REAPROVEITADO, sem NF.
       const dataEntrada = new Date().toLocaleDateString('pt-BR');
@@ -277,7 +306,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
     if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
     const invalidRows = filled.filter((r) => !resolvePid(r));
     if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar saída.'); return; }
-    const qtdRuim = filled.filter((r) => !(Number(r.qtd) > 0));
+    const qtdRuim = filled.filter((r) => { const n = frNumQtd(r.qtd); return !Number.isFinite(n) || !(n > 0); });
     if (qtdRuim.length) { setEnvErro('Todos os itens precisam de quantidade maior que zero.'); return; }
     // Setor obrigatório e dentro do enum do backend (senão o POST toma 400 "Setor inválido").
     if (!setor || !SETORES_SAIDA.includes(setor)) { setEnvErro('Selecione um setor de destino válido.'); return; }
@@ -308,7 +337,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
       await window.FRApi.post('/stock/manual-withdrawal', {
         sector: setor,
         op_code: op.trim() || undefined,
-        items: filled.map((r) => ({ product_id: resolvePid(r), quantity: Number(r.qtd) })),
+        items: filled.map((r) => ({ product_id: resolvePid(r), quantity: frNumQtd(r.qtd) })),
       }, { headers: { 'X-Idempotency-Key': idemKey } });
       setDone(true);
       setReview(false);                                // só no SUCESSO fecha o modal
@@ -362,9 +391,11 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
         const jaNaLista = rows.some((r) => r.product_id === prod.product_id); // já na lista → não duplica
         if (jaNaLista) { repetidos++; continue; }
         skusVistos.add(prod.product_id);
-        const etiqRaw = String(linha[2] ?? '').trim();               // coluna C; vazia/inválida → usa qtd (B)
-        const etiq = etiqRaw && Number(etiqRaw) > 0 ? etiqRaw : String(qtd);
-        novas.push({ product_id: prod.product_id, sku: prod.sku, nome: prod.nome, un: prod.un, qtd: String(qtd), etiq, etiqT: true });
+        // Coluna C = etiquetas. Vazia/inválida → 1, NÃO a quantidade (lote V): a planilha era o
+        // outro caminho pelo qual a quantidade virava contagem de impressão. Etiqueta é INTEIRA.
+        const etiqRaw = String(linha[2] ?? '').trim();
+        const etiqN = Math.max(1, parseInt(etiqRaw, 10) || 1);
+        novas.push({ product_id: prod.product_id, sku: prod.sku, nome: prod.nome, un: prod.un, qtd: String(qtd), etiq: String(etiqN) });
         importados++;
       }
       setRows((rs) => { const preenchidas = rs.filter((r) => r.sku?.trim()); return [...preenchidas, ...novas]; });
@@ -547,20 +578,20 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
                   Por isso o `onChange` segue IDÊNTICO e o operador continua podendo digitar o que
                   quiser: quem barra é o `handleSaidaConfirmar`, e só no caminho da saída. O bloco
                   abaixo é AVISO, não trava — e só existe quando `saida`.
-                  (O `.replace(/[^0-9]/g,'')` daqui é o mesmo defeito de decimal que o C1 matou no
-                  Confronto. NÃO é consertado neste lote de propósito — está no DIVIDAS como insumo
-                  da varredura pendente. Nada abaixo o piora nem depende dele.) */}
+                  (LOTE V: o `.replace(/[^0-9]/g,'')` que vivia aqui MORREU. O campo agora usa
+                  `frSanQtd`, que mantém o separador visível, e o parse por unidade decide se a
+                  fração vale. Era o mesmo defeito que o C1 matou no Confronto: "2,5" virava "25".) */}
               <div style={{ alignSelf: 'end' }}>
-                <input value={r.qtd} onChange={(e) => update(i, 'qtd', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric"
-                  style={{ ...inp, textAlign: 'center', ...(saida && dispDe(r) != null && Number(r.qtd) > dispDe(r) ? { borderColor: '#ef4444' } : null) }} />
+                <input value={r.qtd} onChange={(e) => update(i, 'qtd', frSanQtd(e.target.value))} placeholder="0" inputMode="numeric"
+                  style={{ ...inp, textAlign: 'center', ...(saida && dispDe(r) != null && frNumQtd(r.qtd) > dispDe(r) ? { borderColor: '#ef4444' } : null) }} />
                 {saida && dispDe(r) != null && (
                   <div style={{ fontSize: 10.5, fontWeight: 700, textAlign: 'center', marginTop: 5,
-                    color: Number(r.qtd) > dispDe(r) ? uiTone(t, 'red').fg : t.faint }}>
-                    {Number(r.qtd) > dispDe(r) ? `Só há ${dispDe(r)} disponível` : `${dispDe(r)} disponível`}
+                    color: frNumQtd(r.qtd) > dispDe(r) ? uiTone(t, 'red').fg : t.faint }}>
+                    {frNumQtd(r.qtd) > dispDe(r) ? `Só há ${dispDe(r)} disponível` : `${dispDe(r)} disponível`}
                   </div>
                 )}
               </div>
-              {isNF && <input value={r.etiq != null && r.etiq !== '' ? r.etiq : (r.etiqT ? '' : r.qtd)} onChange={(e) => update(i, 'etiq', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" title="Quantidade de etiquetas a imprimir" style={{ ...inp, textAlign: 'center', alignSelf: 'end', borderColor: t.accent, color: t.accentText, fontWeight: 800 }} />}
+              {isNF && <input value={r.etiq} onChange={(e) => update(i, 'etiq', frSanQtd(e.target.value))} placeholder="0" inputMode="numeric" title="Quantidade de etiquetas a imprimir" style={{ ...inp, textAlign: 'center', alignSelf: 'end', borderColor: t.accent, color: t.accentText, fontWeight: 800 }} />}
               <button onClick={() => removeRow(i)} title="Remover" style={{ all: 'unset', cursor: 'pointer', width: 40, height: 40, borderRadius: 10, display: 'grid', placeItems: 'center', color: t.muted, alignSelf: 'end' }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = '#ef4444'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}>
@@ -674,7 +705,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
                         {/* PF4: o disponível também AQUI. Na revisão o operador está a um clique da
                             baixa e, sem este número, confirmaria sem ver contra o que é medido. */}
                         {saida && dispDe(r) != null && (
-                          <span data-fr="revisao-disp" style={{ color: Number(r.qtd) > dispDe(r) ? uiTone(t, 'red').fg : t.muted, fontWeight: Number(r.qtd) > dispDe(r) ? 800 : 600 }}>
+                          <span data-fr="revisao-disp" style={{ color: frNumQtd(r.qtd) > dispDe(r) ? uiTone(t, 'red').fg : t.muted, fontWeight: frNumQtd(r.qtd) > dispDe(r) ? 800 : 600 }}>
                             {' · '}{dispDe(r)} disponível
                           </span>
                         )}
@@ -2352,11 +2383,11 @@ function PageMeusPedidosLegacy({ t }) {
   const addMaterial = (p) => { setRows((rs) => (rs.some((r) => r.product_id && r.product_id === p.product_id) ? rs : [...rs, { product_id: p.product_id, sku: p.sku, nome: p.nome, un: p.un, qtd: '1' }])); setQ(''); setSent(false); };
   const updateQ = (i, v) => { setRows((rs) => rs.map((r, j) => (j === i ? { ...r, qtd: v } : r))); setSent(false); };
   const removeRow = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
-  const filledNew = rows.filter((r) => parseInt(r.qtd) > 0);
-  const totalNew = filledNew.reduce((a, r) => a + (parseInt(r.qtd) || 0), 0);
+  const filledNew = rows.filter((r) => frNumQtd(r.qtd) > 0);
+  const totalNew = filledNew.reduce((a, r) => a + frNumQtd(r.qtd), 0);
   const submit = () => {
     if (!filledNew.length) return;
-    const novo = { id: Date.now(), req: 'REQ-PED-' + (7700 + Math.floor(Math.random() * 200)), sol: 'Bruno Teixeira', setor: 'Diretoria', op: op.trim() || 's/ OP', status: 'em-analise', time: 'agora', itens: filledNew.map((r) => ({ nome: rowName(r) || 'Material', sku: r.sku, qtd: parseInt(r.qtd) })) };
+    const novo = { id: Date.now(), req: 'REQ-PED-' + (7700 + Math.floor(Math.random() * 200)), sol: 'Bruno Teixeira', setor: 'Diretoria', op: op.trim() || 's/ OP', status: 'em-analise', time: 'agora', itens: filledNew.map((r) => ({ nome: rowName(r) || 'Material', sku: r.sku, qtd: frNumQtd(r.qtd) })) };
     setItems((xs) => [novo, ...xs]); setRows([]); setOp(''); setSent(true); setFilter('todas');
   };
   const inp = { boxSizing: 'border-box', height: 42, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 13px', fontSize: 13.5, fontFamily: 'inherit', outline: 'none', width: '100%' };
@@ -2425,7 +2456,7 @@ function PageMeusPedidosLegacy({ t }) {
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 11, background: t.elevated, border: `1px solid ${notFound ? '#ef4444' : t.border}` }}>
                   <span style={{ width: 34, height: 34, borderRadius: 9, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={16} /></span>
                   <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nm || 'Produto não encontrado'}</div><div style={{ fontSize: 11, color: t.muted }}>SKU {r.sku}</div></div>
-                  <input value={r.qtd} onChange={(e) => updateQ(i, e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={{ ...inp, width: 76, height: 38, textAlign: 'center' }} />
+                  <input value={r.qtd} onChange={(e) => updateQ(i, frSanQtd(e.target.value))} inputMode="numeric" style={{ ...inp, width: 76, height: 38, textAlign: 'center' }} />
                   <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>un</span>
                   <button onClick={() => removeRow(i)} title="Remover" style={{ all: 'unset', cursor: 'pointer', width: 36, height: 36, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
                     onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = '#ef4444'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.muted; }}><Icon name="trash" size={16} /></button>

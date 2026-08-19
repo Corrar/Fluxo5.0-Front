@@ -1,6 +1,23 @@
 // compras.jsx — Módulo Compras (SIGACOM-like, stateful): Solicitação de Compra (SC)
 // → Cotação (mapa comparativo) → Pedido de Compra (PC) com aprovação por alçada →
 // Recebimento (entrada/conferência). Fornecedores e fila central de aprovações.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateCP } = React;
 const CP_ACCENT = '#db2777', CP_ACCENT_T = '#f472b6';
 const cpInitials = (n) => (n || '?').split(' ').map((x) => x[0]).slice(0, 2).join('').toUpperCase();
@@ -173,7 +190,7 @@ function CPNovaSC({ t, onClose, onCreate }) {
         <div><label style={cpLab(t)}>Solicitante</label><input value={f.solicitante} onChange={(e) => set('solicitante', e.target.value)} style={cpField(t)} /></div>
         <div><label style={cpLab(t)}>Setor</label><input value={f.setor} onChange={(e) => set('setor', e.target.value)} placeholder="Usinagem" style={cpField(t)} /></div>
         <div style={{ gridColumn: '1/-1' }}><label style={cpLab(t)}>Material</label><input value={f.item} onChange={(e) => set('item', e.target.value)} placeholder="Ex: Chapa Aço 1020 2mm" style={cpField(t)} /></div>
-        <div><label style={cpLab(t)}>Quantidade</label><input value={f.qtd} onChange={(e) => set('qtd', e.target.value.replace(/[^0-9]/g, ''))} style={cpField(t)} /></div>
+        <div><label style={cpLab(t)}>Quantidade</label><input value={f.qtd} onChange={(e) => set('qtd', frSanQtd(e.target.value))} style={cpField(t)} /></div>
         <div><label style={cpLab(t)}>Unidade</label><div style={{ position: 'relative' }}><select value={f.un} onChange={(e) => set('un', e.target.value)} style={{ ...cpField(t), appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}>{['un', 'm', 'ch', 'lt', 'kg', 'br', 'cx', 'par'].map((u) => <option key={u}>{u}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} /></div></div>
         <div style={{ gridColumn: '1/-1' }}>
           <label style={cpLab(t)}>Prioridade</label>
@@ -366,7 +383,7 @@ function CPConferencia({ t, pc, onClose, onConfirm }) {
   const [linhas, setLinhas] = useStateCP(pc.itens.map((i) => ({ ...i, receb: i.qtd })));
   const [doc, setDoc] = useStateCP('');
   const [vencimento, setVencimento] = useStateCP(venc);
-  const setReceb = (idx, v) => setLinhas((xs) => xs.map((l, i) => (i === idx ? { ...l, receb: Math.max(0, +String(v).replace(/[^0-9]/g, '') || 0) } : l)));
+  const setReceb = (idx, v) => setLinhas((xs) => xs.map((l, i) => (i === idx ? { ...l, receb: Math.max(0, +frSanQtd(v) || 0) } : l)));
   const totalPedido = linhas.reduce((a, l) => a + l.qtd * l.valor, 0);
   const totalReceb = linhas.reduce((a, l) => a + l.receb * l.valor, 0);
   const divergencias = linhas.filter((l) => l.receb !== l.qtd).length;
@@ -637,11 +654,11 @@ function CPContratos({ t, contratos, setContratos, forn, flash }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <div style={{ gridColumn: '1/-1' }}><label style={cpLab(t)}>Fornecedor</label><div style={{ position: 'relative' }}><select value={f.forn} onChange={(e) => set('forn', e.target.value)} style={{ ...cpField(t), appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}><option value="">Selecione…</option>{forn.map((x) => <option key={x.id} value={x.nome}>{x.nome}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} /></div></div>
             <div style={{ gridColumn: '1/-1' }}><label style={cpLab(t)}>Item</label><input value={f.item} onChange={(e) => set('item', e.target.value)} placeholder="Ex: Chapa Aço 1020 2mm" style={cpField(t)} /></div>
-            <div><label style={cpLab(t)}>Preço negociado</label><input value={f.preco} onChange={(e) => set('preco', e.target.value.replace(/[^0-9.]/g, ''))} placeholder="0,00" style={cpField(t)} /></div>
+            <div><label style={cpLab(t)}>Preço negociado</label><input value={f.preco} onChange={(e) => set('preco', frSanQtd(e.target.value))} placeholder="0,00" style={cpField(t)} /></div>
             <div><label style={cpLab(t)}>Unidade</label><div style={{ position: 'relative' }}><select value={f.un} onChange={(e) => set('un', e.target.value)} style={{ ...cpField(t), appearance: 'none', WebkitAppearance: 'none', paddingRight: 32, cursor: 'pointer' }}>{['un', 'm', 'ch', 'lt', 'kg', 'br'].map((u) => <option key={u}>{u}</option>)}</select><Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} /></div></div>
             <div><label style={cpLab(t)}>Início</label><input value={f.inicio} onChange={(e) => set('inicio', e.target.value)} placeholder="01/2026" style={cpField(t)} /></div>
             <div><label style={cpLab(t)}>Fim</label><input value={f.fim} onChange={(e) => set('fim', e.target.value)} placeholder="12/2026" style={cpField(t)} /></div>
-            <div style={{ gridColumn: '1/-1' }}><label style={cpLab(t)}>Volume contratado (qtd)</label><input value={f.total} onChange={(e) => set('total', e.target.value.replace(/[^0-9]/g, ''))} placeholder="Ex: 600" style={cpField(t)} /></div>
+            <div style={{ gridColumn: '1/-1' }}><label style={cpLab(t)}>Volume contratado (qtd)</label><input value={f.total} onChange={(e) => set('total', frSanQtd(e.target.value))} placeholder="Ex: 600" style={cpField(t)} /></div>
           </div>
         </CPModal>
       )}

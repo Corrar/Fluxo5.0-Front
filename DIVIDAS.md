@@ -1166,3 +1166,86 @@ promessa de um DOCUMENTO; soltá-la por fora deixa o documento sem lastro. O que
 para o documento, onde a ação significa alguma coisa. Provado por ausência **com controle
 positivo** (PF6): os links existem, logo o painel renderizou, logo a ausência dos botões é ausência
 de verdade e não tela vazia.
+
+## LOTE V — as 160 etiquetas: a quantidade ERA a contagem, por desenho
+
+### O incidente
+
+O Bruno mandou imprimir a identificação de um cabo em **metro** e a impressora cuspiu **160
+etiquetas**. Não foi bug de impressora nem de driver. Foram duas decisões somadas:
+
+1. **A etiqueta espelhava a quantidade por desenho.** Em `pages_admin.jsx`, o campo de etiqueta
+   nascia com o valor da quantidade e era reescrito a cada digitação dela. Quem quisesse 1
+   etiqueta de 16 metros não tinha como pedir.
+2. **O saneamento do campo comia a vírgula.** `String(v).replace(/[^0-9]/g, '')` transforma
+   `"16,0"` em `"160"`. Não é truncamento — é **multiplicação por 10**.
+
+`16,0` metros → `160` → 160 etiquetas. As duas isoladas seriam suportáveis; juntas, viraram um
+rolo de etiquetas.
+
+**A etiqueta é CONTAGEM DE REPETIÇÃO**, não quantidade. Continua inteira, com piso 1, e nasce
+`1` — desacoplada. Quem quer 160 digita 160.
+
+### A varredura: 55 ocorrências, 4 regras, 3 formas do mesmo erro
+
+A recon achou **55 ocorrências** de parse numérico em **13 arquivos**, em três variantes:
+
+| forma | o que come | efeito em pt-BR |
+|---|---|---|
+| `[^0-9]` | vírgula **e** ponto | `"2,5"` → `25` — **×10** |
+| `[^0-9.]` | só a vírgula | `"2,5"` → `25` — **×10** (idêntico, para quem digita com vírgula) |
+| `[^0-9,]` | só o ponto | `"2.5"` → `25` — ×10 para quem digita com ponto |
+| `[^0-9.,]` | nada | correto |
+
+As quatro regras que substituíram isso vivem em `lib/adapters.js` e entram nos arquivos por alias
+locais (`frSanQtd` / `frNumQtd` / `frInt`), no mesmo padrão de fallback do resto da casa.
+
+**O comportamento do C1 foi preservado byte a byte: RECUSA, nunca arredonda nem reescreve.**
+`"2,5,3"` devolve `NaN` — não `2.53`, não `25`. Arredondar em silêncio é o que transforma erro de
+digitação em movimento de estoque errado.
+
+### O que NÃO foi tocado
+
+As **8 máscaras `\D`** (número de NF, código de usuário, hora) são de campos de **texto formatado**,
+não de quantidade — nelas comer tudo que não é dígito é o comportamento certo. 6 estão em arquivos
+que o lote tocou e ficaram byte a byte iguais ao HEAD; as outras 2 (`auth.jsx`, `pedidos.jsx`)
+estão em arquivos que o lote nunca abriu. Há controle de regressão provando as duas coisas.
+
+`conferencia.jsx:320` e `:1072` também ficaram: fazem `.replace(',', '.')` **antes** do
+`[^0-9.]`, então a vírgula já virou ponto e nada se perde.
+
+### O campo consertado e o payload esquecido
+
+Depois do item 3 o campo aceitava `"16,0"` corretamente — e a prova V1 **regrediu para 0
+etiquetas**. Causa: `handleEntradaImprimir` validava com `Number(r.qtd) > 0`, e `Number("16,0")`
+é `NaN`. O submit morria antes de chegar à impressora.
+
+O defeito trocou de forma em vez de morrer: de ×10 para submit travado. É exatamente a **régua do
+C1**, e ela custou uma segunda rodada aqui:
+
+**Consertar o campo sem converter o PAYLOAD não conserta nada. Toda tela tocada precisa de prova
+de CORPO — o que chega ao servidor tem de ser número.** Há prova de payload nos três formulários
+de `pages_admin.jsx`, com o controle negativo `Number("2,5") = NaN` explícito.
+
+### DÍVIDA ABERTA — o banco sempre aceitou fração, e ainda há histórico
+
+As colunas de quantidade são `numeric`: `2.5` parafusos sempre foi válido para o Postgres. A régua
+de unidade agora existe nos 5 pontos de escrita do backend (ver `DIVIDAS.md` do backend), mas
+**vale só para escrita nova**. O que já está gravado com fração em unidade de contagem continua lá.
+
+**Não foi medido quanto é.** Medir e decidir (corrigir, arredondar com trilha, ou deixar como
+registro histórico) é lote próprio — não se conserta dado antigo por efeito colateral de uma
+guarda de entrada.
+
+### RÉGUA — corrigir a entrada MOVE o problema para a validação a jusante
+
+Vale além deste lote, e custou uma rodada inteira aqui.
+
+Consertado o saneamento, o campo passou a aceitar `"16,0"` corretamente — e a V1 **regrediu de
+1 job para 0**. `handleEntradaImprimir` validava com `Number(r.qtd) > 0`, e `Number("16,0")` é
+`NaN`: o submit morria antes de chegar à impressora. O defeito não morreu, **trocou de forma** —
+de ×10 para submit travado, e a segunda forma é mais silenciosa que a primeira.
+
+**Toda correção de entrada exige prova das DUAS pontas: o que o campo aceita e o que o corpo
+manda.** A prova de payload deste lote existe exatamente por causa disso, com o controle negativo
+`Number("2,5") = NaN` escrito nela.

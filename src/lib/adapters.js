@@ -42,6 +42,65 @@
     return DECIMAL_UNITS.has(String(un === null || un === undefined ? '' : un).trim().toUpperCase());
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════════════════════
+  // QUANTIDADE DIGITADA — o parse do C1, PROMOVIDO a helper único (lote V, item 2).
+  // ═══════════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Nasceu local em `pages_rest.jsx` (lote C1) e provou-se ali. Sobe para cá SEM MUDAR UMA LINHA
+  // de comportamento — é a mesma função, no lugar onde todo part alcança. As 55 ocorrências que a
+  // varredura mapeou passam a chamar isto em vez de cada uma inventar o seu `replace`.
+  //
+  // O DEFEITO QUE ISTO MATA: `.replace(/[^0-9]/g,'')` antes do parse come a vírgula. "2,5" vira
+  // "25" — DEZ VEZES o valor, não 2. Não é truncamento, é MULTIPLICAÇÃO. Mediram-se 4 regras
+  // diferentes espalhadas pelo front, e três delas erram: `[^0-9]` mata vírgula e ponto,
+  // `[^0-9.]` mata a vírgula (o mesmo ×10 para quem digita em pt-BR), `[^0-9,]` mata o ponto.
+
+  // Mantém no campo o que o operador digitou (dígitos + separador), sem reescrever a cada tecla:
+  // "2," é estado intermediário LEGÍTIMO — quem reescreve durante a digitação impede de chegar em
+  // "2,5". Quem decide se o valor presta é o parseQtd, no submit/render, não o onChange.
+  function sanitizeQtd(raw) {
+    return String(raw === null || raw === undefined ? '' : raw).replace(/[^0-9.,]/g, '');
+  }
+
+  // String do campo -> número. Vazio = 0. Inválido = NaN (o chamador decide o que fazer).
+  // Vírgula E ponto valem como separador — o operador digita vírgula.
+  // DOIS separadores ("2,5,3") são RECUSADOS, não "consertados": reescrever para 2,53 seria a
+  // mesma classe de corrupção silenciosa que este lote está matando.
+  function parseQtd(raw) {
+    const s = String(raw === null || raw === undefined ? '' : raw).trim().replace(',', '.');
+    if (s === '') return 0;
+    if (!/^\d*\.?\d*$/.test(s)) return NaN;   // sobrou separador => havia mais de um
+    const n = parseFloat(s);                    // "2." -> 2 (intermediário aceito); "." -> NaN
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  // A regra POR UNIDADE, num lugar só. Unidade de CONTAGEM com fração é RECUSADA, não arredondada
+  // — a mesma escolha do backend (requests.controller.ts lança VALIDACAO_QTD em vez de arredondar):
+  // arredondar decide pelo operador uma quantidade que ele não digitou.
+  // Devolve { ok, valor, erro } para o chamador montar a mensagem que a tela dele precisa.
+  function validarQtd(raw, unidade) {
+    const n = parseQtd(raw);
+    if (Number.isNaN(n)) return { ok: false, valor: NaN, erro: 'Quantidade inválida.' };
+    if (n <= 0) return { ok: false, valor: n, erro: 'Informe uma quantidade maior que zero.' };
+    if (!isDecimalUnit(unidade) && n !== Math.trunc(n)) {
+      return { ok: false, valor: n, erro: `Unidade "${String(unidade || '').trim() || 'UN'}" não aceita fração — use um número inteiro.` };
+    }
+    return { ok: true, valor: n, erro: null };
+  }
+
+  // Etiqueta / repetição: INTEIRO, mínimo 1. É o oposto do parseQtd, e existe para que ninguém
+  // use o parse decimal onde o número é CONTAGEM DE REPETIÇÃO (foi assim que a quantidade virou
+  // 160 etiquetas). Ver lote V, item 1.
+  // ⚠ TRUNCA pelo parseQtd, NÃO faz replace(/[^0-9]/g). A 1ª versão deste helper usava o replace
+  // e "2,5" virava 25 — a MESMA multiplicação que o lote existe para matar, agora escondida num
+  // helper compartilhado. Contagem com fração é truncada (2,5 etiquetas -> 2), nunca multiplicada.
+  function parseContagem(raw, minimo) {
+    const piso = minimo === undefined ? 1 : minimo;
+    const n = parseQtd(raw);
+    if (!Number.isFinite(n)) return piso;
+    return Math.max(piso, Math.trunc(n));
+  }
+
   // unit_price (number) → 'R$ x,xx' pt-BR, 2 casas (mesmo formato do mock do design).
   function formatBRL(v) {
     return 'R$ ' + parseNumber(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -125,5 +184,6 @@
     };
   }
 
-  window.FRAdapters = { productToCard, parseNumber, formatBRL, parseTags, tagToKind, isDecimalUnit, DECIMAL_UNITS };
+  window.FRAdapters = { productToCard, parseNumber, formatBRL, parseTags, tagToKind, isDecimalUnit, DECIMAL_UNITS,
+    sanitizeQtd, parseQtd, validarQtd, parseContagem };
 })();

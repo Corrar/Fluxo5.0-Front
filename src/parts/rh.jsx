@@ -1,4 +1,21 @@
 // rh.jsx — Módulo RH (Recursos Humanos). Accent âmbar.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateRH } = React;
 const RH_ACCENT = '#d97706', RH_ACCENT_T = '#fbbf24';
 
@@ -417,7 +434,7 @@ function ColabModal({ t, colab, onClose, onSave, onDemitir }) {
             <div><label style={lab}>Setor</label>{sel(setor, setSetor, RH_SETORES)}</div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
-            <div><label style={lab}>Salário (R$)</label><input value={salario} onChange={(e) => setSalario(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="2500" style={field} /><div style={{ fontSize: 11.5, fontWeight: 700, color: t.accentText, marginTop: 5 }}>{fmtSal(salario)}</div></div>
+            <div><label style={lab}>Salário (R$)</label><input value={salario} onChange={(e) => setSalario(frSanQtd(e.target.value))} inputMode="numeric" placeholder="2500" style={field} /><div style={{ fontSize: 11.5, fontWeight: 700, color: t.accentText, marginTop: 5 }}>{fmtSal(salario)}</div></div>
             <div><label style={lab}>Regime</label>{sel(regime, setRegime, ['CLT', 'PJ'])}</div>
           </div>
           {!novo && <div><label style={lab}>Situação</label>{sel(status, setStatus, ['ativo', 'ferias', 'afastado', 'desligado'])}</div>}
@@ -1004,7 +1021,7 @@ function RHFolha({ t }) {
           <div style={{ flex: 1, minWidth: 160 }}><div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>Adicional noturno</div><div style={{ fontSize: 11.5, color: t.muted }}>Período e percentual aplicados ao cálculo.</div></div>
           <label style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>Início <input value={night.ini} onChange={(e) => setNight((n) => ({ ...n, ini: e.target.value }))} style={{ ...nf, width: 78, marginLeft: 6 }} /></label>
           <label style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>Fim <input value={night.fim} onChange={(e) => setNight((n) => ({ ...n, fim: e.target.value }))} style={{ ...nf, width: 78, marginLeft: 6 }} /></label>
-          <label style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>Adicional <input value={night.pct} onChange={(e) => setNight((n) => ({ ...n, pct: parseInt(e.target.value.replace(/[^0-9]/g, '')) || 0 }))} style={{ ...nf, width: 64, marginLeft: 6 }} />%</label>
+          <label style={{ fontSize: 11, fontWeight: 700, color: t.muted }}>Adicional <input value={night.pct} onChange={(e) => setNight((n) => ({ ...n, pct: frInt(e.target.value, 0) }))} style={{ ...nf, width: 64, marginLeft: 6 }} />%</label>
         </div>
       </Card>
 
@@ -1084,12 +1101,12 @@ function FolhaAjusteModal({ t, colab, adj, api, diaria, valorHora, night, onClos
               <div style={{ fontSize: 17, fontWeight: 850, color: t.text, marginTop: 6 }}>{api ? api.he100 : 0}<span style={{ fontSize: 12, color: t.muted, fontWeight: 600 }}>h</span></div>
               <div style={{ fontSize: 11, fontWeight: 700, color: uiTone(t, 'green').fg, marginTop: 3 }}>+ {fmt(p100)}</div>
             </div>
-            <div><label style={lab}>Horas noturnas</label><input value={hnot} onChange={(e) => setHnot(e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" placeholder="0h" style={field} /><div style={{ fontSize: 11, fontWeight: 700, color: uiTone(t, 'green').fg, marginTop: 5 }}>+ {fmt(pnot)} <span style={{ color: t.faint }}>({night.pct}%)</span></div></div>
+            <div><label style={lab}>Horas noturnas</label><input value={hnot} onChange={(e) => setHnot(frSanQtd(e.target.value))} inputMode="decimal" placeholder="0h" style={field} /><div style={{ fontSize: 11, fontWeight: 700, color: uiTone(t, 'green').fg, marginTop: 5 }}>+ {fmt(pnot)} <span style={{ color: t.faint }}>({night.pct}%)</span></div></div>
           </div>
 
           {!viaja && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
-              <div><label style={lab}>Atraso (minutos)</label><input value={atrasoMin} onChange={(e) => setAtrasoMin(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="0" style={field} /><div style={{ fontSize: 11, fontWeight: 700, color: t.muted, marginTop: 5 }}>minuto = {fmt(valorMin)}</div></div>
+              <div><label style={lab}>Atraso (minutos)</label><input value={atrasoMin} onChange={(e) => setAtrasoMin(frSanQtd(e.target.value))} inputMode="numeric" placeholder="0" style={field} /><div style={{ fontSize: 11, fontWeight: 700, color: t.muted, marginTop: 5 }}>minuto = {fmt(valorMin)}</div></div>
               <div><label style={lab}>Desconto do atraso (R$)</label><div style={{ ...field, display: 'flex', alignItems: 'center', background: t.elevated, color: descAtr ? uiTone(t, 'red').fg : t.muted, fontWeight: 800 }}>{descAtr ? '- ' + fmt(descAtr) : fmt(0)}</div><div style={{ fontSize: 11, fontWeight: 700, color: t.faint, marginTop: 5 }}>{parseInt(atrasoMin) || 0} min × {fmt(valorMin)}</div></div>
             </div>
           )}
@@ -1183,7 +1200,7 @@ function PontoEditModal({ t, row, jornadas, onClose, onSave }) {
           {vale && (
             <div style={{ marginTop: 12 }}>
               <label style={lab}>Valor do vale (R$ / mês)</label>
-              <input value={valeVal} onChange={(e) => setValeVal(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="600" style={{ ...field, maxWidth: 200 }} />
+              <input value={valeVal} onChange={(e) => setValeVal(frSanQtd(e.target.value))} inputMode="numeric" placeholder="600" style={{ ...field, maxWidth: 200 }} />
             </div>
           )}
         </div>
@@ -1330,8 +1347,8 @@ function RHDebitoModal({ t, onClose, onSave }) {
           </div>
           <div><label style={lab}>Descrição</label><input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Ex: Adiantamento salarial" style={field} /></div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ flex: 1 }}><label style={lab}>Valor total (R$)</label><input value={total} onChange={(e) => setTotal(e.target.value.replace(/[^0-9.,]/g, ''))} inputMode="decimal" placeholder="0,00" style={field} /></div>
-            <div style={{ width: 120 }}><label style={lab}>Parcelas</label><input value={parcelas} onChange={(e) => setParcelas(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
+            <div style={{ flex: 1 }}><label style={lab}>Valor total (R$)</label><input value={total} onChange={(e) => setTotal(frSanQtd(e.target.value))} inputMode="decimal" placeholder="0,00" style={field} /></div>
+            <div style={{ width: 120 }}><label style={lab}>Parcelas</label><input value={parcelas} onChange={(e) => setParcelas(frSanQtd(e.target.value))} inputMode="numeric" style={field} /></div>
           </div>
           {nTotal > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 11, background: t.accentSoft, color: t.accentText, fontSize: 13, fontWeight: 700 }}><Icon name="calculator" size={16} /> {nParc}x de R$ {valorParc.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} descontadas em folha</div>}
         </div>

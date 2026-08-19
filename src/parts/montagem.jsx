@@ -26,6 +26,23 @@
 // notificação de parada aos setores (notifications é órfã — parada é ESTADO, com motivo e setor
 // gravados) e a transição 'concluida' (o backend recusa com 400 e a UI nem oferece).
 
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateMT } = React;
 const MT_ACCENT = '#7c3aed', MT_ACCENT_T = '#a78bfa';
 
@@ -290,7 +307,7 @@ function MTDetail({ t, id, onClose, onChanged }) {
   const delItem = (gi, ii) => mutar((c) => { c[gi].itens.splice(ii, 1); });
   const addGrupo = (nome) => mutar((c) => { if (c.length < MT_MAX_GRUPOS) c.push({ nome: nome.slice(0, MT_MAX_NOME), peso: 10, itens: [] }); });
   const delGrupo = (gi) => mutar((c) => { c.splice(gi, 1); });
-  const setPeso = (gi, v) => mutar((c) => { const n = Math.max(0, Math.min(100, parseInt(String(v).replace(/[^0-9]/g, '')) || 0)); c[gi].peso = n; });
+  const setPeso = (gi, v) => mutar((c) => { const n = Math.max(0, Math.min(100, frInt(v, 0))); c[gi].peso = n; });
 
   const salvar = function () {
     if (busy) return;

@@ -21,6 +21,23 @@
 //     `usage_note`, texto livre escrito por gente, editável e honesto sobre ser uma anotação.
 //   • O CARD "Monitoramento" com "próx. cobrança 01/08" cravado — a data agora sai de
 //     next_billing, e quando não houver nenhuma a tela diz isso em vez de inventar.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateDC } = React;
 
 const DC_CATS = {
@@ -271,7 +288,7 @@ function DevCustosReal({ t }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, marginLeft: 'auto' }}>
                 {editId === s.id ? (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <input autoFocus value={editVal} onChange={(e) => setEditVal(e.target.value.replace(/[^0-9,.]/g, ''))}
+                    <input autoFocus value={editVal} onChange={(e) => setEditVal(frSanQtd(e.target.value))}
                       onKeyDown={(e) => { if (e.key === 'Enter') salvarEdit(s); if (e.key === 'Escape') setEditId(null); }}
                       style={{ ...field, width: 110, height: 38, textAlign: 'right', fontWeight: 800 }} />
                     <button onClick={() => salvarEdit(s)} style={{ all: 'unset', cursor: 'pointer', width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: grn.fg, color: '#fff' }}><Icon name="check" size={14} /></button>
@@ -320,7 +337,7 @@ function DevCustosReal({ t }) {
                   <Icon name="chevronDown" size={13} style={{ position: 'absolute', right: 11, top: 15, color: t.muted, pointerEvents: 'none' }} />
                 </div>
               </div>
-              <input value={form.value} onChange={(e) => setForm((s) => ({ ...s, value: e.target.value.replace(/[^0-9,.]/g, '') }))} onKeyDown={(e) => e.key === 'Enter' && salvarNovo()}
+              <input value={form.value} onChange={(e) => setForm((s) => ({ ...s, value: frSanQtd(e.target.value) }))} onKeyDown={(e) => e.key === 'Enter' && salvarNovo()}
                 placeholder={form.cycle === 'anual' ? 'Valor ANUAL · ex: 264,00' : 'Valor mensal · ex: 189,90'} inputMode="decimal" style={field} />
               <input type="date" value={form.next_billing} onChange={(e) => setForm((s) => ({ ...s, next_billing: e.target.value }))} style={field} />
               <input value={form.usage_note} onChange={(e) => setForm((s) => ({ ...s, usage_note: e.target.value }))} placeholder="Anotação de uso (opcional)" style={field} />

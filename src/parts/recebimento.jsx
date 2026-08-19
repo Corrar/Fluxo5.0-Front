@@ -13,6 +13,23 @@
 // FORA desta tela (decisão A + sem coluna): observação por item, "conferido" item a item e a
 // divergência enviado-vs-recebido do mock. O backend não tem campo pra nenhum dos três; o que ele
 // entende é "recebi N de M", e é isso que a tela coleta. Ver RC_GAPS no fim.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 const { useState: useStateRC } = React;
 
 // Agrupa as linhas da fila (1 por item) em cards (1 por separação), preservando a ordem do backend.
@@ -35,7 +52,7 @@ function RCEnvioCard({ t, env, onConfirm, busy }) {
   const [qtds, setQtds] = useStateRC(() => {
     const o = {}; env.itens.forEach((it) => { o[it.item_id] = String(window.pgNum(it.pendente)); }); return o;
   });
-  const set = (id, v) => setQtds((s) => ({ ...s, [id]: v.replace(/[^0-9]/g, '') }));
+  const set = (id, v) => setQtds((s) => ({ ...s, [id]: frSanQtd(v) }));
   const marcados = env.itens.filter((it) => (parseInt(qtds[it.item_id]) || 0) > 0);
   const acima = env.itens.filter((it) => (parseInt(qtds[it.item_id]) || 0) > window.pgNum(it.pendente));
   const podeConfirmar = marcados.length > 0 && acima.length === 0 && !busy;

@@ -4,6 +4,23 @@
 // hero de patrimônio + form de novo produto + busca/filtro/grid + modais de edição,
 // inventário e relatório — tudo sobre useFRProducts (GET /products real). O seed PRODUTOS
 // do protótipo MORREU: as tags dos chips agora derivam dos produtos carregados.
+
+// ── PARSE NUMÉRICO (lote V) ──────────────────────────────────────────────────────────────────
+// Alias locais para os helpers únicos de `window.FRAdapters` (lib/adapters.js), no mesmo padrão de
+// fallback do resto da casa: se a lib não carregou, ninguém quebra.
+//   frSanQtd  mantém dígitos + separador enquanto o operador digita ("2," é intermediário legítimo)
+//   frNumQtd  string -> número, vírgula OU ponto; recusa dois separadores em vez de "consertar"
+//   frInt     contagem: TRUNCA a fração, nunca multiplica; piso configurável
+const frSanQtd = (v) => (window.FRAdapters && window.FRAdapters.sanitizeQtd
+  ? window.FRAdapters.sanitizeQtd(v)
+  : String(v === null || v === undefined ? '' : v).replace(/[^0-9.,]/g, ''));
+const frNumQtd = (v) => (window.FRAdapters && window.FRAdapters.parseQtd
+  ? window.FRAdapters.parseQtd(v)
+  : parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')));
+const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
+  ? window.FRAdapters.parseContagem(v, piso)
+  : Math.max(piso === undefined ? 1 : piso, Math.trunc(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.')) || 0)));
+
 import * as XLSX from 'xlsx';   // SheetJS (já usado na Entrada por NF): modelo e parse do inventário
 const { useState: useStateM, useRef: useRefM, useMemo: useMemoM } = React;
 
@@ -17,7 +34,7 @@ const { useState: useStateM, useRef: useRefM, useMemo: useMemoM } = React;
 // banco. Agora as tags derivam dos produtos CARREGADOS (frTagsDe, abaixo); a cor continua no
 // mesmo mapa de sempre (FRAdapters.tagToKind).
 const UNIDADES = ['un', 'm', 'ch', 'lt', 'kg', 'par', 'br', 'cx', 'pç', 'rolo'];
-function parsePreco(s) { return parseFloat(String(s).replace(/[^0-9,]/g, '').replace(',', '.')) || 0; }
+function parsePreco(s) { return parseFloat(frSanQtd(s).replace(',', '.')) || 0; }
 
 // Tags REAIS: todas as etiquetas dos produtos carregados (não só a 1ª de cada um), únicas,
 // maiúsculas, com a cor do mapa canônico. Fonte única dos chips do form e do modal de edição.
@@ -256,7 +273,7 @@ function NovoProdutoForm({ t, brand, onCreated, produtos = [], flat }) {
               <Icon name="chevronDown" size={15} style={{ position: 'absolute', right: 11, top: 13, color: t.muted, pointerEvents: 'none' }} />
             </div>
           </div>
-          <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input value={minimo} onChange={(e) => setMinimo(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={field} /></div>
+          <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input value={minimo} onChange={(e) => setMinimo(frSanQtd(e.target.value))} placeholder="0" inputMode="numeric" style={field} /></div>
         </div>
         <div>
           <label style={lab}>Categorias e etiquetas</label>
@@ -372,7 +389,7 @@ function EditProdutoModal({ t, prod, produtos, onClose, onSaved }) {
               <label style={lab}>Unidade</label>
               <div style={{ position: 'relative' }}><select value={f.un} onChange={(e) => set('un', e.target.value)} style={{ ...field, appearance: 'none', WebkitAppearance: 'none', paddingRight: 28, cursor: 'pointer' }}>{UNIDADES.map((u) => <option key={u}>{u}</option>)}</select><Icon name="chevronDown" size={14} style={{ position: 'absolute', right: 10, top: 14, color: t.muted, pointerEvents: 'none' }} /></div>
             </div>
-            <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input value={f.minimo} onChange={(e) => set('minimo', e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" style={field} /></div>
+            <div style={{ width: 96 }}><label style={lab}>Mínimo</label><input value={f.minimo} onChange={(e) => set('minimo', frSanQtd(e.target.value))} inputMode="numeric" style={field} /></div>
             <div style={{ flex: 1 }}><label style={lab}>Valor unitário</label><input value={f.preco} onChange={(e) => set('preco', e.target.value)} inputMode="decimal" placeholder="0,00" style={field} /></div>
           </div>
           <div style={{ fontSize: 11.5, color: t.faint }}>Saldo (disponível/física) não se edita aqui: estoque muda por entrada, saída ou ajuste — nunca pelo cadastro.</div>
@@ -576,8 +593,14 @@ function frNormSku(v) {
 // use 'M'). A TELA NUNCA PODE SER MAIS PERMISSIVA QUE O SERVIDOR: divergir aqui faria o operador
 // digitar um valor que a tela aceita e a API recusa com 400. Quarta cópia da mesma lista no
 // projeto — unificação registrada no DIVIDAS.md.
-const INV_DECIMAL_UNITS = new Set(['M', 'MT', 'L', 'KG']);
-const invIsDecimalUnit = (un) => INV_DECIMAL_UNITS.has(String(un || '').trim().toUpperCase());
+// UNIFICADO no lote V: a régua por unidade vive em `window.FRAdapters.isDecimalUnit`
+// (lib/adapters.js), que por sua vez espelha DECIMAL_UNITS do backend. Havia TRÊS cópias deste
+// Set no front — esta era uma delas. Fallback local no padrão da casa: se a lib não carregou,
+// ninguém quebra, e o default é CONTAGEM (o seguro).
+const invIsDecimalUnit = (un) => {
+  const f = window.FRAdapters && window.FRAdapters.isDecimalUnit;
+  return f ? f(un) : false;
+};
 // Espelha MAX_ITENS do POST /stock/recount. O servidor devolve 400 acima disso; o fatiamento é
 // responsabilidade DESTA tela (decisão do R1).
 const INV_MAX_LOTE = 500;
@@ -706,7 +729,9 @@ function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegist
   // digitação é REJEITAR, não truncar — o Recebimento truncava com parseInt e comia a fração.
   const aceitaFracao = sel ? invIsDecimalUnit(sel.un) : false;
   const setQtd = (v) => {
-    let s = String(v).replace(aceitaFracao ? /[^0-9.,]/g : /[^0-9]/g, '');
+    // LOTE V: o ramo de CONTAGEM usava /[^0-9]/ e comia a vírgula — "2,5" virava "25". Agora os
+    // DOIS ramos mantêm o separador visível; quem decide se a fração vale é o parse, não o teclado.
+    let s = frSanQtd(v);
     if (aceitaFracao) {
       s = s.replace(',', '.');
       const partes = s.split('.');
