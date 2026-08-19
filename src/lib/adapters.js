@@ -88,7 +88,12 @@
     const tag = first ? first.toUpperCase() : null; // null → sem badge
     const precoNum = parseNumber(p.unit_price);
     const status = disp <= 0 ? 'esgotado' : disp <= minStock ? 'baixo' : 'ok';
+    // BW item 1: a listagem NÃO traz mais `image_url` (eram 89,1% do payload). Ela traz
+    // `has_image`, e a foto vem de GET /products/:id/image sob demanda (window.frFotoProduto).
+    // `img` continua existindo para o caso de alguém montar um card a partir de outra fonte que
+    // ainda tenha a URL — mas a listagem não é mais essa fonte.
     const img = p.image_url || undefined;
+    const temFoto = p.has_image === true || !!p.image_url;
     return {
       // ---- shape consumido pelo design (idêntico ao mock) ----
       sku: p.sku || '',
@@ -104,7 +109,10 @@
       un: p.unit || '',
       preco: formatBRL(precoNum),
       img: img,
-      imgFit: img ? 'contain' : undefined,
+      imgFit: 'contain',
+      // has_image: a listagem só diz SE existe foto. Quem renderiza decide se busca.
+      has_image: temFoto,
+      product_id_foto: p.id || null,   // chave do endpoint de imagem
       // ---- extras p/ lógica atual e ações da PRÓXIMA leva (UI ainda não usa) ----
       status: status,               // 'esgotado' | 'baixo' | 'ok' (baixo = disp <= min_stock)
       min_stock: minStock,

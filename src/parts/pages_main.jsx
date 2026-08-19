@@ -468,11 +468,17 @@ function ProdutoConfirmArquivar({ t, p, onArchive, onClose }) {
 // Foto do produto (capability herdada da galeria 'Produtos'): image_url REAL via adapter.
 // Só aparece quando o produto TEM foto — sem placeholder cinza ocupando 200px de nada.
 function ProdutoFoto({ t, p }) {
-  if (!p.img) return null;
+  // BW: a listagem não traz mais a imagem — só `has_image`. A foto vem SOB DEMANDA, e só para
+  // este cartão (que só existe se estiver na página visível). `p.img` continua sendo respeitado
+  // se vier de outra fonte.
+  const buscada = window.frFotoProduto ? window.frFotoProduto(p.product_id_foto || p.product_id, !p.img && !!p.has_image) : null;
+  const fonte = p.img ? window.__asset(p.img) : buscada;
+  if (!p.has_image && !p.img) return null;   // sem foto: nada (idêntico ao comportamento anterior)
+  if (!fonte) return null;                   // ainda carregando: não ocupa espaço, como antes
   const out = p.disp <= 0;
   return (
     <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 14, border: `1px solid ${t.border}` }}>
-      <img src={window.__asset(p.img)} alt={p.nome} style={{ display: 'block', width: '100%', height: 150, objectFit: p.imgFit || 'cover', padding: p.imgFit === 'contain' ? 16 : 0, boxSizing: 'border-box', background: '#ffffff' }} />
+      <img src={fonte} alt={p.nome} style={{ display: 'block', width: '100%', height: 150, objectFit: p.imgFit || 'cover', padding: p.imgFit === 'contain' ? 16 : 0, boxSizing: 'border-box', background: '#ffffff' }} />
       <span style={{ position: 'absolute', top: 10, right: 10, fontSize: 11, fontWeight: 800, padding: '5px 11px', borderRadius: 999, color: '#fff', background: out ? '#ef4444' : '#10b981', boxShadow: '0 4px 10px rgba(0,0,0,.25)' }}>{out ? 'Esgotado' : `${p.disp} ${p.un}`}</span>
     </div>
   );
@@ -602,9 +608,15 @@ function InvTabBtn({ t, id, atual, onSel, icon, children }) {
 // Miniatura do produto. `image_url` é opcional no catálogo e o card devolve `img: undefined`
 // quando não há foto — o ícone genérico NÃO existia no projeto (nenhuma tela desenhava
 // placeholder; o ProdutoCard só ajustava espaçamento). Nasce aqui.
-function InvMiniatura({ t, img, size = 40 }) {
+// BW: aceita `p` (o card) e busca a foto sob demanda; `img` direto continua funcionando para
+// quem já tem a URL. Sem foto → o mesmo ícone genérico de antes, e ZERO requisição.
+function InvMiniatura({ t, img, p, size = 40 }) {
+  const buscada = window.frFotoProduto
+    ? window.frFotoProduto(p ? (p.product_id_foto || p.product_id) : null, !img && !!(p && p.has_image))
+    : null;
+  const fonte = img || buscada;
   const base = { width: size, height: size, borderRadius: 10, flexShrink: 0, display: 'grid', placeItems: 'center', overflow: 'hidden' };
-  if (img) return <div style={{ ...base, background: t.elevated, border: `1px solid ${t.border}` }}><img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /></div>;
+  if (fonte) return <div style={{ ...base, background: t.elevated, border: `1px solid ${t.border}` }}><img src={fonte} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /></div>;
   return <div style={{ ...base, background: t.hover, border: `1px dashed ${t.border}`, color: t.faint }}><Icon name="box" size={Math.round(size * 0.5)} /></div>;
 }
 
@@ -619,7 +631,7 @@ function InvLinhaProduto({ t, p, onSel }) {
       style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 11px', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated }}
       onMouseEnter={(e) => { e.currentTarget.style.borderColor = t.accent; e.currentTarget.style.background = t.hover; }}
       onMouseLeave={(e) => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.background = t.elevated; }}>
-      <InvMiniatura t={t} img={p.img} />
+      <InvMiniatura t={t} img={p.img} p={p} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.nome}</div>
         <div style={{ fontSize: 11.5, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>{p.sku}</div>
@@ -787,7 +799,7 @@ function InvRecontagem({ t, produtos, podeEscrever, motivoSemPermissao, onRegist
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 13px', borderRadius: 14, border: `1px solid ${t.border}`, background: t.elevated, marginBottom: 16 }}>
-        <InvMiniatura t={t} img={sel.img} size={46} />
+        <InvMiniatura t={t} img={sel.img} p={sel} size={46} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{sel.nome}</span>
@@ -1154,7 +1166,7 @@ function InventarioModal({ t, onClose, produtos }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {sessao.map((r) => (
                   <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderRadius: 12, border: `1px solid ${t.border}`, background: t.elevated }}>
-                    <InvMiniatura t={t} img={r.img} size={34} />
+                    <InvMiniatura t={t} img={r.img} p={r} size={34} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.nome}</div>
                       <div style={{ fontSize: 11, color: t.muted, fontFamily: 'ui-monospace, monospace' }}>{r.sku}{r.active === false ? ' · fora do catálogo' : ''}</div>

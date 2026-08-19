@@ -26,6 +26,7 @@ import './lib/socket.js';            // window.FRSocket (tempo real opcional; ap
 // Puros/sem UI. Precisam vir DEPOIS de api.js e ANTES das telas que os consomem.
 import './lib/adapters.js';          // window.FRAdapters (productToCard, formatBRL, ...)
 import './lib/products.js';          // window.useFRProducts() → GET /products adaptado
+import './lib/foto-produto.js';      // window.frFotoProduto() → foto SOB DEMANDA (lote BW)
 import './lib/stock-refresh.js';     // window.frUseStockReload() → tela recarrega em stock_updated
 import './lib/audit_format.js';      // window.FRAuditFormat (22 actions + fallback obrigatório)
 
