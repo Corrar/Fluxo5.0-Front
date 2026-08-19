@@ -926,16 +926,28 @@ function PageQuadroGestao({ t }) {
   const errToast = (e) => setToast({ kind: 'err', msg: sepErr(e) });
 
   // executa uma mutação: bloqueia reentrância, chama FRApi, refaz o fetch, toast honesto
-  const runAction = async (fn, okMsg) => {
+  // `mensagemDe` (opcional) recebe o retorno de `fn` e pode SUBSTITUIR o texto de sucesso —
+  // é como o lastro parcial vira aviso sem virar erro: mesma via de sucesso, outro texto.
+  const runAction = async (fn, okMsg, mensagemDe) => {
     if (busyRef.current) return false;
     setBusy(true);
-    try { await fn(); reload(); if (okMsg) okToast(okMsg); return true; }
+    try {
+      const r = await fn();
+      reload();
+      const custom = mensagemDe ? mensagemDe(r) : null;
+      if (custom || okMsg) okToast(custom || okMsg);
+      return true;
+    }
     catch (e) { errToast(e); return false; }
     finally { setBusy(false); }
   };
 
+  // ADICIONAR JÁ RESERVA (lote S1): o POST volta com `items[]` carregando, por item,
+  // { qty_requested, reserved, missing }. Lastro parcial NÃO é erro — é o resultado normal quando
+  // o estoque não cobre o pedido inteiro, e o operador precisa ver isso no ato, não descobrir na
+  // hora de separar. Por isso o toast muda de texto, e não de `kind`.
   const criar = (data) => runAction(async () => {
-    await window.FRApi.post('/separations', {
+    const r = await window.FRApi.post('/separations', {
       client_name: data.cliente,
       production_order: data.op,
       destination: data.armazem,
@@ -943,7 +955,19 @@ function PageQuadroGestao({ t }) {
       items: data.itens.map((i) => ({ product_id: i.product_id, quantity: i.qtd, observation: null })),
     });
     setNovaOpen(false); setTab('separacao');
-  }, 'Separação criada. Reserve os materiais para começar.');
+    return r && r.data ? r.data : null;
+  }, 'Separação criada — materiais reservados.', (dados) => {
+    // `items` pode não vir (backend antigo): sem ele, mantém a mensagem padrão.
+    const itens = (dados && dados.items) || null;
+    if (!itens || !itens.length) return null;
+    const incompletos = itens.filter((i) => sepNum(i.missing) > 0);
+    if (!incompletos.length) return null;
+    const totalReservado = itens.reduce((a, i) => a + sepNum(i.reserved), 0);
+    const totalPedido = itens.reduce((a, i) => a + sepNum(i.qty_requested), 0);
+    return `Separação criada — reservado ${totalReservado} de ${totalPedido}. `
+      + `${incompletos.length} ${incompletos.length === 1 ? 'item ficou incompleto' : 'itens ficaram incompletos'} `
+      + 'por falta de estoque; a lista mostra quanto falta em cada um.';
+  });
 
   const onReserve = (id, itens) => runAction(
     () => window.FRApi.put('/separations/' + id + '/authorize', { action: 'reservar', items: itens.filter((i) => i.id).map((i) => ({ id: i.id, quantity: i.sep })) }),
