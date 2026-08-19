@@ -1114,3 +1114,55 @@ Duas coisas fizeram a diferença:
 
 A âncora que serviu foi `display: saMob ? 'flex' : 'grid'` — presente só no `SaidaModal`. Antes de
 editar, `grep -c` da âncora: se não der exatamente 1, a âncora não presta.
+
+---
+
+# LOTE B — teto do disponível na saída manual (19/08/2026)
+
+## O input de quantidade é COMPARTILHADO pelos 3 modos
+
+`pages_admin.jsx` usa o MESMO input de quantidade para Entrada NF, Reaproveitamento e Saída. Teto
+no input **quebraria a Entrada**, que legitimamente lança mais do que há em estoque. Por isso:
+o `onChange` ficou **idêntico**, o aviso na linha só existe quando `saida`, e quem barra o envio é
+`handleSaidaConfirmar` — condicionado ao modo. Provado por controle (PF3): no modo NF a linha não
+mostra disponível, aceita 9999 sem aviso, e o `POST /stock/entries` continua saindo.
+
+## ⚠ DÍVIDA — o `.replace(/[^0-9]/g,'')` do input de quantidade (insumo da varredura)
+
+`pages_admin.jsx`, input de quantidade das linhas: `e.target.value.replace(/[^0-9]/g, '')`.
+**É o mesmo defeito que o C1 matou no Confronto** — o ponto e a vírgula são engolidos, então
+quantidade decimal é **impossível de digitar** nesta tela, em qualquer um dos três modos.
+**NÃO foi consertado neste lote**, por decisão: pertence à varredura pendente do `.replace`, que
+tem de passar por todos os inputs numéricos de uma vez para não deixar a casa meio consertada.
+Registrado aqui como insumo dessa varredura. O teto adicionado por este lote **convive** com o
+defeito sem piorá-lo: ele lê `Number(r.qtd)`, não reescreve o valor, e não introduz máscara nova.
+
+## Origem do número do disponível: sem rede
+
+`adapters.js` já calcula `disp = onHand − reserved` e já expõe `reserved` no card do produto. A
+linha e a revisão da saída leem daí (`useFRProducts`, que a tela já consumia) — **nenhuma chamada
+nova** para mostrar o disponível. Menos superfície e um número só na tela.
+
+## FRDrawer subiu para o `window`
+
+A consulta de reserva do Catálogo (`pages_main.jsx`) é o **primeiro consumidor da casca fora de
+`pages_rest.jsx`**. Escrever um overlay lateral novo lá seria a **quarta** cópia do mesmo
+ESC + foco + trava de scroll — exatamente o que o C4 extraiu para não acontecer. Cross-file só
+funciona por `window` (os parts são módulos ESM; `function FRDrawer` é privada do módulo), e a
+ordem de import não importa porque `pages_main` lê `window.FRDrawer` em tempo de RENDER.
+Segue valendo a nota do C4: **se ela sair de `pages_rest.jsx` de vez, sobe para `ui.jsx`.**
+
+## `FRReservaOrigens` é apresentação ÚNICA, e consome o shape CRU
+
+O mesmo componente desenha a recusa da saída e o painel do Catálogo, a partir do MESMO payload do
+MESMO helper de servidor. Ele consome **snake_case cru do endpoint** de propósito: adaptar ali
+esconderia mudança de contrato. Se as duas telas divergirem, é porque alguém duplicou a query no
+backend.
+
+## D-B5 na tela: a ausência de ação é o desenho
+
+Não há botão de liberar reserva nem de reservar mais — nem na recusa, nem no Catálogo. A reserva é
+promessa de um DOCUMENTO; soltá-la por fora deixa o documento sem lastro. O que existe é o **link**
+para o documento, onde a ação significa alguma coisa. Provado por ausência **com controle
+positivo** (PF6): os links existem, logo o painel renderizou, logo a ausência dos botões é ausência
+de verdade e não tela vazia.

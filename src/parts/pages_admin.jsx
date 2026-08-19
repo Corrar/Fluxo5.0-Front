@@ -84,7 +84,7 @@ function stepWhen(s, i) {
   return '';
 }
 
-function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
+function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
   const reuse = variant === 'reaproveitamento';
   const saida = variant === 'saida';
   const isNF = !reuse && !saida;
@@ -127,6 +127,10 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const genKey = () => (crypto.randomUUID?.() ?? `r-${Date.now()}-${Math.random().toString(16).slice(2)}`); // fallback p/ contexto não-seguro (http://IP-LAN)
   const [enviando, setEnviando] = useStateA(false);   // anti duplo-clique no POST /stock/entries
   const [envErro, setEnvErro] = useStateA(null);      // erro do envio (inclui "Esta NF-e já foi cadastrada")
+  // Origens da RECUSA por reserva alheia (D-B2), vindas no corpo do 400. Estado SEPARADO do
+  // envErro de propósito: o toast some sozinho em 4s, e a lista de quem segurou o material é
+  // justamente o que o operador precisa ler com calma e clicar. Só a próxima tentativa a limpa.
+  const [reservaErro, setReservaErro] = useStateA(null);
   // Toast de erro some sozinho em ~4s. cleanup evita timer duplicado se der 2 erros seguidos.
   React.useEffect(() => {
     if (!envErro) return;
@@ -144,6 +148,15 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const rowName = (r) => r.nome || (prodBySku(r.sku) || {}).nome;
   // product_id REAL da row: da busca (r.product_id) ou resolvido pelo SKU no catálogo (SKU digitado válido).
   const resolvePid = (r) => r.product_id || (prodBySku(r.sku) || {}).product_id;
+  // DISPONÍVEL da row (on_hand − reserved). SEM ida à rede: adapters.js:83 já calcula `disp` assim
+  // e o useFRProducts acima já trouxe. Devolve null quando não há produto resolvido — aí não há
+  // número contra o qual medir, e a validação de teto se cala (o guard de SKU inválido já barra).
+  const prodDaRow = (r) => frProdutos.find((p) => p.product_id === resolvePid(r));
+  const dispDe = (r) => { const p = prodDaRow(r); return p ? Number(p.disp) : null; };
+  // Linhas da SAÍDA que estouram o disponível. Só faz sentido no modo saída — ver acima do input.
+  const acimaDoDisp = saida
+    ? filled.filter((r) => { const d = dispDe(r); return d != null && Number(r.qtd) > d; })
+    : [];
   const ql = q.trim().toLowerCase();
   const filtered = q.trim() ? frProdutos.filter((p) => (p.nome || '').toLowerCase().includes(ql) || (p.sku || '').includes(q.trim())) : [];
   const addMaterial = (p) => {
@@ -260,6 +273,7 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
   const handleSaidaConfirmar = async () => {
     if (enviando) return;                              // anti duplo-clique (guard igual ao reuse)
     setEnvErro(null);
+    setReservaErro(null);                              // nova tentativa: a recusa anterior sai da tela
     if (!filled.length) { setEnvErro('Adicione ao menos um item.'); return; }
     const invalidRows = filled.filter((r) => !resolvePid(r));
     if (invalidRows.length) { setEnvErro('Há itens sem produto válido (SKU não encontrado). Remova ou corrija antes de dar saída.'); return; }
@@ -277,6 +291,16 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       return !tags.some((tg) => exemptTags.includes(tg));   // não isento → exige OP
     });
     if (requiresOp && !op.trim()) { setEnvErro('Informe o número da OP: há itens não isentos que exigem OP.'); return; }
+    // TETO DO DISPONÍVEL (D-B1), no CLIENTE. Não substitui o guard do servidor — que é o que
+    // realmente segura, sob trava, contra corrida — mas evita a viagem e diz o número na hora.
+    // Vive AQUI dentro, e não no input, porque o input é dos três modos (ver comentário na linha).
+    if (acimaDoDisp.length) {
+      const d = acimaDoDisp[0];
+      setEnvErro(acimaDoDisp.length === 1
+        ? `${rowName(d) || d.sku}: saída de ${Number(d.qtd)} acima do disponível (${dispDe(d)}).`
+        : `${acimaDoDisp.length} itens acima do disponível. O primeiro: ${rowName(d) || d.sku} — ${Number(d.qtd)} pedido(s), ${dispDe(d)} disponível.`);
+      return;
+    }
     setEnviando(true);
     try {
       // Baixa física real. op_code opcional (só vai se preenchido); o header carrega a âncora de
@@ -293,6 +317,11 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
       // clara (setor inválido / OP obrigatória / OP não encontrada / OP finalizada / furo de estoque).
       const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
       setEnvErro(gm ? gm(e) : (e && e.message ? e.message : 'Erro ao dar saída.'));
+      // RECUSA POR RESERVA ALHEIA (D-B2): o 400 já traz as origens no corpo — nenhuma 2ª chamada.
+      // `normalizeError` (api.js:167) guarda o corpo cru em `raw`; `code` distingue este erro dos
+      // outros 400 da mesma rota sem depender do texto da mensagem.
+      const corpo = (e && e.raw) || null;
+      setReservaErro(corpo && corpo.code === 'SAIDA_ACIMA_DO_DISPONIVEL' ? corpo.reservation : null);
     } finally {
       setEnviando(false);
     }
@@ -513,7 +542,24 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
                 <input value={r.sku} onChange={(e) => update(i, 'sku', e.target.value)} placeholder="9.99.0000" style={{ ...inp, ...(notFound ? { borderColor: '#ef4444' } : null) }} />
                 {notFound && <div style={{ fontSize: 10.5, fontWeight: 700, color: uiTone(t, 'red').fg, margin: '5px 2px 0' }}>Produto não encontrado no estoque</div>}
               </div>
-              <input value={r.qtd} onChange={(e) => update(i, 'qtd', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={{ ...inp, textAlign: 'center', alignSelf: 'end' }} />
+              {/* ⚠ O input de quantidade é COMPARTILHADO pelos 3 modos (NF / Reaproveitamento / Saída).
+                  Teto NELE quebraria a Entrada, que legitimamente lança mais do que há em estoque.
+                  Por isso o `onChange` segue IDÊNTICO e o operador continua podendo digitar o que
+                  quiser: quem barra é o `handleSaidaConfirmar`, e só no caminho da saída. O bloco
+                  abaixo é AVISO, não trava — e só existe quando `saida`.
+                  (O `.replace(/[^0-9]/g,'')` daqui é o mesmo defeito de decimal que o C1 matou no
+                  Confronto. NÃO é consertado neste lote de propósito — está no DIVIDAS como insumo
+                  da varredura pendente. Nada abaixo o piora nem depende dele.) */}
+              <div style={{ alignSelf: 'end' }}>
+                <input value={r.qtd} onChange={(e) => update(i, 'qtd', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric"
+                  style={{ ...inp, textAlign: 'center', ...(saida && dispDe(r) != null && Number(r.qtd) > dispDe(r) ? { borderColor: '#ef4444' } : null) }} />
+                {saida && dispDe(r) != null && (
+                  <div style={{ fontSize: 10.5, fontWeight: 700, textAlign: 'center', marginTop: 5,
+                    color: Number(r.qtd) > dispDe(r) ? uiTone(t, 'red').fg : t.faint }}>
+                    {Number(r.qtd) > dispDe(r) ? `Só há ${dispDe(r)} disponível` : `${dispDe(r)} disponível`}
+                  </div>
+                )}
+              </div>
               {isNF && <input value={r.etiq != null && r.etiq !== '' ? r.etiq : (r.etiqT ? '' : r.qtd)} onChange={(e) => update(i, 'etiq', e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" title="Quantidade de etiquetas a imprimir" style={{ ...inp, textAlign: 'center', alignSelf: 'end', borderColor: t.accent, color: t.accentText, fontWeight: 800 }} />}
               <button onClick={() => removeRow(i)} title="Remover" style={{ all: 'unset', cursor: 'pointer', width: 40, height: 40, borderRadius: 10, display: 'grid', placeItems: 'center', color: t.muted, alignSelf: 'end' }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; e.currentTarget.style.color = '#ef4444'; }}
@@ -600,6 +646,22 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
               </div>
             )}
             <div className="fr-scroll" style={{ overflowY: 'auto', padding: '8px 14px', flex: 1 }}>
+              {/* RECUSA POR RESERVA ALHEIA (D-B2). Fica no TOPO da revisão, que é onde o operador
+                  está olhando quando clica em "Confirmar saída" e o pedido volta recusado. Mesmo
+                  componente que o Catálogo usa, alimentado pelo corpo do 400 — nenhuma 2ª chamada. */}
+              {saida && reservaErro && (
+                <div data-fr="saida-recusa" style={{ margin: '6px 0 14px', padding: '15px 16px', borderRadius: 14, background: uiTone(t, 'red').bg, border: `1px solid ${uiTone(t, 'red').fg}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
+                    <span style={{ color: uiTone(t, 'red').fg, display: 'flex' }}><Icon name="alert" size={18} /></span>
+                    <div style={{ fontSize: 14, fontWeight: 850, color: uiTone(t, 'red').fg }}>Saída recusada — o material está reservado</div>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: t.muted, margin: '0 0 14px', lineHeight: 1.5 }}>
+                    Há estoque físico, mas ele já está prometido aos documentos abaixo. Para liberar, abra o documento
+                    e cancele ou reduza por lá — a reserva não se solta por fora, senão o documento fica sem lastro.
+                  </div>
+                  <window.FRReservaOrigens t={t} dados={reservaErro} onIr={(pagina) => { if (setActive) { setReview(false); setActive(pagina); } }} />
+                </div>
+              )}
               {filled.map((r, i) => {
                 const nm = rowName(r);
                 return (
@@ -607,7 +669,16 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova' }) {
                     <span style={{ width: 34, height: 34, borderRadius: 9, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={16} /></span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{nm || 'Material avulso'}</div>
-                      <div style={{ fontSize: 11.5, color: t.muted }}>SKU {r.sku}</div>
+                      <div style={{ fontSize: 11.5, color: t.muted }}>
+                        SKU {r.sku}
+                        {/* PF4: o disponível também AQUI. Na revisão o operador está a um clique da
+                            baixa e, sem este número, confirmaria sem ver contra o que é medido. */}
+                        {saida && dispDe(r) != null && (
+                          <span data-fr="revisao-disp" style={{ color: Number(r.qtd) > dispDe(r) ? uiTone(t, 'red').fg : t.muted, fontWeight: Number(r.qtd) > dispDe(r) ? 800 : 600 }}>
+                            {' · '}{dispDe(r)} disponível
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>{r.qtd || 0} <span style={{ fontSize: 11, color: t.muted, fontWeight: 600 }}>un</span></div>
                   </div>

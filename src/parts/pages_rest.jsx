@@ -2027,6 +2027,14 @@ function FRDrawer({ t, aoFechar, origemFoco, largura, children }) {
     </div>
   );
 }
+// EXPOSTA no window (Lote B): a consulta de reserva do Catálogo (pages_main.jsx) é o PRIMEIRO
+// consumidor da casca fora deste arquivo, e escrever um overlay lateral novo lá seria a quarta
+// cópia do mesmo ESC + foco + trava de scroll — exatamente o que o C4 extraiu para não acontecer.
+// Cross-file aqui só funciona por window: os parts são módulos ESM, `function FRDrawer` é privada
+// do módulo. Ordem de import não é problema — pages_main lê `window.FRDrawer` em tempo de RENDER,
+// muito depois de todos os parts terem sido avaliados.
+// (O comentário acima segue valendo: se ela sair deste arquivo de vez, sobe para ui.jsx.)
+window.FRDrawer = FRDrawer;
 
 // Registrar saída = POST /travel-orders (cria a viagem e RESERVA cada item — StockService.reserve).
 // Catálogo REAL via GET /products (nada de SAIDA_CAT chumbado). Equipe: texto livre em chips —

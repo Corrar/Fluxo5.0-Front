@@ -404,7 +404,7 @@ function ProdutoStatusBadge({ t, p }) {
 // Menu ⋯ do card — Editar (modal real) e Arquivar (DELETE real). Extraído porque agora o
 // celular também o mostra: os dois controles deixaram de ser inertes nesta rodada, então
 // escondê-los do mobile seria negar função viva, não poupar de botão morto.
-function ProdutoMenu({ t, p, onEdit, onConfirmArchive }) {
+function ProdutoMenu({ t, p, onEdit, onConfirmArchive, onVerReservas }) {
   const [menu, setMenu] = useStateM(false);
   return (
     <div style={{ position: 'relative' }}>
@@ -416,6 +416,12 @@ function ProdutoMenu({ t, p, onEdit, onConfirmArchive }) {
           <div style={{ position: 'absolute', zIndex: 20, top: 'calc(100% + 4px)', right: 0, width: 180, background: t.panel, border: `1px solid ${t.borderStrong}`, borderRadius: 12, boxShadow: t.shadow, padding: 6 }}>
             <button onClick={() => { setMenu(false); onEdit(p); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: t.text }}
               onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="pencil" size={15} /> Editar produto</button>
+            {/* CONSULTA DE RESERVA (D-B4): ver quanto está preso e por quem SEM tentar a saída e
+                tomar erro. É leitura pura — não há "liberar" aqui, por decisão (D-B5). */}
+            {onVerReservas && (
+              <button data-fr="menu-ver-reservas" onClick={() => { setMenu(false); onVerReservas(p); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: t.text }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="lock" size={15} /> Ver reservas</button>
+            )}
             <button onClick={() => { setMenu(false); onConfirmArchive(); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: uiTone(t, 'red').fg }}
               onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="trash" size={15} /> Arquivar produto</button>
           </div>
@@ -472,7 +478,7 @@ function ProdutoFoto({ t, p }) {
   );
 }
 
-function ProdutoCard({ t, p, onEdit, onArchive, mobile }) {
+function ProdutoCard({ t, p, onEdit, onArchive, mobile, onVerReservas }) {
   const [confirm, setConfirm] = useStateM(false);
   const out = p.disp <= 0;
 
@@ -486,7 +492,7 @@ function ProdutoCard({ t, p, onEdit, onArchive, mobile }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <ProdutoStatusBadge t={t} p={p} />
             {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
-            <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} />
+            <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} onVerReservas={onVerReservas} />
           </div>
         </div>
         <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text, margin: '10px 0 14px', letterSpacing: '-.01em', lineHeight: 1.3 }}>{p.nome}</div>
@@ -511,7 +517,7 @@ function ProdutoCard({ t, p, onEdit, onArchive, mobile }) {
     <Card t={t} hover style={{ padding: 22, position: 'relative' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <Badge t={t} kind="gray">{p.sku}</Badge>
-        <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} />
+        <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} onVerReservas={onVerReservas} />
       </div>
       <div style={{ fontSize: 19, fontWeight: 850, color: t.text, margin: '14px 0 11px', letterSpacing: '-.01em', lineHeight: 1.25 }}>{p.nome}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: p.img ? 14 : 0 }}>
@@ -1187,8 +1193,71 @@ function InventarioModal({ t, onClose, produtos }) {
 //   • direita: busca nome/SKU/tag + filtro por etiqueta + grid paginada de ProdutoCard
 //     (com foto image_url e badge de crítico, herdados da galeria);
 //   • modais: edição (PUT real), inventário (preview; processar aguarda endpoint), relatório (CSV).
-function PageCatalogo({ t, brand }) {
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ReservaDoProduto — conteúdo do painel lateral da CONSULTA DE RESERVA (D-B4).
+//
+// GET /stock/reservations/product/:productId — o MESMO helper de servidor que alimenta a recusa
+// da saída manual. Se o que aparece aqui divergir do que a recusa mostra, há query duplicada no
+// backend (é o que a PB9 mede).
+//
+// ⚠ D-B5 — SEM AÇÃO, DE PROPÓSITO. Não há botão de liberar reserva nem de reservar mais. A
+// reserva é a promessa de um DOCUMENTO; soltá-la por fora deixaria o documento sem lastro, que é
+// a doença que este lote mata. O que existe é o LINK: a ação (cancelar/reduzir a solicitação,
+// cancelar a separação, reconciliar a viagem) acontece no documento, onde ela significa algo.
+function ReservaDoProduto({ t, produto, onFechar, onIr }) {
+  const [dados, setDados] = useStateM(null);
+  const [carregando, setCarregando] = useStateM(true);
+  const [erro, setErro] = useStateM(null);
+
+  React.useEffect(() => {
+    let vivo = true;
+    setCarregando(true); setErro(null);
+    window.FRApi.get('/stock/reservations/product/' + produto.product_id, { skipLoading: true })
+      .then((r) => { if (vivo) { setDados(r.data); setCarregando(false); } })
+      .catch((e) => {
+        if (!vivo) return;
+        const gm = window.FRApiUtil && window.FRApiUtil.getErrorMessage;
+        setErro(gm ? gm(e) : 'Não foi possível consultar as reservas.');
+        setCarregando(false);
+      });
+    return () => { vivo = false; };
+  }, [produto.product_id]);
+
+  return (
+    <>
+      <div style={{ flexShrink: 0, padding: '20px 22px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'flex-start', gap: 13 }}>
+        <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accentSoft, color: t.accentText, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="lock" size={19} /></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 17, fontWeight: 850, color: t.text, letterSpacing: '-.01em' }}>Reservas do produto</div>
+          <div style={{ fontSize: 12.5, color: t.muted, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{produto.nome} · SKU {produto.sku}</div>
+        </div>
+        <button onClick={onFechar} title="Fechar" style={{ all: 'unset', cursor: 'pointer', width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', color: t.muted, flexShrink: 0 }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="x" size={16} /></button>
+      </div>
+      <div className="fr-scroll" style={{ flex: 1, overflowY: 'auto', overscrollBehavior: 'contain', padding: '18px 22px 24px' }}>
+        {carregando ? (
+          <div style={{ fontSize: 13, color: t.muted }}>Consultando reservas…</div>
+        ) : erro ? (
+          <div style={{ padding: '14px 16px', borderRadius: 12, background: uiTone(t, 'red').bg, color: uiTone(t, 'red').fg, fontSize: 13, fontWeight: 700 }}>{erro}</div>
+        ) : (
+          <>
+            <window.FRReservaOrigens t={t} dados={dados} onIr={onIr} />
+            <div style={{ marginTop: 18, fontSize: 11.5, color: t.faint, lineHeight: 1.6 }}>
+              A reserva pertence ao documento que a levantou. Para soltá-la, abra o documento e
+              cancele ou reduza por lá — não há como liberar por aqui.
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PageCatalogo({ t, brand, setActive }) {
   const [inv, setInv] = useStateM(false);
+  // CONSULTA DE RESERVA (D-B4): produto aberto no painel lateral. `null` = fechado.
+  const [reservaDe, setReservaDe] = useStateM(null);
+  const focoReserva = useRefM(null);
   const [rel, setRel] = useStateM(false);
   const [edit, setEdit] = useStateM(null);
   const [page, setPage] = useStateM(1);
@@ -1278,12 +1347,23 @@ function PageCatalogo({ t, brand }) {
               ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
               : total === 0
               ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql || tagFiltro ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql || tagFiltro ? 'Ajuste a busca ou o filtro de etiqueta.' : 'Nenhum produto ativo no catálogo.'} /></Card></div>
-              : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} />)}
+              : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} onVerReservas={(np) => setReservaDe(np)} />)}
           </div>
           {pagbar}
           </>
         )}
       </div>
+      {/* CONSULTA DE RESERVA (D-B4) — painel LATERAL, reusando a casca FRDrawer que o C4 extraiu.
+          ESCOLHA DECLARADA: a apresentação é lateral (é consulta de contexto, o operador quer
+          voltar à grade), então a casca serve tal como está e NÃO se escreve overlay novo — seria
+          a quarta cópia do mesmo ESC + foco + trava de scroll. Só o CONTEÚDO é novo. */}
+      {reservaDe && window.FRDrawer && (
+        <window.FRDrawer t={t} aoFechar={() => setReservaDe(null)} origemFoco={focoReserva} largura="min(560px,94vw)">
+          <ReservaDoProduto t={t} produto={reservaDe} onFechar={() => setReservaDe(null)}
+            onIr={(pagina) => { setReservaDe(null); if (setActive) setActive(pagina); }} />
+        </window.FRDrawer>
+      )}
+
       {/* painel lateral do cadastro (desktop) — o form REAL de sempre (POST /products, máscara de
           SKU, duplicata, feedback) como conteúdo; `flat` tira a moldura de Card, o painel é a moldura. */}
       {novoOpen && !mobile && (

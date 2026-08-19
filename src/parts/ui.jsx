@@ -260,4 +260,94 @@ function EmDesenvolvimento({ t, title, subtitle, tag = 'Em Desenvolvimento' }) {
   );
 }
 
-Object.assign(window, { Badge, Card, PageHeader, Btn, KPI, DataTable, EmptyState, BarChart, AreaChart, RingChart, uiTone: tone, EmDesenvolvimento });
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// FRReservaOrigens — QUEM segura a reserva de um produto. Apresentação ÚNICA, dois consumidores:
+//   1. a recusa da SAÍDA MANUAL (pages_admin.jsx), a partir do corpo do 400;
+//   2. a consulta do CATÁLOGO (pages_main.jsx), a partir do GET /stock/reservations/product/:id.
+// Os dois recebem o MESMO payload do MESMO helper de servidor, então desenhar duas vezes seria
+// deixar as duas telas divergirem sozinhas. Consome o shape CRU do endpoint (snake_case) de
+// propósito: adaptar aqui esconderia mudança de contrato.
+//
+// ⚠ D-B5 — NÃO EXISTE AÇÃO AQUI, E É DE PROPÓSITO. Nada de "liberar reserva" nem "reservar mais".
+// A reserva é a promessa de um DOCUMENTO; soltá-la por fora deixa o documento sem lastro — a
+// mesma doença que este lote mata. O único caminho oferecido é IR AO DOCUMENTO, onde cancelar,
+// reduzir ou reconciliar tem significado. Se alguém acrescentar um botão de ação nesta lista,
+// está reabrindo o buraco.
+const FR_ORIGEM_META = {
+  request:       { titulo: 'Solicitação', icone: 'file',      tom: 'blue',   pagina: 'solicitacoes' },
+  separation:    { titulo: 'Separação',   icone: 'clipboard', tom: 'accent', pagina: 'quadrogestao' },
+  replenishment: { titulo: 'Reposição',   icone: 'refresh',   tom: 'amber',  pagina: 'reposicoes' },
+  travel:        { titulo: 'Viagem',      icone: 'briefcase', tom: 'green',  pagina: 'confronto' },
+};
+
+function FRReservaOrigens({ t, dados, onIr }) {
+  if (!dados) return null;
+  const origens = dados.origins || [];
+  const dif = Number(dados.difference || 0);
+  return (
+    <div data-fr="reserva-origens">
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        {[['DISPONÍVEL', dados.available, dados.available <= 0 ? 'red' : 'green'],
+          ['RESERVADO', dados.reserved, 'amber'],
+          ['FÍSICA', dados.on_hand, 'gray']].map(function (par) {
+          return (
+            <div key={par[0]} data-fr={'reserva-kpi-' + par[0]} style={{ flex: '1 1 90px', padding: '11px 13px', borderRadius: 11, background: t.elevated, border: '1px solid ' + t.border }}>
+              <div style={{ fontSize: 9.5, letterSpacing: '.06em', fontWeight: 700, color: t.faint }}>{par[0]}</div>
+              <div style={{ fontSize: 21, fontWeight: 850, marginTop: 3, color: tone(t, par[2]).fg }}>{par[1]}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {origens.length === 0 ? (
+        <div style={{ padding: '14px 16px', borderRadius: 12, background: t.elevated, border: '1px solid ' + t.border, fontSize: 13, color: t.muted }}>
+          Nenhum documento reservando este produto.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {origens.map(function (o, i) {
+            const m = FR_ORIGEM_META[o.kind] || { titulo: o.kind, icone: 'box', tom: 'gray', pagina: null };
+            return (
+              <div key={o.kind + ':' + o.document_id + ':' + i} data-fr="reserva-origem" data-kind={o.kind}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 12, background: t.panel, border: '1px solid ' + t.border }}>
+                <span style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', background: tone(t, m.tom).bg, color: tone(t, m.tom).fg }}>
+                  <Icon name={m.icone} size={16} />
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: t.text, lineHeight: 1.35 }}>{o.label}</div>
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 850, color: t.text, flexShrink: 0 }}>{o.quantity}</div>
+                {/* LINK para o documento (D-B5): a ação mora lá, não aqui. */}
+                {m.pagina && onIr && (
+                  <button data-fr="reserva-link" data-pagina={m.pagina} onClick={function () { onIr(m.pagina, o); }}
+                    title={'Abrir ' + m.titulo}
+                    style={{ all: 'unset', cursor: 'pointer', flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 11px', borderRadius: 9, fontSize: 12, fontWeight: 700, color: t.accentText, background: t.accentSoft }}>
+                    Abrir <Icon name="chevronRight" size={14} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* DIFERENÇA DECLARADA (D-B3). Aparece SÓ quando não fecha, e não acusa ninguém: diz o que
+          se sabe e para onde olhar. A causa conhecida é ajuste manual de inventário pelo
+          PUT /stock/:id, que mexe no reservado sem documento por trás. */}
+      {dados.has_difference && (
+        <div data-fr="reserva-diferenca" style={{ marginTop: 12, padding: '13px 15px', borderRadius: 12, background: tone(t, 'amber').bg, border: '1px solid ' + tone(t, 'amber').fg }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 800, color: tone(t, 'amber').fg }}>
+            <Icon name="alert" size={16} /> A soma das origens não fecha com o reservado
+          </div>
+          <div style={{ fontSize: 12.5, color: t.muted, marginTop: 6, lineHeight: 1.5 }}>
+            {dif > 0
+              ? 'Das ' + dados.reserved + ' reservadas, ' + dados.identified + ' identificadas — ' + dif + ' sem origem rastreável. Possível ajuste manual de inventário.'
+              : 'As origens somam ' + dados.identified + ', acima das ' + dados.reserved + ' reservadas (' + Math.abs(dif) + ' a mais). Possível ajuste manual de inventário.'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { Badge, Card, PageHeader, Btn, KPI, DataTable, EmptyState, BarChart, AreaChart, RingChart, uiTone: tone, EmDesenvolvimento, FRReservaOrigens });
