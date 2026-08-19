@@ -1339,3 +1339,56 @@ foram envolvidos num `<div data-fr>` em vez de alterar o `Card`, que toda tela u
 E a primeira rodada da prova do badge "Consumido" acusou **6 de 6**: o seletor casava
 `/Consumido/` no `textContent` do card, que também contém a linha "Recebido 100 · Consumido 40".
 **Defeito do instrumento, não da tela** — corrigido escopando ao badge.
+
+## LOTE SEP1 — o Quadro de Gestão limpa 81% de ruído sem uma linha de front
+
+### O front não mudou, e isso foi MEDIDO, não assumido
+
+Duas verificações antes de qualquer edição:
+
+- **`adaptSeparation` nunca lê `type`.** Mapeia campos conhecidos e devolve `null` para
+  `cancelada`. Payload menor não quebra nada: mesmo shape, menos linhas.
+- **Os contadores das abas saem da lista buscada**, não de um total separado:
+  `counts = { separacao: list.filter(...).length, entregue: ..., arquivado: ... }`
+  (`separacoes.jsx:1046`). Nenhum KPI foi calculado sobre o total inflado — eles seguem a lista, e
+  a lista encolheu.
+
+E o hook chama `FRApi.get('/separations')` **sem parâmetro nenhum** — cai no default seguro do
+servidor por construção. Não se acrescentou `?type=op` explícito: o default existe justamente para
+que o chamador não precise saber.
+
+### O defeito, reproduzido no MESMO bundle
+
+A prova alimenta o bundle real com os dois payloads. É o mesmo código dos dois lados — só a
+resposta muda:
+
+```
+payload da BASE (op + manual)      Ativos · 3    Entregues · 9
+  na aba Entregues: 7 cards de saída manual, 2 de separação real   -> 78% de ruído
+payload NOVO (só op)               Ativos · 3    Entregues · 2
+  na aba Entregues: 0 manuais, 2 separações reais
+```
+
+Os **Ativos não mudaram** (3 → 3): saída manual nasce `concluida`, nunca foi ativa. E a diferença
+nos Entregues é **exatamente** as 7 manuais (9 − 2 = 7). O conserto é cirúrgico e upstream.
+
+⚠ **A aba padrão é "Ativos".** A primeira rodada da prova mediu "0 cards de saída manual na tela"
+e pareceu contradizer o contador de 9 — porque as manuais são `entregue` e só aparecem depois de
+CLICAR na aba. Medir sem clicar teria mentido sobre o defeito, no sentido de escondê-lo. Defeito
+do instrumento; corrigido clicando.
+
+### Por que elas eram indistinguíveis
+
+O front **recebe** `type` no payload e não o lê em lugar nenhum; `sepFrontStatus` traduz
+`'concluida'` → `'entregue'`, e o card de uma saída manual fica idêntico ao de uma separação
+entregue. Não havia como o operador distinguir — nem como filtrar na tela.
+
+Poderia-se ter marcado o card com um badge "Saída manual". **Não é o que o Bruno quer:** esses
+registros não pertencem a esta aba. Vão para a futura aba de rastreamento de movimentações, que
+os pedirá por `?type=manual` ou `?type=all`.
+
+### DÍVIDA ABERTA — a aba de rastreamento de movimentações
+
+O dado **não some**: fica alcançável por parâmetro explícito (ver `DIVIDAS.md` do backend). Quando
+a aba existir, ela usa o parâmetro. **Não se mexe no default** — ele é o que protege o Quadro de
+Gestão de voltar a ser um histórico.
