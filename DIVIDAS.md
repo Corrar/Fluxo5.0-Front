@@ -1249,3 +1249,93 @@ de ×10 para submit travado, e a segunda forma é mais silenciosa que a primeira
 **Toda correção de entrada exige prova das DUAS pontas: o que o campo aceita e o que o corpo
 manda.** A prova de payload deste lote existe exatamente por causa disso, com o controle negativo
 `Number("2,5") = NaN` escrito nela.
+
+## LOTE PG1 — o `<select>` do Armazém saiu, e o que ficou fora
+
+### O que incomodava, exatamente
+
+O `PGOpPicker` (`producaoger.jsx:152`): um `<select>` de 420px, **uma OP por vez**, e a tela
+inteira recarregava a cada troca. Era o "dropdown muito confuso". A grade de cards é a
+consequência do conserto, não o conserto — o que resolve é ver todas as OPs de uma vez.
+
+O `PGOpPicker` **continua existindo**: a tela de Apontamentos e a de Recebimento o usam, e lá ele
+está certo (bipar contra UMA OP é o fluxo). Só saiu do Armazém.
+
+### UMA requisição, nunca 16
+
+É o ponto do lote. `GET /op-materials/warehouse` devolve todas as OPs abertas com material numa
+resposta só. A prova mede no mount: **1 chamada ao `/warehouse`, 0 ao `/balance/:csid`, 0 ao
+`/events`** — com controle negativo no bundle da base, que mostra o `<select>` e nenhuma chamada
+ao agregado.
+
+De brinde, uma requisição a menos: o Armazém não precisa mais do `GET /clients` (o cabeçalho da
+OP vem no próprio agregado). A base chamava `/clients`; a versão nova, não.
+
+O extrato do razão virou **por OP e sob demanda** — o `PGExtratoDaOp` só monta quando aberto, e é
+o montar que dispara o GET. Nenhum extrato sai no mount.
+
+### DECISÃO: o chip "LT-XXX" SAIU da tela
+
+Não é entidade. É rótulo do mock: `ref21/producaoger.jsx:25-33`, `PG_ARMAZEM_SEED`, `id: 'LT-501'`.
+Medido em produção: **zero** tabelas ou colunas com "lote"/"lot" no schema.
+
+O candidato real foi medido e **rejeitado com razão**. `op_material_events.ref_separation_id`
+existe e está preenchido em todos os eventos das OPs abertas — mas:
+
+- `separations` **não tem número curto exibível**, só `id` uuid. O chip viraria `4a38b7ee`:
+  fragmento de uuid não é rótulo, é ruído.
+- Os 4 pares (OP, produto) têm **exatamente 1 recebimento cada — hoje, por coincidência**. Nada
+  garante isso. No segundo recebimento do mesmo produto na mesma OP, o chip mostraria a origem de
+  UMA entrada numa linha que soma DUAS.
+
+**É a régua do S1: identificar por PROXY não é identificar.** Rótulo fake é pior que ausência.
+
+### DECISÃO: o cabeçalho da OP é `código · cliente`
+
+A referência tem três campos (`código · nome do produto · cliente`). O "nome" sairia de
+`client_services.description`, que está **vazia em 16/16 OPs abertas** (medido em produção,
+19/08/2026) — e o adaptador `adaptClient` sequer a carrega. Exibir campo vazio em 100% dos casos é
+espaço morto no layout. Se um dia houver descrição, acrescenta-se.
+
+### DECISÃO: o botão "Apontar" NÃO entrou — e não havia "antes"
+
+`PGArmazem` já era **read-only** por decisão registrada no próprio código: o `PGLoteModal`
+("Apontar uso", com desvio de OP e escolha de máquina) foi removido em lote anterior. No ref21 o
+botão do card faz `setLote(m)` → abre exatamente esse drawer.
+
+O apontamento vive em `PGAponta`, com fluxo de **leitor de código de barras** (foco automático no
+SKU, bipada + Enter, `X-Idempotency-Key` nascida ao escolher a peça). Colar um botão de clicar no
+card misturaria dois desenhos de interação e confundiria mais que o `<select>` que saiu.
+
+### DÍVIDA ABERTA — o drawer de apontamento do ref21 segue FORA
+
+O drawer traz duas coisas que o backend **não tem**:
+
+- **desvio de OP** (apontar material de uma OP contra outra) — exige registro de origem que não
+  existe no razão;
+- **máquina como eixo** — hoje `machine_id` é *dimensão* etiquetada no consumo, não eixo da
+  projeção; virar eixo é decisão de schema pendente.
+
+Não é omissão do lote: é backend inexistente. Enquanto for, o drawer não entra — e quando entrar,
+é lote próprio, não apresentação.
+
+### Unidade normalizada na EXIBIÇÃO, sem tocar o dado
+
+Medido: **6 produtos com `unit` em minúscula (`un`)** entre 11 unidades distintas no catálogo
+ativo, e o laudo do Confronto achou `"UND "` **com espaço** em produção. Sem normalizar, dois
+cards do mesmo material apareceriam com unidades diferentes e o operador leria como coisas
+distintas.
+
+`pgUnidade()` faz `trim` + **MAIÚSCULA** — não minúscula. É a forma que as telas irmãs
+(Apontamentos, Recebimento) já usam; a minúscula da referência era estilo do mock, e divergir aqui
+criaria a inconsistência que a normalização existe para matar. **O dado não muda.**
+
+### Nota de instrumento: `Card` não repassa props
+
+`ui.jsx:27` — `Card({ t, children, style, hover, onClick })` descarta qualquer outra prop, então
+`data-fr` morria no componente e a prova mediu **0 cards** numa tela que renderizava 6. Os cards
+foram envolvidos num `<div data-fr>` em vez de alterar o `Card`, que toda tela usa.
+
+E a primeira rodada da prova do badge "Consumido" acusou **6 de 6**: o seletor casava
+`/Consumido/` no `textContent` do card, que também contém a linha "Recebido 100 · Consumido 40".
+**Defeito do instrumento, não da tela** — corrigido escopando ao badge.

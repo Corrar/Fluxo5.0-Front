@@ -54,7 +54,7 @@ function pgDateTime(iso) {
 // Hook GET genérico -> { items, loading, error, reload }. path null/'' = não busca (sem OP escolhida).
 // reqId descarta resposta de requisição velha: trocar de OP rápido dispararia duas buscas e a
 // primeira poderia responder DEPOIS, pintando a tela com o saldo da OP errada.
-function pgUseGet(path) {
+function pgUseGet(path, pick) {
   const R = window.React;
   const [items, setItems] = R.useState([]);
   const [loading, setLoading] = R.useState(!!path);
@@ -68,14 +68,16 @@ function pgUseGet(path) {
     window.FRApi.get(path, { skipLoading: true })
       .then(function (res) {
         if (!mounted.current || my !== reqId.current) return;
-        setItems(Array.isArray(res && res.data) ? res.data : []);
+        // `pick` existe para o /warehouse, que devolve { ops, total_ops, truncado, limite } em
+        // vez de array nu. Sem ele, o comportamento e' EXATAMENTE o de antes.
+        setItems(pick ? pick(res && res.data) : (Array.isArray(res && res.data) ? res.data : []));
         setLoading(false);
       })
       .catch(function (e) {
         if (!mounted.current || my !== reqId.current) return;
         setError(pgErr(e)); setLoading(false);
       });
-  }, [path]);
+  }, [path, pick]);
   R.useEffect(function () { mounted.current = true; load(); return function () { mounted.current = false; }; }, [load]);
   // TUDO que este hook busca é PROJEÇÃO DE MOVIMENTO DE ESTOQUE — o saldo por OP, o razão da OP e
   // a fila de recebimento são as três leituras de `op_material_events`, e quem escreve nessa tabela
@@ -97,7 +99,28 @@ function pgUseGet(path) {
 function useFROpPendingReceipts(verTudo) {
   return pgUseGet('/op-materials/pending-receipts' + (verTudo ? '?scope=all' : ''));
 }
+// UNIDADE NORMALIZADA NA EXIBICAO — o DADO nao muda, so o que se mostra.
+// Medido no catalogo ativo: 6 produtos com `unit` em MINUSCULA ("un") entre 11 unidades
+// distintas, e o laudo do Confronto achou "UND " COM ESPACO em producao. Sem isto, dois cards
+// do mesmo material apareceriam com unidades diferentes e o operador leria como coisas distintas.
+// MAIUSCULA e nao minuscula: e' a forma que as telas irmas (Apontamentos, Recebimento) ja usam;
+// a minuscula da referencia era estilo do mock.
+function pgUnidade(u) { return String(u == null ? '' : u).trim().toUpperCase(); }
+
+// ARMAZEM DA PRODUCAO (lote PG1): TODAS as OPs abertas com material, em UMA requisicao.
+// A alternativa era chamar o /balance/:csid por OP — 16 GETs no mount, hoje. Ver o comentario
+// grande no PGArmazem. `pick` normaliza a ausencia: erro ou shape inesperado vira lista vazia,
+// nunca undefined derrubando a grade.
+function useFROpWarehouse() {
+  const r = pgUseGet('/op-materials/warehouse', pgPickWarehouse);
+  return { data: r.items, loading: r.loading, error: r.error, reload: r.reload };
+}
+function pgPickWarehouse(d) {
+  return { ops: Array.isArray(d && d.ops) ? d.ops : [], total_ops: pgNum(d && d.total_ops), truncado: !!(d && d.truncado), limite: pgNum(d && d.limite) };
+}
+
 // A projeção do saldo da OP: 1 linha por produto.
+// ⚠ CONTINUA EXISTINDO E INTOCADO: a tela de Apontamentos e a Montagem o consomem.
 function useFROpBalance(csid) { return pgUseGet(csid ? '/op-materials/balance/' + csid : ''); }
 // O extrato do razão da OP (LIMIT 50 no backend). tipo opcional: 'consumido' | 'recebido' | ...
 function useFROpEvents(csid, tipo) { return pgUseGet(csid ? '/op-materials/events/' + csid + (tipo ? '?event_type=' + tipo : '') : ''); }
@@ -116,7 +139,7 @@ function frOpConsume(clientServiceId, productId, qty, idemKey, machineId) {
 }
 // pgOpsAbertas sai pro window porque a Montagem (montagem.jsx) precisa da MESMA lista de OPs
 // abertas — duplicar o normalizador lá faria as duas telas divergirem no dia que o critério mudar.
-Object.assign(window, { useFROpPendingReceipts, useFROpBalance, useFROpEvents, frOpReceive, frOpConsume, pgOpsAbertas, pgErr, pgGenKey, pgDateTime, pgNum });
+Object.assign(window, { useFROpPendingReceipts, useFROpBalance, useFROpEvents, frOpReceive, frOpConsume, pgOpsAbertas, pgErr, pgGenKey, pgDateTime, pgNum, pgUnidade });
 
 // ---------- Toast (erro/sucesso) — mesmo visual das telas já ligadas ----------
 function PGToast({ t, toast, onClose }) {
@@ -514,93 +537,191 @@ function PGAponta({ t }) {
 }
 
 // ---------- Armazém da Produção ----------
-// READ-ONLY nesta peça: a projeção do GET /balance (o que a OP recebeu, consumiu e ainda tem).
+// READ-ONLY nesta peça: a projeção do razão da OP (o que a OP recebeu, consumiu e ainda tem).
 // Apontar consumo é na tela de Apontamentos; transferir OP->OP é a peça 4. O antigo PGLoteModal
 // ("Apontar uso", com desvio e escolha de máquina) foi REMOVIDO — mexia em state local e era o
 // único emissor do evento de browser 'fr-maq-consumo'. Ver PG_GAPS.
+//
+// ── LOTE PG1: o <select> saiu, entrou a grade de todas as OPs ────────────────────────────────
+// O PGOpPicker mostrava UMA OP por vez e a tela inteira recarregava a cada troca — era o "muito
+// confuso" do Bruno. Agora todas as OPs abertas COM MATERIAL aparecem de uma vez, agrupadas, em
+// grade de cards.
+//
+// ⚠ ISSO CUSTA **UMA** REQUISIÇÃO, NÃO UMA POR OP. O caminho ingênuo (manter o /balance/:csid e
+// chamá-lo em laço) seriam 16 GETs no mount, hoje — e o lote BW acabou de cortar 89% do payload
+// da listagem de produtos. O endpoint agregado GET /op-materials/warehouse faz o MESMO cálculo,
+// agrupado por OP além de por produto. Se algum dia esta tela voltar a disparar N requisições, o
+// desenho falhou: é o ponto do lote.
+//
+// O que NÃO entrou, de propósito:
+//   · botão "Apontar" no card — a tela segue read-only. O apontamento vive em PGAponta, com fluxo
+//     de LEITOR DE CÓDIGO DE BARRAS (bipar, não clicar); misturar os dois desenhos confunde mais
+//     que o select que saiu. Se for para entrar, é lote próprio.
+//   · o chip "LT-XXX" da referência — não é entidade. É rótulo do mock (ref21 PG_ARMAZEM_SEED);
+//     não há tabela nem coluna de lote em migration nenhuma. Ver DIVIDAS.
+//   · o "nome do produto" no cabeçalho da OP — client_services.description está VAZIA em 16/16
+//     OPs abertas (medido em produção, 19/08/2026). O cabeçalho é código · cliente.
 function PGArmazem({ t }) {
-  const { items: clientes, loading: cliLoading, error: cliError } = window.useFRClients();
-  const [opId, setOpId] = useStatePG('');
-  const [extrato, setExtrato] = useStatePG(false);
-  const ops = React.useMemo(() => pgOpsAbertas(clientes), [clientes]);
-  const opSel = ops.find((o) => o.id === opId) || null;
-  const { items: saldo, loading, error, reload } = useFROpBalance(opId);
-  const { items: eventos, loading: evLoading, reload: reloadEv } = useFROpEvents(extrato ? opId : '', '');
+  const { data: armazem, loading, error, reload } = useFROpWarehouse();
+  const [q, setQ] = useStatePG('');
+  const [verTudo, setVerTudo] = useStatePG([]);
+  const [extratoDe, setExtratoDe] = useStatePG('');
 
-  const tot = (k) => saldo.reduce((a, r) => a + pgNum(r[k]), 0);
-  const EV_LABEL = { recebido: ['Recebido', 'green'], consumido: ['Consumido', 'red'], devolvido: ['Devolvido', 'amber'], transferido_in: ['Transf. entrada', 'blue'], transferido_out: ['Transf. saída', 'gray'] };
+  const ops = (armazem && armazem.ops) || [];
+
+  // FILTRO EM MEMÓRIA — digitar NÃO dispara requisição. A lista inteira já está na mão desde o
+  // mount (é uma resposta só); filtrar no servidor aqui seria um GET por tecla para reduzir um
+  // array que já está local.
+  const ql = q.trim().toLowerCase();
+  const filtradas = !ql ? ops : ops
+    .map((o) => {
+      const casaOp = String(o.op_code).toLowerCase().includes(ql) || String(o.client_name).toLowerCase().includes(ql);
+      // OP que casa mostra TODOS os seus materiais; senão, só os materiais que casam.
+      const mats = casaOp ? o.materiais : o.materiais.filter((m) =>
+        String(m.name).toLowerCase().includes(ql) || String(m.sku).toLowerCase().includes(ql));
+      return mats.length ? { ...o, materiais: mats } : null;
+    })
+    .filter(Boolean);
+
+  const todos = filtradas.flatMap((o) => o.materiais);
+  const somar = (k) => todos.reduce((a, m) => a + pgNum(m[k]), 0);
 
   return (
     <div>
       <PageHeader t={t} title="Armazém da Produção" subtitle="Material que está com a OP: o que ela recebeu do almoxarifado, o que já foi consumido e o que resta." />
-      <Card t={t} style={{ padding: 20, marginBottom: 20 }}>
-        <PGOpPicker t={t} ops={ops} value={opId} onChange={(v) => { setOpId(v); setExtrato(false); }} loading={cliLoading} error={cliError} />
-      </Card>
 
-      {!opId ? (
-        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Escolha uma OP" sub="Selecione a Ordem de Produção para ver o material que está com ela." /></Card>
-      ) : error ? (
+      {error ? (
         <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
           <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
           <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
         </Card>
-      ) : loading && !saldo.length ? (
-        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando o saldo da OP…</Card>
+      ) : loading && !ops.length ? (
+        <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando o armazém…</Card>
       ) : (
         <React.Fragment>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-            <KPI t={t} mini icon="box" label="Materiais na OP" value={saldo.length} kind="accent" />
-            <KPI t={t} mini icon="download" label="Total recebido" value={tot('recebido')} kind="green" />
-            <KPI t={t} mini icon="zap" label="Total consumido" value={tot('consumido')} kind="amber" />
-            <KPI t={t} mini icon="clipboard" label="Com saldo" value={saldo.filter((r) => pgNum(r.saldo) > 0).length} kind="blue" />
+            <KPI t={t} mini icon="kanban" label="OPs com material" value={filtradas.length} kind="accent" />
+            <KPI t={t} mini icon="box" label="Materiais" value={todos.length} kind="blue" />
+            <KPI t={t} mini icon="download" label="Total recebido" value={somar('recebido')} kind="green" />
+            <KPI t={t} mini icon="zap" label="Total consumido" value={somar('consumido')} kind="amber" />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '4px 2px 12px', flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint }}>
-              Saldo por material {opSel ? '· OP ' + opSel.op_code : ''}
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <Btn t={t} kind="ghost" icon="file" onClick={() => { const n = !extrato; setExtrato(n); if (n) setTimeout(() => reloadEv(), 0); }}>{extrato ? 'Ocultar extrato' : 'Ver extrato'}</Btn>
-              <Btn t={t} kind="ghost" icon="refresh" onClick={() => { reload(); if (extrato) reloadEv(); }}>Atualizar</Btn>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+            <label style={{ flex: 1, minWidth: 260, display: 'flex', alignItems: 'center', gap: 10, height: 46, padding: '0 14px', borderRadius: 12, background: t.panel, border: `1px solid ${t.border}`, color: t.muted, cursor: 'text' }}>
+              <Icon name="search" size={18} />
+              <input data-fr="armazem-busca" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material, SKU, OP ou cliente…"
+                style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
+            </label>
+            <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
           </div>
 
-          {saldo.length === 0 ? (
-            <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada nesta OP" sub="Esta OP ainda não recebeu material. Confirme o recebimento na tela de Recebimento." /></Card>
-          ) : (
-            <DataTable t={t} columns={[
-              { key: 'name', label: 'Material', render: (r) => (<div><div style={{ fontWeight: 700, color: t.text }}>{r.name}</div><div style={{ fontSize: 11, color: t.muted }}>{r.sku}</div></div>) },
-              { key: 'recebido', label: 'Recebido', align: 'center', render: (r) => pgNum(r.recebido) },
-              { key: 'consumido', label: 'Consumido', align: 'center', render: (r) => pgNum(r.consumido) },
-              { key: 'devolvido', label: 'Devolvido', align: 'center', render: (r) => pgNum(r.devolvido) },
-              // transferido_in/out somados numa coluna: a peça 4 (transferência OP->OP) ainda não
-              // escreve nenhum dos dois, então hoje isto é sempre 0 — fica pronto pro dia que for.
-              { key: 'transferido', label: 'Transferido', align: 'center', render: (r) => { const v = pgNum(r.transferido_in) - pgNum(r.transferido_out); return v === 0 ? '—' : (v > 0 ? '+' : '') + v; } },
-              { key: 'saldo', label: 'Saldo', align: 'center', render: (r) => { const v = pgNum(r.saldo); return <span style={{ fontWeight: 850, fontSize: 15, color: v > 0 ? t.text : t.faint }}>{v} <span style={{ fontSize: 11, fontWeight: 600, color: t.muted }}>{r.unit || ''}</span></span>; } },
-            ]} rows={saldo} />
+          {/* TRUNCAMENTO DECLARADO: o endpoint tem teto de OPs e diz quando bateu. Uma tela que
+              corta em silêncio parece completa sem estar — o aviso é a diferença. */}
+          {armazem && armazem.truncado && (
+            <Card t={t} style={{ padding: '12px 16px', marginBottom: 16, borderColor: uiTone(t, 'amber').fg }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'amber').fg }}>
+                Mostrando {ops.length} de {armazem.total_ops} OPs com material. Use a busca para encontrar uma OP específica.
+              </div>
+            </Card>
           )}
 
-          {extrato && (
-            <div style={{ marginTop: 24 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint, margin: '4px 2px 12px' }}>Extrato do razão da OP</div>
-              {evLoading && !eventos.length ? (
-                <Card t={t} style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando extrato…</Card>
-              ) : eventos.length === 0 ? (
-                <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Extrato vazio" sub="Nenhum movimento registrado nesta OP." /></Card>
-              ) : (
-                <React.Fragment>
-                  <DataTable t={t} columns={[
-                    { key: 'event_type', label: 'Movimento', render: (r) => { const [lb, k] = EV_LABEL[r.event_type] || [r.event_type, 'gray']; return <Badge t={t} kind={k}>{lb}</Badge>; } },
-                    { key: 'name', label: 'Material', render: (r) => (<div><div style={{ fontWeight: 700, color: t.text }}>{r.name}</div><div style={{ fontSize: 11, color: t.muted }}>{r.sku}</div></div>) },
-                    { key: 'qty', label: 'Qtd', align: 'center', render: (r) => { const neg = r.event_type === 'consumido' || r.event_type === 'devolvido' || r.event_type === 'transferido_out'; return <span style={{ fontWeight: 800, color: neg ? uiTone(t, 'red').fg : uiTone(t, 'green').fg }}>{neg ? '-' : '+'}{pgNum(r.qty)} {r.unit || ''}</span>; } },
-                    { key: 'user_name', label: 'Quem', render: (r) => r.user_name || '—' },
-                    { key: 'created_at', label: 'Quando', render: (r) => pgDateTime(r.created_at) },
-                  ]} rows={eventos} />
-                  <div style={{ fontSize: 11.5, color: t.faint, margin: '10px 2px 0' }}>Mostrando os 50 movimentos mais recentes.</div>
-                </React.Fragment>
-              )}
-            </div>
-          )}
+          {filtradas.length === 0 ? (
+            <Card t={t} style={{ padding: 10 }}>
+              {ql ? <EmptyState t={t} title="Nada encontrado" sub="Nenhum material ou OP corresponde à busca." />
+                  : <EmptyState t={t} title="Nenhuma OP com material" sub="Nenhuma Ordem de Produção aberta recebeu material do almoxarifado. Confirme o recebimento na tela de Recebimento." />}
+            </Card>
+          ) : filtradas.map((o) => {
+            const aberto = verTudo.includes(o.client_service_id);
+            const mostrar = aberto ? o.materiais : o.materiais.slice(0, 3);
+            return (
+              <div key={o.client_service_id} data-fr="armazem-op" style={{ marginBottom: 28 }}>
+                {/* CABEÇALHO DA OP: código · cliente. O "nome do produto" da referência não tem
+                    fonte (description vazia em 16/16) — espaço morto no layout não entra. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 800, color: t.accentText, padding: '4px 10px', borderRadius: 8, background: t.accentSoft }}>OP {o.op_code}</span>
+                  {o.client_name ? <span style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{o.client_name}</span> : null}
+                  <span style={{ fontSize: 12, color: t.faint }}>· {o.materiais.length} {o.materiais.length === 1 ? 'material' : 'materiais'}</span>
+                  <div style={{ flex: 1 }} />
+                  <Btn t={t} kind="ghost" icon="file" onClick={() => setExtratoDe(extratoDe === o.client_service_id ? '' : o.client_service_id)}>
+                    {extratoDe === o.client_service_id ? 'Ocultar extrato' : 'Ver extrato'}
+                  </Btn>
+                </div>
+
+                <div data-fr="armazem-grade" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+                  {mostrar.map((m) => {
+                    const saldo = pgNum(m.saldo);
+                    const zerado = saldo === 0;
+                    return (
+                      <div key={m.product_id} data-fr="armazem-card">
+                      <Card t={t} style={{ padding: 16 }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div data-fr="card-nome" style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{m.name}</div>
+                            <div style={{ display: 'flex', gap: 7, marginTop: 6 }}><Badge t={t} kind="gray">{m.sku}</Badge></div>
+                          </div>
+                          {zerado ? <span data-fr="card-zerado"><Badge t={t} kind="green" dot>Consumido</Badge></span> : null}
+                        </div>
+                        <div style={{ marginTop: 16 }}>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>SALDO ATUAL</div>
+                          <div data-fr="card-saldo" style={{ fontSize: 26, fontWeight: 850, color: zerado ? t.muted : t.accentText }}>
+                            {saldo} <span data-fr="card-un" style={{ fontSize: 13, color: t.muted, fontWeight: 600 }}>{pgUnidade(m.unit)}</span>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: t.faint, marginTop: 8 }}>
+                            Recebido {pgNum(m.recebido)} · Consumido {pgNum(m.consumido)}
+                            {pgNum(m.devolvido) ? ` · Devolvido ${pgNum(m.devolvido)}` : ''}
+                          </div>
+                        </div>
+                      </Card>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {o.materiais.length > 3 && (
+                  <button data-fr="armazem-vertudo" onClick={() => setVerTudo((xs) => (aberto ? xs.filter((x) => x !== o.client_service_id) : [...xs, o.client_service_id]))}
+                    style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, height: 38, padding: '0 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, color: t.accentText, background: t.accentSoft }}>
+                    <Icon name="chevronDown" size={15} style={aberto ? { transform: 'rotate(180deg)' } : null} />
+                    {aberto ? 'Ver menos' : `Ver tudo (${o.materiais.length} materiais)`}
+                  </button>
+                )}
+
+                {/* O extrato só MONTA quando aberto — e é aí que ele busca. Nenhuma requisição de
+                    extrato sai no mount da tela: o lote existe para haver UMA. */}
+                {extratoDe === o.client_service_id && <PGExtratoDaOp t={t} csid={o.client_service_id} opCode={o.op_code} />}
+              </div>
+            );
+          })}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+// Extrato do razão de UMA OP, sob demanda. Componente separado de propósito: montar/desmontar é o
+// que liga e desliga o GET (o hook só busca com `csid` preenchido).
+function PGExtratoDaOp({ t, csid, opCode }) {
+  const { items: eventos, loading, reload } = useFROpEvents(csid, '');
+  const EV_LABEL = { recebido: ['Recebido', 'green'], consumido: ['Consumido', 'red'], devolvido: ['Devolvido', 'amber'], transferido_in: ['Transf. entrada', 'blue'], transferido_out: ['Transf. saída', 'gray'] };
+  return (
+    <div data-fr="armazem-extrato" style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '4px 2px 12px' }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.05em', textTransform: 'uppercase', color: t.faint }}>Extrato do razão · OP {opCode}</div>
+        <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
+      </div>
+      {loading && !eventos.length ? (
+        <Card t={t} style={{ padding: 30, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando extrato…</Card>
+      ) : eventos.length === 0 ? (
+        <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Extrato vazio" sub="Nenhum movimento registrado nesta OP." /></Card>
+      ) : (
+        <React.Fragment>
+          <DataTable t={t} columns={[
+            { key: 'event_type', label: 'Movimento', render: (r) => { const [lb, k] = EV_LABEL[r.event_type] || [r.event_type, 'gray']; return <Badge t={t} kind={k}>{lb}</Badge>; } },
+            { key: 'name', label: 'Material', render: (r) => (<div><div style={{ fontWeight: 700, color: t.text }}>{r.name}</div><div style={{ fontSize: 11, color: t.muted }}>{r.sku}</div></div>) },
+            { key: 'qty', label: 'Qtd', align: 'center', render: (r) => { const neg = r.event_type === 'consumido' || r.event_type === 'devolvido' || r.event_type === 'transferido_out'; return <span style={{ fontWeight: 800, color: neg ? uiTone(t, 'red').fg : uiTone(t, 'green').fg }}>{neg ? '-' : '+'}{pgNum(r.qty)} {pgUnidade(r.unit)}</span>; } },
+            { key: 'user_name', label: 'Quem', render: (r) => r.user_name || '—' },
+            { key: 'created_at', label: 'Quando', render: (r) => pgDateTime(r.created_at) },
+          ]} rows={eventos} />
+          <div style={{ fontSize: 11.5, color: t.faint, margin: '10px 2px 0' }}>Mostrando os 50 movimentos mais recentes.</div>
         </React.Fragment>
       )}
     </div>
