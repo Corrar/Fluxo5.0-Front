@@ -1392,3 +1392,33 @@ os pedirá por `?type=manual` ou `?type=all`.
 O dado **não some**: fica alcançável por parâmetro explícito (ver `DIVIDAS.md` do backend). Quando
 a aba existir, ela usa o parâmetro. **Não se mexe no default** — ele é o que protege o Quadro de
 Gestão de voltar a ser um histórico.
+
+## LOTE RS1 — a fila de Recebimento passa a ter duas origens
+
+### Rótulo discreto, NÃO duas listas
+
+O card ganhou um rótulo `Separação` / `Solicitação` no cabeçalho. A alternativa — duas abas ou
+duas listas — foi descartada: o operador **confirma do mesmo jeito nas duas**, e o que muda é de
+onde o material veio, que é **contexto, não fluxo**. Separar o obrigaria a olhar dois lugares para
+responder a única pergunta que esta tela existe para responder: *o que falta receber?*
+
+### Dois defeitos que a prova pegou, e os dois eram do mesmo tipo
+
+O payload novo traz `separation_id` **NULL** nas linhas de solicitação e `request_id` NULL nas de
+separação. O código antigo lia as colunas de separação cruas, e isso quebrou em dois lugares:
+
+1. **`rcAgrupar` agrupava por `separation_id`.** Com ele NULL nas solicitações, as três
+   solicitações da fixture cairiam num **card só**, com chave `undefined`. Corrigido com
+   `rcChave(r)` — o par (origem, id da origem).
+2. **`itemId` ia `null` no corpo do POST.** As linhas usavam `it.item_id`, que é de
+   `separation_items`; na solicitação o id vive em `request_item_id`. A prova mediu
+   `{"itemId":null,"qty":3}` saindo. Corrigido com `rcItemId(r)`.
+
+O segundo é a **régua do C1 de novo**: a tela renderizava certo e o **corpo saía errado**. Só a
+prova de payload pegou — inspecionar a tela não teria acusado nada.
+
+### Fallback para payload antigo
+
+`rcAgrupar` trata `origem` ausente como `'separacao'`, e `frOpReceive` aceita tanto o card quanto
+o id cru. Não é defensividade gratuita: durante o deploy o front novo pode conversar por alguns
+minutos com o backend antigo, que não manda `origem`.

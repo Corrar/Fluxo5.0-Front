@@ -32,17 +32,35 @@ const frInt = (v, piso) => (window.FRAdapters && window.FRAdapters.parseContagem
 
 const { useState: useStateRC } = React;
 
-// Agrupa as linhas da fila (1 por item) em cards (1 por separação), preservando a ordem do backend.
+// A CHAVE DA ORIGEM (lote RS1). A fila passou a ter DUAS origens e `separation_id` vem NULL nas
+// linhas de solicitação — agrupar por ele juntaria TODAS as solicitações num card só, com
+// `undefined` de chave. A chave é o par (origem, id da origem).
+function rcChave(r) {
+  return r.origem === 'solicitacao' ? 'req:' + r.request_id : 'sep:' + r.separation_id;
+}
+
+// O ID DA LINHA ENTREGUE, por origem. `item_id` vem NULL na solicitação (é separation_items) e
+// `request_item_id` vem NULL na separação. Usar `item_id` cru mandava itemId:null no corpo do
+// POST — a prova do front pegou, e o backend teria caído no ramo do productId ou recusado.
+function rcItemId(r) {
+  return r.origem === 'solicitacao' ? r.request_item_id : r.item_id;
+}
+
+// Agrupa as linhas da fila (1 por item) em cards (1 por ORIGEM), preservando a ordem do backend.
 function rcAgrupar(rows) {
   const mapa = new Map();
   (rows || []).forEach((r) => {
-    if (!mapa.has(r.separation_id)) {
-      mapa.set(r.separation_id, {
-        separation_id: r.separation_id, op_code: r.op_code, client_service_id: r.client_service_id,
+    const k = rcChave(r);
+    if (!mapa.has(k)) {
+      mapa.set(k, {
+        chave: k,
+        origem: r.origem || 'separacao',            // fallback: payload antigo = separação
+        separation_id: r.separation_id, request_id: r.request_id,
+        op_code: r.op_code, client_service_id: r.client_service_id,
         sector: r.sector, status: r.status, sent_at: r.sent_at, itens: [],
       });
     }
-    mapa.get(r.separation_id).itens.push(r);
+    mapa.get(k).itens.push(r);
   });
   return [...mapa.values()];
 }
@@ -50,11 +68,11 @@ function rcAgrupar(rows) {
 function RCEnvioCard({ t, env, onConfirm, busy }) {
   // qty por item, default = restante (o caso comum é receber tudo que falta).
   const [qtds, setQtds] = useStateRC(() => {
-    const o = {}; env.itens.forEach((it) => { o[it.item_id] = String(window.pgNum(it.pendente)); }); return o;
+    const o = {}; env.itens.forEach((it) => { o[rcItemId(it)] = String(window.pgNum(it.pendente)); }); return o;
   });
   const set = (id, v) => setQtds((s) => ({ ...s, [id]: frSanQtd(v) }));
-  const marcados = env.itens.filter((it) => (parseInt(qtds[it.item_id]) || 0) > 0);
-  const acima = env.itens.filter((it) => (parseInt(qtds[it.item_id]) || 0) > window.pgNum(it.pendente));
+  const marcados = env.itens.filter((it) => (parseInt(qtds[rcItemId(it)]) || 0) > 0);
+  const acima = env.itens.filter((it) => (parseInt(qtds[rcItemId(it)]) || 0) > window.pgNum(it.pendente));
   const podeConfirmar = marcados.length > 0 && acima.length === 0 && !busy;
 
   return (
@@ -64,6 +82,14 @@ function RCEnvioCard({ t, env, onConfirm, busy }) {
         <div style={{ flex: 1, minWidth: 180 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: t.accentText, padding: '2px 8px', borderRadius: 7, background: t.accentSoft }}>OP {env.op_code}</span>
+            {/* RÓTULO DE ORIGEM (lote RS1) — discreto, e NÃO duas listas. O operador confirma do
+                mesmo jeito nas duas: o que muda é DE ONDE veio, e isso é contexto, não fluxo.
+                Separar em duas abas o obrigaria a olhar dois lugares para saber o que falta
+                receber, que é exatamente a pergunta que esta tela existe para responder. */}
+            <span data-fr="rc-origem" style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.04em', textTransform: 'uppercase',
+              padding: '2px 8px', borderRadius: 7, border: `1px solid ${t.border}`, color: t.muted }}>
+              {env.origem === 'solicitacao' ? 'Solicitação' : 'Separação'}
+            </span>
             {/* 'concluida' = saída manual; 'entregue' = Quadro Gestão. Os dois já debitaram o físico. */}
             <Badge t={t} kind={env.status === 'entregue' ? 'blue' : 'gray'}>{env.status === 'entregue' ? 'Separação entregue' : 'Saída manual'}</Badge>
           </div>
@@ -82,10 +108,10 @@ function RCEnvioCard({ t, env, onConfirm, busy }) {
               const last = i === env.itens.length - 1;
               const bd = last ? 'none' : `1px solid ${t.border}`;
               const rest = window.pgNum(it.pendente);
-              const n = parseInt(qtds[it.item_id]) || 0;
+              const n = parseInt(qtds[rcItemId(it)]) || 0;
               const estoura = n > rest;
               return (
-                <tr key={it.item_id}>
+                <tr key={rcItemId(it)}>
                   <td style={{ padding: '11px 18px', borderBottom: bd }}>
                     <div style={{ fontWeight: 600, color: t.text }}>{it.name}</div>
                     <div style={{ fontSize: 11, color: t.muted }}>{it.sku}</div>
@@ -94,7 +120,7 @@ function RCEnvioCard({ t, env, onConfirm, busy }) {
                   <td style={{ padding: '11px 18px', textAlign: 'center', borderBottom: bd, color: t.muted }}>{window.pgNum(it.recebido)}</td>
                   <td style={{ padding: '11px 18px', textAlign: 'center', borderBottom: bd, fontWeight: 800, color: t.accentText }}>{rest}</td>
                   <td style={{ padding: '11px 18px', textAlign: 'center', borderBottom: bd }}>
-                    <input value={qtds[it.item_id]} onChange={(e) => set(it.item_id, e.target.value)} inputMode="numeric"
+                    <input value={qtds[rcItemId(it)]} onChange={(e) => set(rcItemId(it), e.target.value)} inputMode="numeric"
                       style={{ width: 72, height: 34, textAlign: 'center', borderRadius: 9, border: `1px solid ${estoura ? uiTone(t, 'red').fg : t.border}`, background: t.elevated, color: t.text, fontSize: 14, fontWeight: 800, fontFamily: 'inherit', outline: 'none' }} />
                     {estoura && <div style={{ fontSize: 10.5, color: uiTone(t, 'red').fg, fontWeight: 700, marginTop: 3 }}>máx. {rest}</div>}
                   </td>
@@ -109,7 +135,7 @@ function RCEnvioCard({ t, env, onConfirm, busy }) {
         <div style={{ flex: 1, minWidth: 180, fontSize: 12, color: t.muted }}>
           Confirmar credita o material no <b style={{ color: t.text }}>armazém da OP {env.op_code}</b>. Receber menos que o restante é permitido — o resto continua na fila.
         </div>
-        <button onClick={() => podeConfirmar && onConfirm(env, marcados.map((it) => ({ itemId: it.item_id, qty: parseInt(qtds[it.item_id]) || 0 })))}
+        <button onClick={() => podeConfirmar && onConfirm(env, marcados.map((it) => ({ itemId: rcItemId(it), qty: parseInt(qtds[rcItemId(it)]) || 0 })))}
           disabled={!podeConfirmar}
           style={{ all: 'unset', cursor: podeConfirmar ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: 8, height: 44, padding: '0 20px', borderRadius: 12, fontSize: 14, fontWeight: 800, background: podeConfirmar ? t.accent : t.elevated, color: podeConfirmar ? '#fff' : t.faint }}>
           <Icon name={busy ? 'refresh' : 'check'} size={17} style={busy ? { animation: 'fr-spin .7s linear infinite' } : undefined} /> {busy ? 'Confirmando…' : 'Confirmar recebimento'}
@@ -141,19 +167,19 @@ function PGRecebimento({ t }) {
     setKeys((prev) => {
       const next = { ...prev };
       let mudou = false;
-      cards.forEach((c) => { if (!next[c.separation_id]) { next[c.separation_id] = window.pgGenKey(); mudou = true; } });
+      cards.forEach((c) => { if (!next[c.chave]) { next[c.chave] = window.pgGenKey(); mudou = true; } });
       return mudou ? next : prev;
     });
   }, [cards]);
 
   const confirmar = async (env, itens) => {
     if (busyId) return;
-    const key = keys[env.separation_id];
-    setBusyId(env.separation_id);
+    const key = keys[env.chave];
+    setBusyId(env.chave);
     try {
-      await window.frOpReceive(env.separation_id, itens, key);
+      await window.frOpReceive(env, itens, key);
       const total = itens.reduce((a, i) => a + i.qty, 0);
-      setKeys((s) => { const n = { ...s }; delete n[env.separation_id]; return n; });   // só o SUCESSO queima a chave
+      setKeys((s) => { const n = { ...s }; delete n[env.chave]; return n; });   // só o SUCESSO queima a chave
       reload();
       setToast({ kind: 'ok', msg: `Recebido: ${total} un. creditadas no armazém da OP ${env.op_code}.` });
     } catch (e) {
@@ -200,7 +226,7 @@ function PGRecebimento({ t }) {
         <Card t={t} style={{ padding: 10 }}><EmptyState t={t} title="Nada para receber" sub="Nenhuma separação entregue com material pendente de recebimento." /></Card>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {cards.map((c) => <RCEnvioCard t={t} key={c.separation_id} env={c} busy={busyId === c.separation_id} onConfirm={confirmar} />)}
+          {cards.map((c) => <RCEnvioCard t={t} key={c.chave} env={c} busy={busyId === c.chave} onConfirm={confirmar} />)}
         </div>
       )}
       <PGToast t={t} toast={toast} onClose={() => setToast(null)} />

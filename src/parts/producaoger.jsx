@@ -126,8 +126,15 @@ function useFROpBalance(csid) { return pgUseGet(csid ? '/op-materials/balance/' 
 function useFROpEvents(csid, tipo) { return pgUseGet(csid ? '/op-materials/events/' + csid + (tipo ? '?event_type=' + tipo : '') : ''); }
 
 // Mutações. Devolvem a resposta; quem chama trata erro/toast (padrão das telas já ligadas).
-function frOpReceive(separationId, items, idemKey) {
-  return window.FRApi.post('/op-materials/receive', { separationId: separationId, items: items }, { headers: { 'X-Idempotency-Key': idemKey } });
+// (lote RS1) recebe o CARD, não só o id: a fila tem duas origens e o corpo muda de chave.
+// Aceita também o id cru (string) para não quebrar chamador antigo — o backend trata o resto.
+function frOpReceive(origem, items, idemKey) {
+  const corpo = typeof origem === 'string'
+    ? { separationId: origem, items: items }
+    : (origem && origem.origem === 'solicitacao'
+        ? { requestId: origem.request_id, items: items }
+        : { separationId: origem && origem.separation_id, items: items });
+  return window.FRApi.post('/op-materials/receive', corpo, { headers: { 'X-Idempotency-Key': idemKey } });
 }
 // machineId é OPCIONAL (Montagem v1, migration 016): ETIQUETA o consumo com a máquina que
 // recebeu a peça. Só vai no corpo quando escolhido — o backend trata ausência como NULL, e a
