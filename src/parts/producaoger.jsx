@@ -111,19 +111,39 @@ function pgUnidade(u) { return String(u == null ? '' : u).trim().toUpperCase(); 
 // A alternativa era chamar o /balance/:csid por OP — 16 GETs no mount, hoje. Ver o comentario
 // grande no PGArmazem. `pick` normaliza a ausencia: erro ou shape inesperado vira lista vazia,
 // nunca undefined derrubando a grade.
-function useFROpWarehouse() {
-  const r = pgUseGet('/op-materials/warehouse', pgPickWarehouse);
+// ⚠ AW1: o endpoint passou a ser POR SETOR. `verTudo` é o toggle do master (?scope=all) e NÃO é
+// segurança — é UX: o backend ignora `scope=all` de quem não é admin/almoxarife (fail-closed do
+// lado de lá), exatamente como no Recebimento.
+function useFROpWarehouse(verTudo) {
+  const r = pgUseGet('/op-materials/warehouse' + (verTudo ? '?scope=all' : ''), pgPickWarehouse);
   return { data: r.items, loading: r.loading, error: r.error, reload: r.reload };
 }
 function pgPickWarehouse(d) {
-  return { ops: Array.isArray(d && d.ops) ? d.ops : [], total_ops: pgNum(d && d.total_ops), truncado: !!(d && d.truncado), limite: pgNum(d && d.limite) };
+  return {
+    ops: Array.isArray(d && d.ops) ? d.ops : [],
+    total_ops: pgNum(d && d.total_ops),
+    truncado: !!(d && d.truncado),
+    limite: pgNum(d && d.limite),
+    // AW1 — aditivos. `escopo` diz de quem é o número que está na tela; `pode_ver_tudo` é o que
+    // decide se o toggle aparece (o backend é quem manda, o front não deduz pelo papel).
+    escopo: (d && d.escopo) || 'setor',
+    warehouse_id: (d && d.warehouse_id) || null,
+    warehouse_code: (d && d.warehouse_code) || null,
+    pode_ver_tudo: !!(d && d.pode_ver_tudo),
+    sem_setor: pgNum(d && d.sem_setor),
+  };
 }
 
 // A projeção do saldo da OP: 1 linha por produto.
 // ⚠ CONTINUA EXISTINDO E INTOCADO: a tela de Apontamentos e a Montagem o consomem.
 function useFROpBalance(csid) { return pgUseGet(csid ? '/op-materials/balance/' + csid : ''); }
 // O extrato do razão da OP (LIMIT 50 no backend). tipo opcional: 'consumido' | 'recebido' | ...
-function useFROpEvents(csid, tipo) { return pgUseGet(csid ? '/op-materials/events/' + csid + (tipo ? '?event_type=' + tipo : '') : ''); }
+// AW1: `verTudo` propaga o mesmo `?scope=all` do /warehouse. Sem isso o extrato mostraria o razão
+// COMPLETO da OP dentro de um card já filtrado — a tela se contradizendo na mesma tela.
+function useFROpEvents(csid, tipo, verTudo) {
+  const qs = [tipo ? 'event_type=' + tipo : '', verTudo ? 'scope=all' : ''].filter(Boolean).join('&');
+  return pgUseGet(csid ? '/op-materials/events/' + csid + (qs ? '?' + qs : '') : '');
+}
 
 // Mutações. Devolvem a resposta; quem chama trata erro/toast (padrão das telas já ligadas).
 // (lote RS1) recebe o CARD, não só o id: a fila tem duas origens e o corpo muda de chave.
@@ -543,72 +563,97 @@ function PGAponta({ t }) {
   );
 }
 
-// ---------- Armazém da Produção ----------
-// READ-ONLY nesta peça: a projeção do razão da OP (o que a OP recebeu, consumiu e ainda tem).
-// Apontar consumo é na tela de Apontamentos; transferir OP->OP é a peça 4. O antigo PGLoteModal
-// ("Apontar uso", com desvio e escolha de máquina) foi REMOVIDO — mexia em state local e era o
-// único emissor do evento de browser 'fr-maq-consumo'. Ver PG_GAPS.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ⚠ A TELA REAGRUPOU (lote AW1). O SETOR É O DONO, A OP É A ETIQUETA.
 //
-// ── LOTE PG1: o <select> saiu, entrou a grade de todas as OPs ────────────────────────────────
-// O PGOpPicker mostrava UMA OP por vez e a tela inteira recarregava a cada troca — era o "muito
-// confuso" do Bruno. Agora todas as OPs abertas COM MATERIAL aparecem de uma vez, agrupadas, em
-// grade de cards.
+// Antes: a OP era CABEÇALHO DE SEÇÃO ("OP 32901 · cliente") e os materiais vinham embaixo dela.
+// Isso descrevia o mundo errado — o operador via Despesas, Protótipo e Floterio juntos, porque a
+// tela era "o armazém da OP-X". Não é. É "o MEU armazém, e cada item tem uma OP marcada".
 //
-// ⚠ ISSO CUSTA **UMA** REQUISIÇÃO, NÃO UMA POR OP. O caminho ingênuo (manter o /balance/:csid e
-// chamá-lo em laço) seriam 16 GETs no mount, hoje — e o lote BW acabou de cortar 89% do payload
-// da listagem de produtos. O endpoint agregado GET /op-materials/warehouse faz o MESMO cálculo,
-// agrupado por OP além de por produto. Se algum dia esta tela voltar a disparar N requisições, o
-// desenho falhou: é o ponto do lote.
+// Agora: o eixo é o ARMAZÉM DO SETOR; os materiais são uma grade única dentro dele; e a OP virou
+// CHIP DO CARD. Para o operador comum existe um setor só (o dele), então a grade é a página
+// inteira. Para o master com "Ver tudo" nascem seções — uma por setor.
+//
+// ⚠ O GRÃO DO CARD é (setor, OP, produto), não (OP, produto): o mesmo produto pode estar na mesma
+// OP em DOIS setores, com saldos separados. Medido em produção (20/08/2026): 19 de 701 pares
+// (OP, produto) já foram entregues a mais de um setor. Usar só o product_id como key React
+// fundiria os dois cards e mostraria um saldo que não existe.
 //
 // O que NÃO entrou, de propósito:
-//   · botão "Apontar" no card — a tela segue read-only. O apontamento vive em PGAponta, com fluxo
-//     de LEITOR DE CÓDIGO DE BARRAS (bipar, não clicar); misturar os dois desenhos confunde mais
-//     que o select que saiu. Se for para entrar, é lote próprio.
-//   · o chip "LT-XXX" da referência — não é entidade. É rótulo do mock (ref21 PG_ARMAZEM_SEED);
-//     não há tabela nem coluna de lote em migration nenhuma. Ver DIVIDAS.
-//   · o "nome do produto" no cabeçalho da OP — client_services.description está VAZIA em 16/16
-//     OPs abertas (medido em produção, 19/08/2026). O cabeçalho é código · cliente.
+//   · botão "Apontar" no card — a tela segue read-only (o apontamento vive em PGAponta, com
+//     leitor de código de barras). Se for para entrar, é lote próprio.
+//   · o chip "LT-XXX" da referência — não é entidade, é rótulo do mock (ref21). Ver DIVIDAS.
+//   · o "nome do produto" no cabeçalho — client_services.description está VAZIA em 16/16 OPs.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 function PGArmazem({ t }) {
-  const { data: armazem, loading, error, reload } = useFROpWarehouse();
+  // `verTudo` é o toggle do MASTER (?scope=all). Trocá-lo refaz a requisição — é o único caso em
+  // que esta tela busca de novo sem ser por "Atualizar".
+  const [verTudo, setVerTudo] = useStatePG(false);
+  const { data: armazem, loading, error, reload } = useFROpWarehouse(verTudo);
   const [q, setQ] = useStatePG('');
-  const [verTudo, setVerTudo] = useStatePG([]);
-  const [extratoDe, setExtratoDe] = useStatePG('');
+  const [expandidos, setExpandidos] = useStatePG([]);   // setores com a grade inteira aberta
+  const [extratoDe, setExtratoDe] = useStatePG('');     // client_service_id do extrato aberto
 
-  const ops = (armazem && armazem.ops) || [];
+  const grupos = (armazem && armazem.ops) || [];
+  const escopoTudo = (armazem && armazem.escopo) === 'todos';
+  const podeVerTudo = !!(armazem && armazem.pode_ver_tudo);
 
-  // FILTRO EM MEMÓRIA — digitar NÃO dispara requisição. A lista inteira já está na mão desde o
-  // mount (é uma resposta só); filtrar no servidor aqui seria um GET por tecla para reduzir um
-  // array que já está local.
+  // ACHATA os grupos (setor, OP) em ITENS, e reagrupa por SETOR. É aqui que a OP deixa de ser
+  // eixo e vira dimensão do item.
   const ql = q.trim().toLowerCase();
-  const filtradas = !ql ? ops : ops
-    .map((o) => {
-      const casaOp = String(o.op_code).toLowerCase().includes(ql) || String(o.client_name).toLowerCase().includes(ql);
+  const porSetor = [];
+  const indice = {};
+  grupos.forEach((g) => {
+    const casaOp = !ql || String(g.op_code).toLowerCase().includes(ql) || String(g.client_name).toLowerCase().includes(ql);
+    (g.materiais || []).forEach((m) => {
       // OP que casa mostra TODOS os seus materiais; senão, só os materiais que casam.
-      const mats = casaOp ? o.materiais : o.materiais.filter((m) =>
-        String(m.name).toLowerCase().includes(ql) || String(m.sku).toLowerCase().includes(ql));
-      return mats.length ? { ...o, materiais: mats } : null;
-    })
-    .filter(Boolean);
+      const casa = !ql || casaOp || String(m.name).toLowerCase().includes(ql) || String(m.sku).toLowerCase().includes(ql);
+      if (!casa) return;
+      const k = String(g.warehouse_id);
+      if (indice[k] === undefined) {
+        indice[k] = porSetor.length;
+        porSetor.push({ warehouse_id: g.warehouse_id, warehouse_code: g.warehouse_code, warehouse_name: g.warehouse_name, itens: [] });
+      }
+      porSetor[indice[k]].itens.push({
+        ...m,
+        op_code: g.op_code,
+        client_name: g.client_name,
+        client_service_id: g.client_service_id,
+        // A CHAVE do card leva o setor E a OP — ver a nota do grão no cabeçalho.
+        chave: g.warehouse_id + '|' + g.client_service_id + '|' + m.product_id,
+      });
+    });
+  });
 
-  const todos = filtradas.flatMap((o) => o.materiais);
+  const todos = porSetor.reduce((a, s) => a.concat(s.itens), []);
   const somar = (k) => todos.reduce((a, m) => a + pgNum(m[k]), 0);
+  const opsDistintas = {};
+  todos.forEach((m) => { opsDistintas[String(m.client_service_id)] = 1; });
+
+  // O RÓTULO DO KPI diz de quem é o número. Sem ele o Painel da Produção (que é global, de
+  // propósito) e esta tela mostrariam contas diferentes sem nada explicando por quê — medido:
+  // wip global = 5, Esteira = 2, Protótipo = 3.
+  const rotuloEscopo = escopoTudo ? 'Todos os setores' : 'Meu setor';
 
   return (
     <div>
-      <PageHeader t={t} title="Armazém da Produção" subtitle="Material que está com a OP: o que ela recebeu do almoxarifado, o que já foi consumido e o que resta." />
+      <PageHeader t={t} title="Armazém da Produção"
+        subtitle={escopoTudo
+          ? 'Material em custódia de todos os setores. Cada item traz a OP a que pertence.'
+          : 'O material que o seu setor recebeu do almoxarifado. Cada item traz a OP a que pertence.'} />
 
       {error ? (
         <Card t={t} style={{ padding: 24, textAlign: 'center' }}>
           <div style={{ color: uiTone(t, 'red').fg, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}>{error}</div>
           <Btn t={t} icon="refresh" kind="ghost" onClick={() => reload()}>Tentar novamente</Btn>
         </Card>
-      ) : loading && !ops.length ? (
+      ) : loading && !grupos.length ? (
         <Card t={t} style={{ padding: 40, textAlign: 'center', color: t.muted, fontSize: 13.5 }}>Carregando o armazém…</Card>
       ) : (
         <React.Fragment>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-            <KPI t={t} mini icon="kanban" label="OPs com material" value={filtradas.length} kind="accent" />
-            <KPI t={t} mini icon="box" label="Materiais" value={todos.length} kind="blue" />
+            <KPI t={t} mini icon="box" label={`Materiais · ${rotuloEscopo}`} value={todos.length} kind="accent" />
+            <KPI t={t} mini icon="kanban" label="OPs com material" value={Object.keys(opsDistintas).length} kind="blue" />
             <KPI t={t} mini icon="download" label="Total recebido" value={somar('recebido')} kind="green" />
             <KPI t={t} mini icon="zap" label="Total consumido" value={somar('consumido')} kind="amber" />
           </div>
@@ -619,6 +664,16 @@ function PGArmazem({ t }) {
               <input data-fr="armazem-busca" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar material, SKU, OP ou cliente…"
                 style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', color: t.text, fontSize: 14, fontFamily: 'inherit' }} />
             </label>
+            {/* O toggle só EXISTE para quem o backend disse que pode. O front não deduz pelo papel:
+                quem decide é `pode_ver_tudo` da resposta — e mesmo se alguém forçar, o backend
+                ignora `scope=all` de quem não é master (fail-closed lá, não aqui). */}
+            {podeVerTudo && (
+              <button data-fr="armazem-escopo" onClick={() => setVerTudo(!verTudo)}
+                style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, height: 46, padding: '0 16px', borderRadius: 12, fontSize: 12.5, fontWeight: 700, border: `1px solid ${escopoTudo ? uiTone(t, 'accent').fg : t.border}`, color: escopoTudo ? t.accentText : t.muted, background: escopoTudo ? t.accentSoft : t.panel }}>
+                <Icon name={escopoTudo ? 'eye' : 'user'} size={16} />
+                {escopoTudo ? 'Vendo todos os setores' : 'Ver todos os setores'}
+              </button>
+            )}
             <Btn t={t} kind="ghost" icon="refresh" onClick={() => reload()}>Atualizar</Btn>
           </div>
 
@@ -627,48 +682,77 @@ function PGArmazem({ t }) {
           {armazem && armazem.truncado && (
             <Card t={t} style={{ padding: '12px 16px', marginBottom: 16, borderColor: uiTone(t, 'amber').fg }}>
               <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'amber').fg }}>
-                Mostrando {ops.length} de {armazem.total_ops} OPs com material. Use a busca para encontrar uma OP específica.
+                Mostrando {Object.keys(opsDistintas).length} de {armazem.total_ops} OPs com material. Use a busca para encontrar uma OP específica.
               </div>
             </Card>
           )}
 
-          {filtradas.length === 0 ? (
+          {/* MATERIAL SEM SETOR NÃO SOME EM SILÊNCIO. A coluna nasceu nullable (migration 027);
+              se algum dia houver linha sem carimbo, ela não caberia em nenhum setor — e a tela
+              tem de DIZER isso em vez de omitir. Hoje é zero. */}
+          {armazem && armazem.sem_setor > 0 && (
+            <Card t={t} style={{ padding: '12px 16px', marginBottom: 16, borderColor: uiTone(t, 'red').fg }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: uiTone(t, 'red').fg }}>
+                {armazem.sem_setor} movimento(s) sem setor definido não aparecem em armazém nenhum. Avise o administrador.
+              </div>
+            </Card>
+          )}
+
+          {porSetor.length === 0 ? (
             <Card t={t} style={{ padding: 10 }}>
               {ql ? <EmptyState t={t} title="Nada encontrado" sub="Nenhum material ou OP corresponde à busca." />
-                  : <EmptyState t={t} title="Nenhuma OP com material" sub="Nenhuma Ordem de Produção aberta recebeu material do almoxarifado. Confirme o recebimento na tela de Recebimento." />}
+                : escopoTudo ? <EmptyState t={t} title="Nenhum material em custódia" sub="Nenhum setor confirmou recebimento de material ainda." />
+                  : armazem && armazem.warehouse_id
+                    ? <EmptyState t={t} title="Seu setor não tem material" sub="Nada foi confirmado no armazém do seu setor. Confirme o recebimento na tela de Recebimento." />
+                    /* Setor SEM armazém (Escritório, Chefia, Almoxarifado, Geral…): não é uma
+                       tela vazia por falta de dado — é o setor não ter custódia. Dizer o motivo
+                       evita que pareça bug. */
+                    : <EmptyState t={t} title="Seu setor não guarda material" sub="O material do seu setor é consumido na entrega, sem custódia — por isso não há armazém a mostrar." />}
             </Card>
-          ) : filtradas.map((o) => {
-            const aberto = verTudo.includes(o.client_service_id);
-            const mostrar = aberto ? o.materiais : o.materiais.slice(0, 3);
+          ) : porSetor.map((s) => {
+            const aberto = expandidos.indexOf(String(s.warehouse_id)) >= 0;
+            const mostrar = aberto ? s.itens : s.itens.slice(0, 12);
             return (
-              <div key={o.client_service_id} data-fr="armazem-op" style={{ marginBottom: 28 }}>
-                {/* CABEÇALHO DA OP: código · cliente. O "nome do produto" da referência não tem
-                    fonte (description vazia em 16/16) — espaço morto no layout não entra. */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 800, color: t.accentText, padding: '4px 10px', borderRadius: 8, background: t.accentSoft }}>OP {o.op_code}</span>
-                  {o.client_name ? <span style={{ fontSize: 13.5, fontWeight: 700, color: t.text }}>{o.client_name}</span> : null}
-                  <span style={{ fontSize: 12, color: t.faint }}>· {o.materiais.length} {o.materiais.length === 1 ? 'material' : 'materiais'}</span>
-                  <div style={{ flex: 1 }} />
-                  <Btn t={t} kind="ghost" icon="file" onClick={() => setExtratoDe(extratoDe === o.client_service_id ? '' : o.client_service_id)}>
-                    {extratoDe === o.client_service_id ? 'Ocultar extrato' : 'Ver extrato'}
-                  </Btn>
-                </div>
+              <div key={s.warehouse_id} data-fr="armazem-setor" data-setor={s.warehouse_code} style={{ marginBottom: 28 }}>
+                {/* CABEÇALHO DO SETOR — o dono. Só aparece quando há mais de um (o master com
+                    "Ver tudo"); para o operador comum o setor já é a página, e repetir o nome em
+                    cada bloco seria ruído. */}
+                {(escopoTudo || porSetor.length > 1) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                    <span data-fr="setor-nome" style={{ fontSize: 14, fontWeight: 800, padding: '4px 12px', borderRadius: 8, background: t.accentSoft, color: t.accentText }}>{s.warehouse_name}</span>
+                    <span style={{ fontSize: 12, color: t.faint }}>· {s.itens.length} {s.itens.length === 1 ? 'material' : 'materiais'}</span>
+                  </div>
+                )}
 
                 <div data-fr="armazem-grade" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
                   {mostrar.map((m) => {
                     const saldo = pgNum(m.saldo);
                     const zerado = saldo === 0;
+                    const extratoAberto = extratoDe === m.client_service_id;
                     return (
-                      <div key={m.product_id} data-fr="armazem-card">
+                      <div key={m.chave} data-fr="armazem-card">
                       <Card t={t} style={{ padding: 16 }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                           <div style={{ minWidth: 0 }}>
                             <div data-fr="card-nome" style={{ fontSize: 14.5, fontWeight: 800, color: t.text }}>{m.name}</div>
-                            <div style={{ display: 'flex', gap: 7, marginTop: 6 }}><Badge t={t} kind="gray">{m.sku}</Badge></div>
+                            <div style={{ display: 'flex', gap: 7, marginTop: 6, flexWrap: 'wrap' }}><Badge t={t} kind="gray">{m.sku}</Badge></div>
                           </div>
                           {zerado ? <span data-fr="card-zerado"><Badge t={t} kind="green" dot>Consumido</Badge></span> : null}
                         </div>
-                        <div style={{ marginTop: 16 }}>
+
+                        {/* ⚠ A OP COMO ETIQUETA DO ITEM — o coração do reagrupamento. Clicável:
+                            abre o extrato daquela OP (que o backend entrega já no escopo do
+                            setor, então extrato e card mostram a mesma coisa). */}
+                        <button data-fr="card-op" data-op={m.op_code}
+                          onClick={() => setExtratoDe(extratoAberto ? '' : m.client_service_id)}
+                          title={extratoAberto ? 'Ocultar extrato desta OP' : 'Ver o extrato desta OP'}
+                          style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, padding: '5px 10px', borderRadius: 8, background: extratoAberto ? t.accentSoft : t.panel, border: `1px solid ${extratoAberto ? uiTone(t, 'accent').fg : t.border}`, maxWidth: '100%' }}>
+                          <Icon name="kanban" size={13} />
+                          <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: t.accentText }}>OP {m.op_code}</span>
+                          {m.client_name ? <span style={{ fontSize: 11.5, color: t.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {m.client_name}</span> : null}
+                        </button>
+
+                        <div style={{ marginTop: 14 }}>
                           <div style={{ fontSize: 9.5, fontWeight: 700, color: t.faint, letterSpacing: '.04em' }}>SALDO ATUAL</div>
                           <div data-fr="card-saldo" style={{ fontSize: 26, fontWeight: 850, color: zerado ? t.muted : t.accentText }}>
                             {saldo} <span data-fr="card-un" style={{ fontSize: 13, color: t.muted, fontWeight: 600 }}>{pgUnidade(m.unit)}</span>
@@ -684,20 +768,25 @@ function PGArmazem({ t }) {
                   })}
                 </div>
 
-                {o.materiais.length > 3 && (
-                  <button data-fr="armazem-vertudo" onClick={() => setVerTudo((xs) => (aberto ? xs.filter((x) => x !== o.client_service_id) : [...xs, o.client_service_id]))}
+                {s.itens.length > 12 && (
+                  <button data-fr="armazem-vertudo" onClick={() => setExpandidos(aberto ? expandidos.filter((x) => x !== String(s.warehouse_id)) : expandidos.concat([String(s.warehouse_id)]))}
                     style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, height: 38, padding: '0 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, color: t.accentText, background: t.accentSoft }}>
                     <Icon name="chevronDown" size={15} style={aberto ? { transform: 'rotate(180deg)' } : null} />
-                    {aberto ? 'Ver menos' : `Ver tudo (${o.materiais.length} materiais)`}
+                    {aberto ? 'Ver menos' : `Ver todos (${s.itens.length} materiais)`}
                   </button>
                 )}
-
-                {/* O extrato só MONTA quando aberto — e é aí que ele busca. Nenhuma requisição de
-                    extrato sai no mount da tela: o lote existe para haver UMA. */}
-                {extratoDe === o.client_service_id && <PGExtratoDaOp t={t} csid={o.client_service_id} opCode={o.op_code} />}
               </div>
             );
           })}
+
+          {/* O extrato só MONTA quando aberto — e é aí que ele busca. Nenhuma requisição de
+              extrato sai no mount da tela: o lote PG1 existe para haver UMA.
+              Mora FORA da grade porque a OP não é mais seção: é etiqueta do card, e o extrato é
+              da OP inteira dentro do escopo de setor. */}
+          {extratoDe ? (
+            <PGExtratoDaOp t={t} csid={extratoDe} verTudo={escopoTudo}
+              opCode={(todos.find((m) => m.client_service_id === extratoDe) || {}).op_code || ''} />
+          ) : null}
         </React.Fragment>
       )}
     </div>
@@ -706,8 +795,9 @@ function PGArmazem({ t }) {
 
 // Extrato do razão de UMA OP, sob demanda. Componente separado de propósito: montar/desmontar é o
 // que liga e desliga o GET (o hook só busca com `csid` preenchido).
-function PGExtratoDaOp({ t, csid, opCode }) {
-  const { items: eventos, loading, reload } = useFROpEvents(csid, '');
+function PGExtratoDaOp({ t, csid, opCode, verTudo }) {
+  // AW1: o escopo do extrato acompanha o da tela — card e extrato TEM de mostrar a mesma coisa.
+  const { items: eventos, loading, reload } = useFROpEvents(csid, '', verTudo);
   const EV_LABEL = { recebido: ['Recebido', 'green'], consumido: ['Consumido', 'red'], devolvido: ['Devolvido', 'amber'], transferido_in: ['Transf. entrada', 'blue'], transferido_out: ['Transf. saída', 'gray'] };
   return (
     <div data-fr="armazem-extrato" style={{ marginTop: 18 }}>
