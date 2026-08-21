@@ -626,6 +626,15 @@ function PageEntradaNova({ t: tBase, theme, variant = 'nova', setActive }) {
         </div>
       )}
 
+      {/* Toggle GLOBAL de tamanho de etiqueta (lote ET1 · D3). Aparece nas DUAS variantes que
+          imprimem — NF e reaproveitamento — e NÃO na saída, que não imprime etiqueta nenhuma.
+          O estado é o mesmo da Conferência: trocar aqui troca lá, sem F5. */}
+      {!saida && (
+        <div style={{ marginTop: 18, padding: '12px 18px', borderRadius: 14, background: t.panel, border: `1px solid ${t.border}` }}>
+          <EtiquetaTamanhoToggle t={t} />
+        </div>
+      )}
+
       <div style={{ position: 'sticky', bottom: 0, marginTop: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
         padding: '14px 18px', borderRadius: 14, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadow }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>

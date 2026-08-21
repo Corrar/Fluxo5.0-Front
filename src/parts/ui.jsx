@@ -350,4 +350,42 @@ function FRReservaOrigens({ t, dados, onIr }) {
   );
 }
 
-Object.assign(window, { Badge, Card, PageHeader, Btn, KPI, DataTable, EmptyState, BarChart, AreaChart, RingChart, uiTone: tone, EmDesenvolvimento, FRReservaOrigens });
+// ── TOGGLE DE TAMANHO DE ETIQUETA (lote ET1 · decisão D3) ──────────────────────────────
+// Mora aqui, e não em cada tela, porque o D3 exige que ele apareça nas TRÊS que imprimem
+// (Conferência, Entrada por NF, Entrada por Reaproveitamento) e que mudar numa mude em
+// todas. O estado é global (window.FREtiquetaTamanho); este componente é só a superfície.
+// Sem estado local: o hook assina o store, então uma tela repinta quando outra troca.
+function EtiquetaTamanhoToggle({ t, compacto }) {
+  const [tam, setTam] = window.useFREtiquetaTamanho();
+  const TAMS = window.FREtiquetaTamanho.TAMANHOS;
+  const atual = TAMS.find((x) => x.id === tam) || TAMS[0];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <Icon name="barcode" size={14} />
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: t.faint, textTransform: 'uppercase' }}>Etiqueta</span>
+      </div>
+      <div role="radiogroup" aria-label="Tamanho da etiqueta"
+        style={{ display: 'inline-flex', padding: 3, gap: 3, borderRadius: 11, background: t.subtle, border: `1px solid ${t.border}` }}>
+        {TAMS.map((op) => {
+          const on = op.id === tam;
+          return (
+            <button key={op.id} role="radio" aria-checked={on} title={op.mm + ' · ' + op.nota}
+              onClick={() => setTam(op.id)}
+              style={{ all: 'unset', cursor: 'pointer', padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: on ? 850 : 600,
+                color: on ? '#fff' : t.muted, background: on ? t.accentText : 'transparent', whiteSpace: 'nowrap' }}>
+              {op.rotulo}
+            </button>
+          );
+        })}
+      </div>
+      {!compacto && (
+        <span style={{ fontSize: 11.5, color: t.faint }}>
+          {atual.mm} · {atual.nota}
+        </span>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { Badge, Card, PageHeader, Btn, KPI, DataTable, EmptyState, BarChart, AreaChart, RingChart, uiTone: tone, EmDesenvolvimento, FRReservaOrigens, EtiquetaTamanhoToggle });

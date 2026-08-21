@@ -756,71 +756,179 @@ function cfChefe(setor) { return CF_CHEFES[setor] || 'Chefe do setor'; }
 // aqui dentro e já estava MORTA: nenhuma chamada no arquivo desde que a etiqueta passou a usar
 // `order.cliente` (client_name real, via adapter do GET /requests) — ver o comentário no ponto de
 // uso. Mantê-la era guardar um caminho que resolvia cliente pelo seed de 20 nomes fixos.
-// Teto do NOME na etiqueta de identificação. Ver frZplTeto: o ^FB sobrepõe, não corta.
-const FR_ZPL_NOME_MAX = 150;
+// ══════════════════════════════════════════════════════════════════════════════════════
+// GEOMETRIA DAS TRÊS ETIQUETAS (lote ET1 · decisão D1) — tudo em dots @203dpi
+// ══════════════════════════════════════════════════════════════════════════════════════
+// ⚠ 203 dpi = 7,9921 dots/mm, NÃO 8. 100mm = 799 dots; o ^PW800 herdado está 0,1% acima e
+//   passa (é o mesmo valor de antes do ET1, mantido de propósito para não mexer no que já
+//   imprime certo). Onde o número é novo, ele sai da conta real.
+//
+// PEQUENA — a bobina de 3 colunas, medida pelo Bruno: 2mm entre colunas, 3mm vertical.
+//   coluna     33mm = 263 dots
+//   gap        2mm  =  16 dots
+//   passo      35mm = 280 dots        → ^FO das colunas em x = 0, 280, 559
+//   fim da 3ª  = 559 + 263 = 822 dots
+//   cabeça ZD220 4" = 832 dots        → CABE, com 8,8 dots (1,10 mm) de folga
+//   ^LL        17+3 = 20mm = 160 dots (a área IMPRIMÍVEL são os 135 de cima; o resto é gap)
+//   ⚠ o briefing dizia "799 dots de conteúdo": são 791 (3 × 33mm). Os 799 são a etiqueta
+//     GRANDE vazando na conta da pequena. A folga real é 8,8 dots, não 1.
+//
+// ⚠ D2 — A PEQUENA NÃO TEM CÓDIGO DE BARRAS, E ISSO NÃO É ESQUECIMENTO.
+//   Medido: um Code 128 subset B do SKU de 9 caracteres (95,6% do catálogo) ocupa
+//   (11×9+35) = 134 módulos; com a quiet zone obrigatória de 10 módulos de cada lado são
+//   154 módulos. A ^BY2 (0,250 mm, o piso prático de um cabeçote de 203 dpi e o piso da
+//   GS1) isso dá 308 dots, e a coluna tem 263. A ^BY2 cabem 6 caracteres; o menor SKU do
+//   catálogo tem 8. Só entraria a ^BY1 — módulo de 0,125 mm, METADE do piso, com o erro
+//   de posicionamento do cabeçote (±1 dot) da ordem do próprio módulo.
+//   ⇒ A 33×17 é etiqueta de IDENTIFICAÇÃO VISUAL, não de bipagem. NÃO "conserte" isto
+//     acrescentando um ^BC: o código sairia ilegível e o operador descobriria na bipagem.
+//     Se um dia for preciso bipar na pequena, o caminho é outro (payload só-dígitos em
+//     subset C cabe em 198 dots) e ele QUEBRA o casamento do handleScan, que compara
+//     String(it.sku).toUpperCase() === code. É decisão do Bruno, não conserto de rotina.
+//     A MÉDIA MANTÉM o barcode — a 100×30 tem os mesmos 800 dots de largura da grande.
+const ET_LAYOUT = {
+  grande:  { pw: 800, ll: 480, colunas: [0],           col: 800, margem: 20, barcode: true  },
+  media:   { pw: 800, ll: 240, colunas: [0],           col: 800, margem: 20, barcode: true  },
+  pequena: { pw: 823, ll: 160, colunas: [0, 280, 559], col: 263, margem: 4,  barcode: false },
+};
 
-// Etiqueta de MATERIAL (identificação) — ZPL 100x60mm @203dpi (800x480), impressão AUTOMÁTICA na ZD220.
+// ⚠ PISOS DE LEGIBILIDADE (a 203 dpi, 1 pt = 2,82 dots) — ver lib/zpl-texto.js.
+//   20 dots = piso OPERACIONAL (braço estendido, etiqueta amassada no plástico) → grande e média.
+//   18 dots = piso da PEQUENA, decisão do Bruno. Fica 2 dots ABAIXO do operacional, e é
+//             aceitável porque a 33×17 vai COLADA NA PEÇA e é lida de perto.
+//   17 dots = piso ABSOLUTO — só a pequena chega a usá-lo, e só antes de truncar.
+const ET_NOME = {
+  grande:  { hIni: 26, hMin: 20, maxLinhas: 3 },
+  media:   { hIni: 24, hMin: 20, maxLinhas: 2 },
+  pequena: { hIni: 18, hMin: 17, maxLinhas: 4 },
+};
+
+// Code 128 subset B: módulos = 11·n + 35 (start + dados + checksum + stop), mais a quiet
+// zone de 10 módulos de cada lado. Escolhe o MAIOR módulo (4→2) que ainda cabe.
+// ⚠ A quiet zone agora ENTRA na conta do coube/não coube. Antes o teste era
+//   (11·len+35)·by > 760 e ignorava os 20·by das margens do símbolo — dava o mesmo
+//   resultado para os SKUs de hoje, mas por acidente, não por conta certa.
+function etBarcode(sku, x0, larguraCol, margem, y, altura) {
+  const util = larguraCol - 2 * margem;
+  const mods = 11 * sku.length + 35;
+  let by = 4;
+  while (by > 2 && (mods + 20) * by > util) by--;
+  const w = mods * by;
+  const x = x0 + margem + Math.max(0, Math.round((util - w) / 2));
+  return { zpl: `^FO${x},${y}^BY${by}^BCN,${altura},N,N,N^FD${sku}^FS`, by, w };
+}
+
+// Monta o conteúdo de UMA coluna da etiqueta de material, no tamanho pedido.
+// Devolve só os campos (sem ^XA/^XZ) — quem fecha o rótulo é o etZplIdent.
+function etColunaIdent(sku, nome, nf, data, tamanho, reuse, x0) {
+  const T = window.FRZplTexto;
+  const L = ET_LAYOUT[tamanho], cfg = ET_NOME[tamanho];
+  const bloco = L.col - 2 * L.margem;
+  const xTexto = x0 + L.margem;
+  const um = (txt, hIni, hMin) => T.ajusta(txt, { largura: bloco, maxLinhas: 1, hIni, hMin });
+  const partes = [];
+
+  if (tamanho === 'pequena') {
+    // Sem cabeçalho e sem barcode: os 263 dots são todos do nome e do SKU (ver D2 acima).
+    const rNome = T.ajusta(nome, { largura: bloco, maxLinhas: cfg.maxLinhas, hIni: cfg.hIni, hMin: cfg.hMin });
+    partes.push(T.campos(rNome, xTexto, 5, bloco));
+    partes.push(T.campos(um(sku, 22, 17), xTexto, 90, bloco));
+    // Marca de reaproveitamento: quadrado reverse no canto. NÃO consome altura — a
+    // pequena não tem linha de info, e roubar altura do nome seria pagar caro por um aviso.
+    if (reuse) partes.push(`^FO${x0 + L.col - 26},4^GB22,22,22^FS\n^FO${x0 + L.col - 26},5^A0N,20,20^FB22,1,0,C^FR^FDR^FS`);
+    return partes.join('\n');
+  }
+
+  if (tamanho === 'media') {
+    const rNome = T.ajusta(nome, { largura: bloco, maxLinhas: cfg.maxLinhas, hIni: cfg.hIni, hMin: cfg.hMin });
+    partes.push(T.campos(rNome, xTexto, 6, bloco));
+    partes.push(T.campos(um(sku, 30, 20), xTexto, 62, bloco));
+    partes.push(etBarcode(sku, x0, L.col, L.margem, 96, 84).zpl);
+    partes.push(T.campos(um(sku, 22, 20), xTexto, 184, bloco));
+    partes.push(T.campos(um(reuse ? `REAPROVEITADO · ${data}` : `NF ${nf} · ${data}`, 16, 14), xTexto, 210, bloco));
+    return partes.join('\n');
+  }
+
+  // GRANDE — o mapa vertical de antes do ET1, agora com escada de fonte em cada campo.
+  partes.push(T.campos(um('Fluxo Royale', 26, 26), xTexto, 25, bloco));
+  partes.push(T.campos(um(sku, 64, 40), xTexto, 70, bloco));
+  const rNome = T.ajusta(nome, { largura: bloco, maxLinhas: cfg.maxLinhas, hIni: cfg.hIni, hMin: cfg.hMin });
+  partes.push(T.campos(rNome, xTexto, 142, bloco));
+  partes.push(T.campos(um(reuse ? String(data) : `NF ${nf} · ${data}`, 24, 18), xTexto, 238, bloco));
+  partes.push(etBarcode(sku, x0, L.col, L.margem, 266, 120).zpl);
+  partes.push(T.campos(um(sku, 28, 22), xTexto, 390, bloco));
+  if (reuse) partes.push(`^FO0,425^GB800,48,48^FS\n^FO0,432^A0N,30,30^FB800,1,0,C^FR^FDREAPROVEITADO^FS`);
+  return partes.join('\n');
+}
+
+// Um rótulo ZPL completo (^XA…^XZ).
+//
+// ⚠ AGRUPAMENTO DA PEQUENA — DECISÃO EM ABERTO, e este é o comportamento CONSERVADOR.
+//   A bobina tem 3 colunas: um avanço de papel entrega 3 posições físicas. Aqui cada job
+//   preenche SÓ a coluna 0 — 1 job = 1 etiqueta, exatamente como o Lote V deixou. O custo
+//   é rendimento: 2 posições de cada 3 saem em branco (de 4.700 posições por rolo, ~1.566
+//   etiquetas úteis). Agrupar de 3 em 3 renderia 3×, mas MEXE no enfileiramento que o Lote V
+//   endureceu depois do incidente das 160 etiquetas — e por isso é decisão do Bruno, com o
+//   teste de não-regressão do Lote V refeito. Ver DIVIDAS.md § ET1 para as três opções.
+function etZplIdent(sku, nome, nf, data, tamanho, reuse) {
+  const L = ET_LAYOUT[tamanho] || ET_LAYOUT.grande;
+  const tam = ET_LAYOUT[tamanho] ? tamanho : 'grande';
+  const corpo = etColunaIdent(sku, nome, nf, data, tam, reuse, L.colunas[0]);
+  return `^XA\n^PW${L.pw}\n^LL${L.ll}\n^CI28\n${corpo}\n^XZ`;
+}
+
+// Etiqueta de MATERIAL (identificação) — ZPL @203dpi, impressão AUTOMÁTICA na ZD220.
 // Migrada de window.print()/HTML → Browser Print/ZPL (mesmo caminho do cfPrintVolumes, reusando frSendZplBrowserPrint).
-// Layout do Bruno: cabeçalho, SKU grande em destaque, nome do produto, "NF ${nf} · ${data}", barcode Code 128 e SKU legível.
 // ^BC codifica o it.sku LITERAL (com pontos) — é exatamente o valor que o handleScan de ITEM casa
 // (String(it.sku).toUpperCase() === code). N cópias por item = it.faltam (1 device.send por etiqueta).
 // Na Conferência: nf='-' e data=hoje (dd/mm/aaaa, padrão do app).
 //
-// MAPA VERTICAL (dots; ^LL480 é o limite FÍSICO — 60mm @203dpi = 479, não dá pra aumentar):
+// ⚠ QUEM QUEBRA A LINHA É O FRZplTexto, NÃO O ^FB (lote ET1).
+//   Antes, o nome ia inteiro para um ^FB800,3 e o firmware quebrava. Quando o texto passava
+//   de 3 linhas, o ^FB SOBREPUNHA o excesso na última linha em vez de cortar — e a única
+//   proteção era um teto de 150 caracteres que NUNCA disparou (o maior nome do catálogo tem
+//   139). Agora cada linha sai com seu próprio ^FO e um ^FB de UMA linha que só centraliza:
+//   o mecanismo de sobreposição deixou de existir, e a entrelinha virou escolha nossa.
+//
+// MAPA VERTICAL DA GRANDE (dots; ^LL480 é o limite FÍSICO — 60mm @203dpi = 479):
 //    25..51   cabeçalho "Fluxo Royale"    (A0N,26)
-//    70..134  SKU grande                  (A0N,64)   ← identificador primário, intocado
-//   142..238  NOME, ATÉ 3 LINHAS          (A0N,26)   ← 96 dots p/ 3 linhas = 32/linha
-//   238..262  "NF … · data"               (A0N,24)
+//    70..134  SKU grande                  (escada 64→40)
+//   142..238  NOME, ATÉ 3 LINHAS          (escada 26→20)  ← 96 dots de banda; 3 linhas a 26
+//                                                            com entrelinha 1,15 ocupam 86
+//   238..262  "NF … · data"               (escada 24→18)
 //   266..386  barcode Code 128, h=120                ← altura NÃO reduzida de propósito:
 //                                                      é tolerância de leitura em ângulo ruim,
 //                                                      e a bipagem real é com etiqueta amassada
 //                                                      dentro do plástico
 //   390..418  SKU legível                 (A0N,28)   ← intocado
-//   425..473  banner REAPROVEITADO (só no reuse)     ← sobram 7 dots; NÃO há espaço pra descer nada
+//   425..473  banner REAPROVEITADO (só no reuse)     ← sobram 7 dots
 //
-// ⚠ SE A TERCEIRA LINHA DO NOME ENCOSTAR NO "NF · data": a entrelinha do firmware passou de
-// 32 dots. O ajuste é o TERCEIRO parâmetro do ^FB (espaçamento entre linhas, hoje 0 — aceita
-// valor negativo pra apertar). NÃO reposicione campo: o ^FO0,238 do NF·data e o ^FO,266 do
-// barcode saem de uma conta que já está no limite (4 dots de folga de cada lado do barcode),
-// e o banner do reuse termina em 473, a 7 dots do papel. Mexer em ^FO aqui quebra outra coisa.
+// MAPA VERTICAL DA MÉDIA (^LL240 = 30mm; 239 dots reais):
+//     6..58   NOME, até 2 linhas          (escada 24→20)
+//    62..92   SKU                         (escada 30→20)
+//    96..180  barcode Code 128, h=84
+//   184..206  SKU legível                 (A0N,22)
+//   210..226  "NF … · data"               (escada 16→14)   ← 13 dots de sobra
+//
+// MAPA VERTICAL DA PEQUENA (^LL160 = 20mm; os 135 de cima são a etiqueta, o resto é gap):
+//     5..86   NOME, até 4 linhas          (escada 18→17)   ← 4 linhas a 18, entrelinha 1,15
+//    90..112  SKU                         (escada 22→17)   ← 23 dots de margem inferior
+//   canto     marca "R" reverse (só no reuse) — não custa altura
 async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().toLocaleDateString('pt-BR'), opts = {}) {
   const notify = onFlash || function () {};
-  // nf e data agora vêm por PARÂMETRO (defaults '-'/hoje preservam a chamada interna da Conferência :735).
+  // nf e data agora vêm por PARÂMETRO (defaults '-'/hoje preservam a chamada interna da Conferência).
+  // ⚠ TAMANHO: vem por opts.tamanho; sem ele, lê o toggle global; sem toggle, 'grande'.
+  //   O default 'grande' é a etiqueta de antes do ET1 — quem não tocar em nada imprime igual.
+  const tamanho = opts.tamanho
+    || (window.FREtiquetaTamanho && window.FREtiquetaTamanho.get())
+    || 'grande';
   const jobs = [];
   items.forEach((it) => {
     const n = parseInt(it.faltam) || 0;
     if (n <= 0) return;
     const sku = frZplField(it.sku);          // literal, mantém os pontos (só remove ^ e ~)
-    if (!sku) return;                        // item sem SKU (custom) → sem barcode válido, pula
-    // Teto de 150 chars: 3 linhas de ~53 no ^A0N,26,26 dão ~159 de capacidade. Vale para os DOIS
-    // modos do template (NF e reaproveitado) porque `nome` é montado uma vez, aqui.
-    const nome = frZplTeto(frZplField(it.nome), FR_ZPL_NOME_MAX);
-    // Largura do Code 128 (subset B, cota superior) = (11*len+35)*módulo. Escolhe o MAIOR módulo (4→2)
-    // que ainda cabe em 800 com margem (útil 760) e centraliza. Não pode cortar → senão não escaneia.
-    const bLen = sku.length;
-    let barBY = 4;
-    while (barBY > 2 && (11 * bLen + 35) * barBY > 760) barBY--;
-    const barW = (11 * bLen + 35) * barBY;
-    const barX = Math.max(20, Math.round((800 - barW) / 2));
-    // Reaproveitamento (opts.reaproveitado): omite "NF …" (reuse não tem NF) e imprime só a data;
-    // adiciona banner reverse-video "REAPROVEITADO" na zona livre y=418-480. Sem opts → NF-mode INALTERADO.
-    const linhaInfo = opts.reaproveitado
-      ? `^FO0,238^A0N,24,24^FB800,1,0,C^FD${data}^FS`
-      : `^FO0,238^A0N,24,24^FB800,1,0,C^FDNF ${nf} · ${data}^FS`;
-    const bannerReuse = opts.reaproveitado
-      ? `\n^FO0,425^GB800,48,48^FS\n^FO0,432^A0N,30,30^FB800,1,0,C^FR^FDREAPROVEITADO^FS`
-      : '';
-    const zpl = `^XA
-^PW800
-^LL480
-^CI28
-^FO0,25^A0N,26,26^FB800,1,0,C^FDFluxo Royale^FS
-^FO0,70^A0N,64,64^FB800,1,0,C^FD${sku}^FS
-^FO0,142^A0N,26,26^FB800,3,0,C^FD${nome}^FS
-${linhaInfo}
-^FO${barX},266^BY${barBY}^BCN,120,N,N,N^FD${sku}^FS
-^FO0,390^A0N,28,28^FB800,1,0,C^FD${sku}^FS${bannerReuse}
-^XZ`;
+    if (!sku) return;                        // item sem SKU (custom) → sem identificador, pula
+    const zpl = etZplIdent(sku, it.nome, nf, data, tamanho, !!opts.reaproveitado);
     for (let k = 0; k < n; k++) jobs.push(zpl);
   });
   if (!jobs.length) return;
@@ -833,20 +941,17 @@ ${linhaInfo}
   }
 }
 
-// Sanitiza texto p/ campo ^FD (remove os control chars ^ e ~ do ZPL).
-function frZplField(s) { return String(s == null ? '' : s).replace(/[\^~]/g, ' ').trim(); }
+// Sanitiza texto p/ campo ^FD. Delega ao FRZplTexto para haver UMA definição de sanitização
+// no front — o helper de lá também normaliza NBSP (U+00A0), que o daqui não normalizava e
+// que existe no catálogo real (1 ocorrência medida). Segue exportado em window: a Entrada
+// por NF o consome (pages_admin) e o contrato do nome é público.
+function frZplField(s) { return window.FRZplTexto.sanitiza(s); }
 
-// Teto de comprimento para campo de texto do ZPL. EXISTE PORQUE O ^FB SOBREPÕE O EXCESSO EM VEZ
-// DE CORTAR — remover este teto reintroduz a etiqueta ilegível com o nome empilhado sobre si mesmo.
-// Corta no último espaço ANTES do limite; nome de palavra única corta no seco, as reticências avisam.
-// Reticências em ASCII ('...', não '…'): a fonte residente 0 não garante o glifo U+2026.
-function frZplTeto(s, max) {
-  const t = String(s == null ? '' : s);
-  if (t.length <= max) return t;
-  const corte = t.slice(0, max);
-  const esp = corte.lastIndexOf(' ');
-  return (esp > 0 ? corte.slice(0, esp) : corte).replace(/[\s.,;:/-]+$/, '') + '...';
-}
+// frZplTeto REMOVIDA no ET1. Era o teto de 150 caracteres, e era GUARD MORTO: o maior nome
+// do catálogo de produção tem 139 caracteres, então ela nunca truncou nada em vida. Pior,
+// estava amarrada à AMOSTRA de hoje — um catálogo com nome de 200 caracteres a acordaria
+// sem ninguém decidir isso. O corte agora sai da GEOMETRIA (FRZplTexto.ajusta), depois de a
+// escada de fonte chegar ao piso de legibilidade, e acompanha qualquer catálogo.
 
 // Envia UM ZPL pro Browser Print (SDK window.BrowserPrint se presente; senão fallback serviço local 9100). Retorna Promise.
 function frSendZplBrowserPrint(zpl) {
@@ -876,39 +981,82 @@ function frSendZplBrowserPrint(zpl) {
 }
 
 // Etiqueta da SOLICITAÇÃO (volumes) — ZPL 100x60mm @203dpi, impressão AUTOMÁTICA na ZD220.
-// Migrado de window.print()/HTML: mesmo layout provado no teste, com dados REAIS.
 // N cópias: 1 device.send por volume, com VOLUME variando (k/n).
 // ^BC codifica order.req COMPLETO ('PED-XXXXXX') — é o valor que o reqMap da Conferência casa.
+//
+// ⚠ ESTA ETIQUETA NÃO SEGUE O TOGGLE DE TAMANHO, e é decisão consciente: ela existe para
+//   ser BIPADA (o ^BC do 'PED-XXXXXX' é o que seleciona a solicitação na Conferência), e a
+//   pequena 33×17 não tem código de barras (D2). Uma etiqueta de volume sem barcode não
+//   seria uma etiqueta de volume menor — seria uma etiqueta de volume quebrada.
+//
+// ⚠ ERA AQUI QUE MORAVA O DEFEITO (A) — a sobreposição — em DOIS mecanismos, medidos na
+//   recon contra as 2.704 solicitações de produção:
+//     (i)  ^FB com maxlines=1 sobrepõe NA PRÓPRIA LINHA. O ${cliente} saía em ^A0N,58,58
+//          num ^FB800,1: capacidade ~23 caracteres, e 10 dos 32 clientes passam disso (o
+//          maior tem 43). Ponderado, 355 de 2.704 solicitações (13,1%) imprimiam o nome do
+//          cliente empilhado sobre si mesmo.
+//     (ii) QUATRO campos não tinham ^FB NENHUM — corriam até bater no ^FO do vizinho:
+//            ${op}       ~10 ch de espaço  · máx real 9  → passava, sem margem
+//            ${destino}  ~14 ch            · 404/2.704 (14,9%) acima, máx 16
+//            ${armazem}  ~13 ch            · 324/2.704 (12,0%) acima
+//            ${k}/${n}   ~6 ch             · "10 / 25" tem 7 → CORTAVA NA BORDA com n ≥ 10
+//          ⚠ Dos 324 do armazém, 210 são as linhas "Setor: Usinagem" — AS MESMAS que a
+//            migration 025 esperava reescrever. O prefixo "Setor: " não é cosmético: ele
+//            estoura a coluna ARMAZEM na etiqueta FÍSICA. Ver DIVIDAS.md § ET1.
+//
+//   O conserto é estrutural, não por campo: TODO texto variável passa pelo FRZplTexto, que
+//   quebra e escolhe a fonte, e as quatro colunas viraram uma grade de 200 dots iguais (antes
+//   eram faixas de 115 a 230 dots definidas pela distância até o vizinho — o que fazia o
+//   espaço de cada campo depender de onde o campo seguinte tinha sido posto).
+//
+// MAPA VERTICAL (^LL480):
+//    20..46   cabeçalho                                  (A0N,26)
+//    50..168  CLIENTE, até 2 linhas   (escada 58→34, banda de 118 dots)
+//   164..184  rótulos das 4 colunas                      (A0N,20)
+//   188..236  valores das 4 colunas, até 2 linhas         (escada 30→20, banda de 48)
+//   240..360  barcode Code 128, h=120
+//   380..408  req legível                                (A0N,28)
 async function cfPrintVolumes(order, qtd, onFlash) {
   const notify = onFlash || function () {};
+  const T = window.FRZplTexto;
   const n = Math.max(1, parseInt(qtd) || 1);
-  const cliente = frZplField(order.cliente || 'Sem cliente');
-  const destino = frZplField(order.sol) || '—';   // DESTINO = nome do solicitante (requester.name); vazio → '—'
-  const op = frZplField(order.op);
-  const armazem = frZplField(order.setor);
   const req = frZplField(order.req);
   // Centraliza o Code 128 em ^PW800 e garante que CABE (a ^BY5 o req completo 'PED-XXXXXX' estourava
-  // os 800 dots e era cortado → ilegível). Largura Code128 (subset B, cota superior) = (11*len+35)*módulo.
-  const barBY = 4;
-  const barW = (11 * req.length + 35) * barBY;
-  const barX = Math.max(20, Math.round((800 - barW) / 2));
-  const zplVolume = (k) => `^XA
+  // os 800 dots e era cortado → ilegível).
+  const bar = etBarcode(req, 0, 800, 20, 240, 120);
+
+  // CLIENTE — a escada olha largura E altura: 2 linhas a 58 ocupariam 125 dots numa banda
+  // de 118, então o nome de 43 caracteres desce sozinho para h=54 e cabe.
+  const rCliente = T.ajusta(order.cliente || 'Sem cliente',
+    { largura: 760, maxLinhas: 2, hIni: 58, hMin: 34, alturaMax: 118 });
+
+  // As quatro colunas, agora com largura IGUAL e independente do vizinho.
+  const COLS = 4, LARG = 800 / COLS, MARG = 4, UTIL = LARG - 2 * MARG;
+  const colunas = [
+    ['OP', order.op],
+    ['DESTINO', order.sol || '—'],   // DESTINO = nome do solicitante (requester.name); vazio → '—'
+    ['ARMAZEM', order.setor],
+    ['VOLUME', null],                // preenchido por volume, varia com k
+  ];
+  const zplVolume = (k) => {
+    const grade = colunas.map(function (c, i) {
+      const x = i * LARG;
+      const valor = c[0] === 'VOLUME' ? (k + ' / ' + n) : c[1];
+      const rot = T.ajusta(c[0], { largura: UTIL, maxLinhas: 1, hIni: 20, hMin: 16 });
+      const val = T.ajusta(valor, { largura: UTIL, maxLinhas: 2, hIni: 30, hMin: 20, alturaMax: 48 });
+      return T.campos(rot, x + MARG, 164, UTIL) + '\n' + T.campos(val, x + MARG, 188, UTIL);
+    }).join('\n');
+    return `^XA
 ^PW800
 ^LL480
 ^CI28
 ^FO0,20^A0N,26,26^FB800,1,0,C^FDFLUXO ROYALE - SEPARACAO^FS
-^FO0,65^A0N,58,58^FB800,1,0,C^FD${cliente}^FS
-^FO40,150^A0N,20,20^FDOP^FS
-^FO40,178^A0N,32,32^FD${op}^FS
-^FO230,150^A0N,20,20^FDDESTINO^FS
-^FO230,178^A0N,28,28^FD${destino}^FS
-^FO460,150^A0N,20,20^FDARMAZEM^FS
-^FO460,178^A0N,28,28^FD${armazem}^FS
-^FO680,150^A0N,20,20^FDVOLUME^FS
-^FO680,178^A0N,32,32^FD${k} / ${n}^FS
-^FO${barX},240^BY${barBY}^BCN,120,N,N,N^FD${req}^FS
+${T.campos(rCliente, 20, 50, 760)}
+${grade}
+${bar.zpl}
 ^FO0,380^A0N,28,28^FB800,1,0,C^FD${req}^FS
 ^XZ`;
+  };
   try {
     for (let k = 1; k <= n; k++) {
       await frSendZplBrowserPrint(zplVolume(k));   // 1 send por volume
@@ -965,6 +1113,10 @@ function CfLabelsModal({ t, order, onClose, onSim, onFlash }) {
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <button onClick={fillAll} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: CF_ACCENT, padding: '7px 11px', borderRadius: 9, background: 'rgba(37,99,235,.1)' }}><Icon name="copy" size={13} /> Nenhum tem etiqueta (1 por unidade)</button>
                 <button onClick={clearAll} style={{ all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: t.muted, padding: '7px 11px', borderRadius: 9, background: t.elevated, border: `1px solid ${t.border}` }}><Icon name="check" size={13} /> Todos já identificados</button>
+              </div>
+              {/* Toggle GLOBAL de tamanho (D3): o mesmo estado das duas telas de Entrada. */}
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${t.border}` }}>
+                <EtiquetaTamanhoToggle t={t} />
               </div>
             </div>
             <div className="fr-scroll" style={{ overflowY: 'auto', flex: 1, padding: '12px 20px' }}>

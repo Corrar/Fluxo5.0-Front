@@ -1498,3 +1498,232 @@ Ele testa **presença**, não sinal, e já renderiza negativo corretamente (`dev
 `FRAdapters.formatBRL`, medido acima: `-320.82 → "R$ -320,82"`). Não foi tocado. O `git grep` por
 `total_cost >` e por `> 0 ? frBRL` no `src` inteiro devolve **exatamente as três linhas acima** —
 não há quarto lugar.
+
+---
+
+# ET1 — ETIQUETAS: sobreposição + toggle de tamanho (21/08/2026)
+
+Base do lote: front `a94038a` (`ls-remote` às 13:47 BRT / UTC−03:00). Backend NÃO tocado —
+a recon mediu **zero ZPL no backend**: a etiqueta é 100% front.
+
+## 1. O avanço da fonte: era ESTIMATIVA, agora é MEDIDA
+
+O único número de largura de fonte no repo era um comentário: `conferencia.jsx:795`,
+"3 linhas de ~53 no `^A0N,26,26`" ⇒ r ≈ 0,58. **Medido contra um renderizador de ZPL
+(Labelary, 8dpmm = 203 dpi): r do corpus = 0,499.** A estimativa era **16,2% pessimista** —
+cabem 62 caracteres por linha em 800 dots, não 53.
+
+A tabela por glifo (111 caracteres) está em `src/lib/zpl-texto.js`, com os três controles:
+1. `W(N)` é **linear em N**, R² = 1,00000 — inclusive nos valores que "pareciam" errados
+   (o hífen mede 23,5 dots, mais largo que o "M": é o modelo de fonte, não erro de medição);
+2. o avanço **escala linearmente** com o parâmetro de largura do `^A0N` (dispersão 0,3–0,4%
+   entre h=14 e h=36) ⇒ UMA tabela a h=26 serve para todos os tamanhos;
+3. **controle de previsão**: a tabela prevê a largura de cadeias mistas com erro máximo de
+   **+0,8%, sempre para mais** — o viés é conservador.
+
+⚠ **Somente texto sintético foi enviado ao serviço**: repetições de um glifo e cadeias de
+alfabeto/dígitos. Nenhum nome de produto, cliente, SKU ou solicitação saiu.
+
+⚠ **O QUE ISTO PROVA E O QUE NÃO PROVA.** Prova as métricas do MODELO de fonte do
+renderizador. **Não prova o firmware da ZD220** — o renderizador é um modelo, não o
+aparelho. `FR_ZPL_MARGEM = 1.04` em `zpl-texto.js` existe para cobrir essa distância (4%
+custa ~2 caracteres por linha a h=26). Se algum número ficar marginal em campo, o
+desempate é a etiqueta física do § 6.
+
+## 2. Por que fonte 0 (escalável) e não passo fixo — a decisão e os três motivos
+
+1. **15,7% dos nomes (371 de 2.360, 19 caracteres distintos) têm não-ASCII** (`Ç`×156,
+   `Ã`×140, `Á`×54, `Ø`, `²`, `°`…). As fontes de bitmap A–H têm repertório residente
+   limitado; a fonte 0 (CG Triumvirate) é a de cobertura latina, e o `^CI28` do ZPL existe
+   por causa dela. Passo fixo trocaria ESTIMATIVA por **RISCO DE FALHA SILENCIOSA**:
+   "INSTALAÇÕES" saindo "INSTALA ES" em 371 produtos.
+2. **As duas opções pediam a MESMA ida à impressora.** Passo fixo não economizava a
+   verificação — só trocava a pergunta que ela responde.
+3. **O `r` só era carga estrutural na PEQUENA.** Na grande e na média, 100% dos nomes
+   cabem em 3 linhas em qualquer combinação — a escada de redução nunca roda.
+
+⚠ **RÉGUA: "avanço = largura + 1" SÓ VALE PARA A FONTE A.** O gap entre caracteres é parte
+da tabela da Zebra e varia: A=1, B=2, D=2, F=3, H=6, E=5. Com `+1`, a fonte D erraria 2 dots
+por caractere — **17% a mais de largura**, e a quebra sobreporia exatamente onde o algoritmo
+jurou que não.
+
+## 3. A sobreposição: o que a recon estimou e o que a medição achou
+
+A recon calculou a incidência com r=0,58. Com a tabela medida, **três dos quatro campos
+eram muito menos graves do que parecia**. Remedido em produção (`ep-steep-breeze`,
+21/08 ~14:40 BRT, leitura em `START TRANSACTION READ ONLY`):
+
+| campo (base a94038a) | recon (r=0,58) | **MEDIDO (r real)** |
+|---|---|---|
+| `${cliente}` — `^FB800,1` a `^A0N,58` | 355 / 2.704 (13,1%) | **303 / 2.708 (11,2%)**, 7 de 27 clientes |
+| `${destino}` — sem `^FB`, 230 dots | 404 (14,9%) | **0 (0,0%)** |
+| `${armazem}` — sem `^FB`, 220 dots | 324 (12,0%) | **4 (0,1%)** — só "Assistente Técnico" (228 dots) |
+| `${k} / ${n}` — sem `^FB`, 120 dots | corta com n ≥ 10 | **corta com n ≥ 100** ("100 / 100" = 125 dots) |
+| nome do produto — `^FB800,3` a 26 | ≤ 1 de 2.360 | **0 de 2.360** |
+
+**O defeito real e de alta incidência era UM: o campo do cliente.** Os outros três não
+estouravam — mas estavam a um caractere de estourar: "Desenvolvimento" ocupa 199 dos 220
+dots (90%), "Setor: Usinagem" 194 (88%). Um campo a 90% da caixa, sem `^FB`, é dano à
+espera de gatilho; o lote os fecha estruturalmente, não por caso.
+
+⚠ **A LIGAÇÃO COM A MIGRATION 025.** As 210 linhas de `requests.sector = 'Setor: Usinagem'`
+são as MESMAS que a 025 esperava reescrever. O prefixo "Setor: " não é cosmético: ele come
+6 dos 220 dots da coluna ARMAZEM na etiqueta FÍSICA. Não estoura hoje, mas é a razão de a
+coluna estar a 88% de ocupação.
+
+⚠ **RÉGUA: incidência calculada com constante estimada não é incidência.** A recon
+publicou quatro números; a medição derrubou três. Remedir antes de virar premissa de lote.
+
+⚠ **Produção é viva**: o denominador passou de 2.704 (recon, 13:5x) para 2.708 (remedição,
+~14:40) na mesma tarde. Número de recon tem hora e fuso.
+
+## 4. O conserto é estrutural: quem quebra é o código, não o `^FB`
+
+Antes, o nome ia inteiro num `^FB800,3` e o firmware quebrava — e o `^FB` **sobrepõe** o
+excesso na última linha em vez de cortar. Agora `FRZplTexto.ajusta()` quebra, escolhe a
+fonte, e **cada linha sai com seu próprio `^FO` e um `^FB` de UMA linha que só centraliza**.
+O mecanismo de sobreposição deixou de existir.
+
+Efeito colateral bom: **a entrelinha virou escolha nossa**. Medido, o `^FB` avança
+exatamente `h` (passo/h = 1,000 de h=14 a h=36) — mas `conferencia.jsx:781` supunha 32 dots
+para fonte 26 (fator 1,23). Os dois números não batiam, e a divergência **deixou de
+importar**: `ET_ENTRELINHA = 1.15` em `zpl-texto.js` é o passo, e ele é nosso.
+
+As quatro colunas da etiqueta de volume viraram **grade de 200 dots iguais**. Antes cada
+campo tinha de 115 a 230 dots, definidos pela distância até o `^FO` do vizinho — o espaço de
+um campo dependia de onde o campo SEGUINTE tinha sido posto.
+
+⚠ **`frZplTeto` REMOVIDA — era GUARD MORTO.** Teto de 150 caracteres, com o maior nome do
+catálogo em 139: nunca truncou nada em vida, e estava amarrado à AMOSTRA de hoje. O corte
+agora sai da GEOMETRIA, depois de a escada chegar ao piso, e acompanha qualquer catálogo.
+
+## 5. Pisos de legibilidade, declarados
+
+A 203 dpi, 1 pt = 2,82 dots.
+- **17 dots (6 pt) — piso ABSOLUTO.** Abaixo, o traço cai para 2 pontos de impressão e o
+  erro de posicionamento do cabeçote (±1 dot) vira ±50% do traço.
+- **20 dots (7 pt) — piso OPERACIONAL.** Vale para GRANDE e MÉDIA: etiqueta lida de braço
+  estendido, amassada dentro do plástico.
+- **18 dots — piso da PEQUENA**, decisão do Bruno. ⚠ Fica **2 dots ABAIXO do operacional**,
+  e é aceitável porque a 33×17 vai **colada na peça e é lida de perto** — não é o caso do
+  braço estendido que motivou o 20. O piso de 20 continua valendo para os outros dois.
+
+Incidência da escada sobre os 2.360 nomes reais, pelo algoritmo que vai para produção:
+
+| tamanho | inteiro na fonte cheia | coube reduzindo | truncou |
+|---|---|---|---|
+| GRANDE (760 dots, 3 linhas, 26→20) | **2.360 (100,00%)** | 0 | 0 |
+| MÉDIA (760 dots, 2 linhas, 24→20) | 2.358 (99,92%) | 1 | 1 |
+| PEQUENA (255 dots, 4 linhas, 18→17) | 2.355 (99,79%) | 2 | 3 |
+
+## 6. A ETIQUETA DE CALIBRAÇÃO FÍSICA — o instrumento de desempate
+
+Roda no rolo 100×60 que já está na máquina; não pede troca de mídia nem recalibração.
+Se um dia houver divergência entre o que o app calcula e o que a ZD220 imprime, é ISTO que
+decide — e o resultado substitui `FR_ZPL_MARGEM`.
+
+```
+^XA
+^PW800
+^LL480
+^CI28
+^FO0,0^GB800,3,3^FS
+^FO100,4^GB3,22,3^FS   ^FO200,4^GB3,22,3^FS   ^FO300,4^GB3,22,3^FS
+^FO400,4^GB3,22,3^FS   ^FO500,4^GB3,22,3^FS   ^FO600,4^GB3,22,3^FS
+^FO700,4^GB3,22,3^FS   ^FO799,4^GB3,22,3^FS
+^FO88,30^A0N,16,16^FD100^FS    ^FO188,30^A0N,16,16^FD200^FS
+^FO288,30^A0N,16,16^FD300^FS   ^FO388,30^A0N,16,16^FD400^FS
+^FO488,30^A0N,16,16^FD500^FS   ^FO588,30^A0N,16,16^FD600^FS
+^FO688,30^A0N,16,16^FD700^FS
+^FO0,60^A0N,18,18^FDCILINDRO PNEUMATICO ISO 032 CU^FS
+^FO0,90^A0N,22,22^FDCILINDRO PNEUMATICO ISO 032 CU^FS
+^FO0,125^A0N,26,26^FDCILINDRO PNEUMATICO ISO 032 CU^FS
+^FO0,165^A0N,30,30^FDCILINDRO PNEUMATICO ISO 032 CU^FS
+^FO0,210^A0N,26,26^FDMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM^FS
+^FO0,250^A0N,26,26^FDACAO PNEUMATICO O32 45 GRAUS^FS
+^FO0,285^A0N,26,26^FDAÇÃO PNEUMÁTICO Ø32 45° MM²^FS
+^FO0,320^AAN,18,10^FDAÇÃO PNEUMÁTICO Ø32 45° MM²^FS
+^FO0,350^ADN,18,10^FDAÇÃO PNEUMÁTICO Ø32 45° MM²^FS
+^FO0,380^AFN,26,13^FDAÇÃO PNEUMÁTICO Ø32 45° MM²^FS
+^FO0,420^GB800,58,2^FS
+^FO2,422^A0N,26,26^FB796,3,0,L^FDESTEIRA ABCDEFG X99 VAZADA COM TAL RETA ACETAL AZUL VARETAACETAL - L= 260MM C= POR METRO - TALISCA H= 1,5MM LT= 160MMRT= 40/60MM P= 106,4MM^FS
+^XZ
+```
+
+Como se lê: as quatro sondas de 30 caracteres (y=60/90/125/165) dão `r = dots ÷ 30 ÷ altura`
+contra a régua — se os quatro derem o mesmo, um `r` cobre tudo. O y=210 (30 "M") dá o teto
+do avanço. O par y=250/285 confirma o `^CI28`. As linhas y=320/350/380 são o repertório em
+passo fixo (A×2, D×1, F×1): **buracos ali confirmam por que a opção de passo fixo foi
+recusada**. O y=422 é o defeito antigo em fogo vivo.
+
+## 7. A bobina de 3 colunas — a aritmética conferida
+
+Medida do Bruno: 2 mm entre colunas, 3 mm vertical.
+
+```
+coluna     33 mm = 263 dots        passo      35 mm = 280 dots
+gap         2 mm =  16 dots        ^FO x      = 0 · 280 · 559
+fim da 3ª  = 559 + 263 = 822       cabeça 4"  = 832 dots
+VEREDITO   = CABE, folga de 8,8 dots (1,10 mm)      ^LL = 20 mm = 160 dots
+```
+
+⚠ **Duas correções ao briefing.** "799 dots de conteúdo" são **791** (3 × 33 mm) — os 799
+são a etiqueta GRANDE vazando na conta da pequena. E a folga real contra o cabeçote é de
+**8,8 dots (1,10 mm)**, não 1 dot. `^PW823`.
+
+⚠ **CALIBRAÇÃO DA IMPRESSORA É PASSO OPERACIONAL, NÃO CÓDIGO.** O app nunca emitiu
+`^MN`/`^JU`/`^MM`/`^JM`/`^MD`/`^PR` e continua não emitindo. Trocar de rolo exige
+**autocalibração de mídia na ZD220, feita pelo Bruno**. O ZPL só declara `^PW`/`^LL`.
+
+## 8. DECISÃO EM ABERTO — o agrupamento da pequena
+
+Um avanço de papel na bobina 3-across entrega **3 posições físicas**. O código entregue faz
+o **conservador**: cada job preenche só a coluna 0 — **1 job = 1 etiqueta**, exatamente como
+o Lote V deixou. Custo: 2 de cada 3 posições saem em branco (de 4.700 posições por rolo,
+~1.566 etiquetas úteis).
+
+As opções, para o Bruno decidir:
+1. **Como está** — 1 job = 1 etiqueta. Rendimento 1/3. Não mexe em nada do Lote V.
+2. **Agrupar de 3 em 3** — o front acumula 3 etiquetas e emite 1 `^XA` com as três colunas;
+   sobra 1 ou 2 no fim do lote. Rendimento 3×. ⚠ **MEXE no enfileiramento que o Lote V
+   endureceu** depois do incidente das 160 etiquetas — se for por aqui, o teste de
+   não-regressão do Lote V tem de ser refeito.
+3. **Agrupar de 3 em 3 dentro do item** — simples, mas dois itens diferentes nunca dividem
+   uma linha; rendimento intermediário e irregular.
+
+## 9. D2 — a pequena NÃO tem código de barras, e isso está gravado no código
+
+Um Code 128 subset B do SKU de 9 caracteres (95,6% do catálogo) pede 134 módulos + 20 de
+quiet zone; a `^BY2` (0,250 mm — piso prático do cabeçote de 203 dpi e piso da GS1) são
+**308 dots, e a coluna tem 263**. A `^BY2` cabem 6 caracteres; o menor SKU tem 8. Só
+entraria a `^BY1` (0,125 mm, metade do piso).
+
+⇒ A 33×17 é etiqueta de **IDENTIFICAÇÃO VISUAL, não de bipagem**. O comentário em
+`conferencia.jsx` (bloco `ET_LAYOUT`) diz isso em voz alta para ninguém "consertar"
+acrescentando um `^BC` depois. Se um dia for preciso bipar na pequena, o caminho é payload
+só-dígitos em subset C (198 dots, cabe) — e ele **quebra** o casamento do `handleScan`, que
+compara `String(it.sku).toUpperCase() === code`. É decisão do Bruno, não conserto de rotina.
+
+**A MÉDIA MANTÉM o barcode**: tem os mesmos 800 dots de largura da grande, e a `^BY4` o SKU
+de 12 caracteres ocupa 748 dots.
+
+⚠ A etiqueta de **VOLUME** não segue o toggle e continua 100×60 sempre: ela existe para ser
+bipada (o `^BC` do `PED-XXXXXX` seleciona a solicitação na Conferência). Uma etiqueta de
+volume sem barcode não seria menor — seria quebrada.
+
+## 10. O toggle: `fr_etiqueta_tamanho`
+
+`localStorage` (sobrevive ao F5, receita de `pedidos.jsx:8-13`) **+ subscribe/notify**
+(propaga sem F5, precedentes `FRAuth.subscribe` `auth.js:380` e `subscribeToLoading`
+`api.js:39`). Sozinho o `localStorage` não entregaria o D3: as três telas são ramos
+distintos do `renderPage` e montam separado. Entrega no molde de `lib/products.js:64`
+(IIFE + hook em `window`). Valores `'grande'|'media'|'pequena'`, **default `'grande'` —
+quem não tocar em nada imprime exatamente o que imprimia antes do ET1**.
+
+⚠ A tabela `settings` do backend foi **recusada**: `PUT /admin/settings` é `requireAdmin`
+(`system.routes.ts:46`) e quem imprime é conferente/almoxarife. E seria configuração DA
+EMPRESA, não do operador.
+
+⚠ **Onde o toggle aparece em cada tela não é o mesmo lugar, e é de propósito**: na Entrada
+ele fica na página (a decisão de imprimir é da página); na Conferência ele fica **dentro do
+modal de etiquetas** (é ali que a decisão é tomada). O estado é um só.

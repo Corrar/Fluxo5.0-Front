@@ -30,6 +30,11 @@ import './lib/foto-produto.js';      // window.frFotoProduto() → foto SOB DEMA
 import './lib/stock-refresh.js';     // window.frUseStockReload() → tela recarrega em stock_updated
 import './lib/audit_format.js';      // window.FRAuditFormat (22 actions + fallback obrigatório)
 
+// --- etiquetas (lote ET1) ---
+// zpl-texto ANTES de etiqueta-tamanho e dos parts: conferencia.jsx monta o ZPL com ele.
+import './lib/zpl-texto.js';         // window.FRZplTexto (tabela de avanço MEDIDA + quebra do D4)
+import './lib/etiqueta-tamanho.js';  // window.FREtiquetaTamanho + window.useFREtiquetaTamanho (toggle global D3)
+
 // --- núcleo compartilhado ---
 import './parts/icons.jsx';          // window.Icon
 import './parts/data.jsx';           // MODULES, NAV*, USERS, userCanAccess
