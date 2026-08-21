@@ -1422,3 +1422,79 @@ prova de payload pegou — inspecionar a tela não teria acusado nada.
 `rcAgrupar` trata `origem` ausente como `'separacao'`, e `frOpReceive` aceita tanto o card quanto
 o id cru. Não é defensividade gratuita: durante o deploy o front novo pode conversar por alguns
 minutos com o backend antigo, que não manda `origem`.
+
+## LOTE M3 — o `> 0` que rotulava custo NEGATIVO como "Sem custo"
+
+Três expressões idênticas em `parts/pages_clientes.jsx` decidiam a exibição do custo da OP por
+`o.total_cost > 0`. Um custo **negativo** caía no ramo do "sem custo": a tela **sumia com o
+número em vez de alertar** — o pior formato de erro de exibição, o que troca um valor por uma
+afirmação falsa.
+
+| linha | antes | o que o negativo virava |
+|---|---|---|
+| `:321` | `o.total_cost > 0 ? frBRL(...) : 'Sem custo'` | **"Sem custo"** |
+| `:384` (lista de destinos da transferência) | `o.total_cost > 0 ? frBRL(...) : '—'` | **"—"** |
+| `:320` (a cor do mesmo elemento) | `o.total_cost > 0 ? t.muted : t.faint` | pintado de `faint`, o cinza do "não há valor" |
+
+As três viraram `!== 0`. **`=== 0` continua "Sem custo"** — correto para as 7 OPs zeradas reais.
+Só o ramo negativo muda.
+
+### O DEFEITO ESTAVA **LATENTE**, E É POR ISSO QUE A CORREÇÃO É PREVENTIVA
+
+Medido em produção logo depois do CO1: **0 OPs negativas / 7 zeradas / 39 positivas**. Não havia o
+que consertar na tela *hoje* — e é justamente aí que estava a armadilha.
+
+Era a **fórmula VELHA do backend** que fabricava negativo com facilidade: ela subtraía `op_returns`
+de uma base que só enxergava uma das três pernas de saída (separação `'concluida'`, que é a saída
+manual). Devolução abatendo saída que a conta não contava dá negativo sem esforço. O CO1 passou a
+contar as três pernas e **tirou o gatilho — não tirou o defeito**.
+
+**Latente não é morto.** O negativo volta no dia em que uma devolução superar a saída *contada* —
+uma OP que devolve mais do que consumiu, um estorno lançado depois do fechamento. Nesse dia, sem
+esta correção, a tela diria "Sem custo" para uma OP com saldo credor.
+
+### A PROVA — bundle real, fixture CONSTRUÍDA e declarada como construída
+
+Régua do PG1: **asserção que passa a vazio não conta como verde.** O caso negativo **não existe em
+produção**, então a linha foi **fabricada** (`-320,82`) e a prova roda contra o **bundle de
+produção** (`dist/assets/index-*.js`) dentro de jsdom, com a rede cortada antes do `eval` e o
+payload no **shape CRU do endpoint** — quem adapta é o `adaptClient` real da tela.
+
+| caso | BASE (`c64e7b7`) | COM A CORREÇÃO |
+|---|---|---|
+| `-320.82` (fabricado) | **"Sem custo"** | **"R$ -320,82"** |
+| `0` (7 reais) | "Sem custo" | "Sem custo" |
+| `691866.895` (a 901001 real) | "R$ 691.866,90" | "R$ 691.866,90" |
+| `null` / ausente | "Sem custo" | "Sem custo" |
+| `"abc"` | "Sem custo" | **"R$ 0,00"** |
+
+A linha do meio é o **controle negativo**: o mesmo valor, no código base, renderiza "Sem custo" —
+é o que prova que a correção **morde**. Sem ela, a prova passaria por acaso.
+
+### ⚠ O QUE O `!== 0` ABRE, MEDIDO ANTES DE ESCOLHER A EXPRESSÃO
+
+O `> 0` fechava, **por acidente**, o caso do payload sujo. Com `!== 0` ele abre — e a pergunta era
+se isso põe `NaN` na tela. **Não põe, e isso foi medido, não deduzido:** `FRAdapters.formatBRL`
+passa por `parseNumber`, que devolve `0` para tudo que não é número finito.
+
+```
+formatBRL(null) = formatBRL(undefined) = formatBRL(NaN) = formatBRL('abc') = "R$ 0,00"
+formatBRL(-320.82) = "R$ -320,82"
+```
+
+`null` e `undefined` nem chegam lá: o adapter da tela faz `Number(s.total_cost || 0)` e entrega
+**0**, que cai no ramo do "Sem custo". Sobra um caso: `total_cost` **não numérico** (`"abc"`) vira
+`NaN` no adapter, e `NaN !== 0` é verdadeiro — a tela passa a mostrar **"R$ 0,00"** onde antes
+mostrava "Sem custo". Nenhum `NaN` renderizado, mas é uma mudança real de comportamento.
+
+Hoje isso é hipótese de laboratório: o backend devolve `total_cost` numérico sempre (é `SUM`
+sobre `numeric`). Se um dia a coluna voltar a trafegar texto sujo, a expressão que fecha esse
+flanco é **`Number.isFinite(o.total_cost) && o.total_cost !== 0`** — um `&&` a mais, mesmo ramo.
+
+### O QUE **NÃO** TEM O DEFEITO — declarado, não suposto
+
+`parts/devolucao.jsx:94` **não usa `> 0`**: é `{o.total_cost != null && ... devBRL(o.total_cost)}`.
+Ele testa **presença**, não sinal, e já renderiza negativo corretamente (`devBRL` é o mesmo
+`FRAdapters.formatBRL`, medido acima: `-320.82 → "R$ -320,82"`). Não foi tocado. O `git grep` por
+`total_cost >` e por `> 0 ? frBRL` no `src` inteiro devolve **exatamente as três linhas acima** —
+não há quarto lugar.

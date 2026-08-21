@@ -317,8 +317,8 @@ function PageClientes({ t, readOnly }) {
                           </div>
                           <div style={{ marginTop: 9, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.04em', padding: '4px 9px', borderRadius: 7, background: col.bg, color: col.fg }}>{st.badge}</span>
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: o.total_cost > 0 ? t.muted : t.faint }}>
-                              <Icon name="dollar" size={13} /> {o.total_cost > 0 ? frBRL(o.total_cost) : 'Sem custo'}
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: o.total_cost !== 0 ? t.muted : t.faint }}>
+                              <Icon name="dollar" size={13} /> {o.total_cost !== 0 ? frBRL(o.total_cost) : 'Sem custo'}
                             </span>
                           </div>
                           {!readOnly && (
@@ -381,7 +381,7 @@ function PageClientes({ t, readOnly }) {
                         <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>{o.n}</div>
                         <div style={{ fontSize: 11.5, color: t.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.nome} · {opStatusOf(o.s).label}</div>
                       </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: t.faint, flexShrink: 0 }}>{o.total_cost > 0 ? frBRL(o.total_cost) : '—'}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: t.faint, flexShrink: 0 }}>{o.total_cost !== 0 ? frBRL(o.total_cost) : '—'}</span>
                       <Icon name="chevronRight" size={16} style={{ color: t.muted, flexShrink: 0 }} />
                     </button>
                   ))}
