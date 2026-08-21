@@ -818,9 +818,29 @@ function etBarcode(sku, x0, larguraCol, margem, y, altura) {
   return { zpl: `^FO${x},${y}^BY${by}^BCN,${altura},N,N,N^FD${sku}^FS`, by, w };
 }
 
+// ── A LINHA DE INFO — OS TRÊS MODOS NUM LUGAR SÓ ─────────────────────────────────────
+// ⚠ Até o CAT-ET esta expressão existia DUAS vezes (média e grande), como ternário inline.
+//   Duas cópias de um ternário são duas cópias de uma REGRA: acrescentar um terceiro modo
+//   numa e esquecer a outra é exatamente a régua (f) do CO1. Agora é uma função.
+//
+// Os três modos:
+//   'nf'            → "NF 12345 · 21/08/2026"   (Entrada por NF-e, Conferência)
+//   'reuse'         → grande: só a data (o banner REAPROVEITADO já diz o resto);
+//                     média: "REAPROVEITADO · data" (a média NÃO tem banner, não há altura)
+//   'sem-documento' → só a data                 (Catálogo: não há documento nenhum)
+//
+// ⚠ POR QUE 'sem-documento' NÃO É "NF -": informação que o operador aprende a ignorar é
+//   pior que ausência. "NF -" ocupa a linha afirmando um campo que não existe; a data é
+//   informação REAL — quando a etiqueta foi impressa.
+function etLinhaInfo(modo, nf, data, tamanho) {
+  if (modo === 'sem-documento') return String(data);
+  if (modo === 'reuse') return tamanho === 'media' ? `REAPROVEITADO · ${data}` : String(data);
+  return `NF ${nf} · ${data}`;
+}
+
 // Monta o conteúdo de UMA coluna da etiqueta de material, no tamanho pedido.
 // Devolve só os campos (sem ^XA/^XZ) — quem fecha o rótulo é o etZplIdent.
-function etColunaIdent(sku, nome, nf, data, tamanho, reuse, x0) {
+function etColunaIdent(sku, nome, nf, data, tamanho, modo, x0) {
   const T = window.FRZplTexto;
   const L = ET_LAYOUT[tamanho], cfg = ET_NOME[tamanho];
   const bloco = L.col - 2 * L.margem;
@@ -835,7 +855,7 @@ function etColunaIdent(sku, nome, nf, data, tamanho, reuse, x0) {
     partes.push(T.campos(um(sku, 22, 17), xTexto, 90, bloco));
     // Marca de reaproveitamento: quadrado reverse no canto. NÃO consome altura — a
     // pequena não tem linha de info, e roubar altura do nome seria pagar caro por um aviso.
-    if (reuse) partes.push(`^FO${x0 + L.col - 26},4^GB22,22,22^FS\n^FO${x0 + L.col - 26},5^A0N,20,20^FB22,1,0,C^FR^FDR^FS`);
+    if (modo === 'reuse') partes.push(`^FO${x0 + L.col - 26},4^GB22,22,22^FS\n^FO${x0 + L.col - 26},5^A0N,20,20^FB22,1,0,C^FR^FDR^FS`);
     return partes.join('\n');
   }
 
@@ -845,7 +865,7 @@ function etColunaIdent(sku, nome, nf, data, tamanho, reuse, x0) {
     partes.push(T.campos(um(sku, 30, 20), xTexto, 62, bloco));
     partes.push(etBarcode(sku, x0, L.col, L.margem, 96, 84).zpl);
     partes.push(T.campos(um(sku, 22, 20), xTexto, 184, bloco));
-    partes.push(T.campos(um(reuse ? `REAPROVEITADO · ${data}` : `NF ${nf} · ${data}`, 16, 14), xTexto, 210, bloco));
+    partes.push(T.campos(um(etLinhaInfo(modo, nf, data, 'media'), 16, 14), xTexto, 210, bloco));
     return partes.join('\n');
   }
 
@@ -854,10 +874,10 @@ function etColunaIdent(sku, nome, nf, data, tamanho, reuse, x0) {
   partes.push(T.campos(um(sku, 64, 40), xTexto, 70, bloco));
   const rNome = T.ajusta(nome, { largura: bloco, maxLinhas: cfg.maxLinhas, hIni: cfg.hIni, hMin: cfg.hMin });
   partes.push(T.campos(rNome, xTexto, 142, bloco));
-  partes.push(T.campos(um(reuse ? String(data) : `NF ${nf} · ${data}`, 24, 18), xTexto, 238, bloco));
+  partes.push(T.campos(um(etLinhaInfo(modo, nf, data, 'grande'), 24, 18), xTexto, 238, bloco));
   partes.push(etBarcode(sku, x0, L.col, L.margem, 266, 120).zpl);
   partes.push(T.campos(um(sku, 28, 22), xTexto, 390, bloco));
-  if (reuse) partes.push(`^FO0,425^GB800,48,48^FS\n^FO0,432^A0N,30,30^FB800,1,0,C^FR^FDREAPROVEITADO^FS`);
+  if (modo === 'reuse') partes.push(`^FO0,425^GB800,48,48^FS\n^FO0,432^A0N,30,30^FB800,1,0,C^FR^FDREAPROVEITADO^FS`);
   return partes.join('\n');
 }
 
@@ -870,10 +890,10 @@ function etColunaIdent(sku, nome, nf, data, tamanho, reuse, x0) {
 //   etiquetas úteis). Agrupar de 3 em 3 renderia 3×, mas MEXE no enfileiramento que o Lote V
 //   endureceu depois do incidente das 160 etiquetas — e por isso é decisão do Bruno, com o
 //   teste de não-regressão do Lote V refeito. Ver DIVIDAS.md § ET1 para as três opções.
-function etZplIdent(sku, nome, nf, data, tamanho, reuse) {
+function etZplIdent(sku, nome, nf, data, tamanho, modo) {
   const L = ET_LAYOUT[tamanho] || ET_LAYOUT.grande;
   const tam = ET_LAYOUT[tamanho] ? tamanho : 'grande';
-  const corpo = etColunaIdent(sku, nome, nf, data, tam, reuse, L.colunas[0]);
+  const corpo = etColunaIdent(sku, nome, nf, data, tam, modo, L.colunas[0]);
   return `^XA\n^PW${L.pw}\n^LL${L.ll}\n^CI28\n${corpo}\n^XZ`;
 }
 
@@ -922,13 +942,36 @@ async function cfPrintIdentificacao(items, onFlash, nf = '-', data = new Date().
   const tamanho = opts.tamanho
     || (window.FREtiquetaTamanho && window.FREtiquetaTamanho.get())
     || 'grande';
+  // ── O MODO DA LINHA DE INFO, e o guard que fecha o "NF null" ──────────────────────
+  // opts.semDocumento (CAT-ET): não há NF nem reaproveitamento — a linha sai só com a data.
+  //
+  // ⚠ E O GUARD: modo 'nf' com nf que não é uma NF de verdade CAI para 'sem-documento'.
+  //   Antes do CAT-ET o caminho existia e estava DESPROTEGIDO: `nf = null` imprimia
+  //   literalmente "NF null · 21/08/2026" na etiqueta. Não disparava porque os dois
+  //   chamadores que passam null (pages_admin :227 e :287) pareiam com reaproveitado:true
+  //   — ou seja, a proteção era DISCIPLINA DO CHAMADOR, não código. O Catálogo seria o
+  //   primeiro a cair nele. Agora nenhum chamador consegue, com ou sem disciplina.
+  //
+  // ⚠⚠ MUDANÇA DE COMPORTAMENTO NA CONFERÊNCIA, DECLARADA: o '-' entra na lista de
+  //   inválidos, e a Conferência chama com o default '-' (não há NF numa conferência de
+  //   envio). Antes ela imprimia "NF - · data"; passa a imprimir só a data. É a MESMA razão
+  //   que decidiu o modo 'sem-documento': um campo que afirma um documento inexistente é
+  //   ruído que o operador aprende a ignorar, e informação que se aprende a ignorar é pior
+  //   que ausência. Se a intenção for preservar o "NF -" da Conferência, o veto é tirar a
+  //   cláusula `!== '-'` desta linha — e aí Catálogo e Conferência deixam de emitir ZPL
+  //   idêntico para o mesmo produto, o que a prova de fonte única vai acusar.
+  const nfValida = typeof nf === 'string' && nf.trim() !== '' && nf.trim() !== '-';
+  const modo = opts.semDocumento ? 'sem-documento'
+    : opts.reaproveitado ? 'reuse'
+    : nfValida ? 'nf'
+    : 'sem-documento';
   const jobs = [];
   items.forEach((it) => {
     const n = parseInt(it.faltam) || 0;
     if (n <= 0) return;
     const sku = frZplField(it.sku);          // literal, mantém os pontos (só remove ^ e ~)
     if (!sku) return;                        // item sem SKU (custom) → sem identificador, pula
-    const zpl = etZplIdent(sku, it.nome, nf, data, tamanho, !!opts.reaproveitado);
+    const zpl = etZplIdent(sku, it.nome, nf, data, tamanho, modo);
     for (let k = 0; k < n; k++) jobs.push(zpl);
   });
   if (!jobs.length) return;

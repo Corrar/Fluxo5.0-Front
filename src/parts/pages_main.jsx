@@ -421,7 +421,7 @@ function ProdutoStatusBadge({ t, p }) {
 // Menu ⋯ do card — Editar (modal real) e Arquivar (DELETE real). Extraído porque agora o
 // celular também o mostra: os dois controles deixaram de ser inertes nesta rodada, então
 // escondê-los do mobile seria negar função viva, não poupar de botão morto.
-function ProdutoMenu({ t, p, onEdit, onConfirmArchive, onVerReservas }) {
+function ProdutoMenu({ t, p, onEdit, onConfirmArchive, onVerReservas, onImprimirEtiqueta }) {
   const [menu, setMenu] = useStateM(false);
   return (
     <div style={{ position: 'relative' }}>
@@ -438,6 +438,17 @@ function ProdutoMenu({ t, p, onEdit, onConfirmArchive, onVerReservas }) {
             {onVerReservas && (
               <button data-fr="menu-ver-reservas" onClick={() => { setMenu(false); onVerReservas(p); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: t.text }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="lock" size={15} /> Ver reservas</button>
+            )}
+            {/* CAT-ET: imprimir etiqueta SEM movimento de estoque. Até aqui a impressão só
+                acontecia atrelada a um documento (Conferência, Entrada por NF-e, Entrada por
+                Reaproveitamento). Sem gate de tela, pelo mesmo motivo do "Ver reservas": não
+                move saldo, não expõe custo e não chama backend nenhum — o ZPL sai do dado que
+                a grade já tem e vai direto para a impressora local. Fechar isto com
+                `estoque:edit` seria mais restritivo que "Arquivar produto", que é destrutivo
+                e não tem gate. */}
+            {onImprimirEtiqueta && (
+              <button data-fr="menu-imprimir-etiqueta" onClick={() => { setMenu(false); onImprimirEtiqueta(p); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: t.text }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="printer" size={15} /> Imprimir etiqueta</button>
             )}
             <button onClick={() => { setMenu(false); onConfirmArchive(); }} style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, fontSize: 13, fontWeight: 600, color: uiTone(t, 'red').fg }}
               onMouseEnter={(e) => { e.currentTarget.style.background = uiTone(t, 'red').bg; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}><Icon name="trash" size={15} /> Arquivar produto</button>
@@ -501,7 +512,7 @@ function ProdutoFoto({ t, p }) {
   );
 }
 
-function ProdutoCard({ t, p, onEdit, onArchive, mobile, onVerReservas }) {
+function ProdutoCard({ t, p, onEdit, onArchive, mobile, onVerReservas, onImprimirEtiqueta }) {
   const [confirm, setConfirm] = useStateM(false);
   const out = p.disp <= 0;
 
@@ -515,7 +526,7 @@ function ProdutoCard({ t, p, onEdit, onArchive, mobile, onVerReservas }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <ProdutoStatusBadge t={t} p={p} />
             {p.tag && <Badge t={t} kind={p.kind}>{p.tag}</Badge>}
-            <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} onVerReservas={onVerReservas} />
+            <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} onVerReservas={onVerReservas} onImprimirEtiqueta={onImprimirEtiqueta} />
           </div>
         </div>
         <div style={{ fontSize: 15.5, fontWeight: 850, color: t.text, margin: '10px 0 14px', letterSpacing: '-.01em', lineHeight: 1.3 }}>{p.nome}</div>
@@ -540,7 +551,7 @@ function ProdutoCard({ t, p, onEdit, onArchive, mobile, onVerReservas }) {
     <Card t={t} hover style={{ padding: 22, position: 'relative' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
         <Badge t={t} kind="gray">{p.sku}</Badge>
-        <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} onVerReservas={onVerReservas} />
+        <ProdutoMenu t={t} p={p} onEdit={onEdit} onConfirmArchive={() => setConfirm(true)} onVerReservas={onVerReservas} onImprimirEtiqueta={onImprimirEtiqueta} />
       </div>
       <div style={{ fontSize: 19, fontWeight: 850, color: t.text, margin: '14px 0 11px', letterSpacing: '-.01em', lineHeight: 1.25 }}>{p.nome}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: p.img ? 14 : 0 }}>
@@ -1290,11 +1301,136 @@ function ReservaDoProduto({ t, produto, onFechar, onIr }) {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════════════════════
+// IMPRIMIR ETIQUETA DIRETO DO CATÁLOGO (lote CAT-ET)
+// ══════════════════════════════════════════════════════════════════════════════════════
+// Até aqui a impressão só existia ATRELADA A UM MOVIMENTO: Conferência de Envio, Entrada
+// por NF-e e Entrada por Reaproveitamento. O Catálogo imprime SEM movimento nenhum — não
+// chama backend, não toca saldo, não gera evento. O ZPL sai do dado que a grade já tem.
+//
+// ⚠ ZERO LÓGICA DE ETIQUETA AQUI, E ISSO É O PONTO DO LOTE.
+//   A régua (f) do CO1 diz: onde há comentário afirmando "a MESMA lógica de X", procure a
+//   cópia. Aqui o movimento é o inverso — o que este arquivo NÃO tem:
+//     · não monta ZPL            → window.cfPrintIdentificacao (conferencia.jsx)
+//     · não mede texto nem quebra → window.FRZplTexto (a tabela MEDIDA do ET1)
+//     · não escolhe tamanho       → window.EtiquetaTamanhoToggle + o toggle global lido
+//                                   pelo próprio cfPrintIdentificacao
+//     · não decide barcode        → o D2 (pequena sem código) vive em etColunaIdent
+//     · não fala com a impressora → frSendZplBrowserPrint, por dentro do cfPrint
+//   Se um dia divergir do ZPL da Conferência para o mesmo produto e tamanho, é porque
+//   alguém criou a cópia. A prova de fonte única do CAT-ET existe para acusar isso.
+//
+// ⚠ SEM SELEÇÃO MÚLTIPLA, por decisão do lote. Um produto por vez cobre o pedido; N
+//   produtos × M etiquetas cria a superfície exata do incidente das 160 do Lote V, e a
+//   pergunta "M é por produto ou global?" não tem resposta óbvia. Ver DIVIDAS § CAT-ET.
+function EtiquetaDoProduto({ t, produto, onFechar }) {
+  // CONTAGEM DE REPETIÇÃO, não quantidade de material (Lote V): nasce '1', o operador
+  // altera se quiser, e NÃO há de onde espelhar — no Catálogo não existe documento nem
+  // movimento. `parseContagem` trunca a fração e tem piso 1 (foi assim que "16,0" virou
+  // 160 etiquetas na Entrada, e o helper existe exatamente para isso não se repetir).
+  const [qtd, setQtd] = useStateM('1');
+  const [enviando, setEnviando] = useStateM(false);
+  const [aviso, setAviso] = useStateM(null);    // falha de impressão — PERSISTENTE, sem timer
+  const [okMsg, setOkMsg] = useStateM(null);
+  const contagem = (v) => (window.FRAdapters && window.FRAdapters.parseContagem
+    ? window.FRAdapters.parseContagem(v, 1)
+    : Math.max(1, Math.trunc(parseInt(v, 10) || 1)));
+  const n = contagem(qtd);
+  const semSku = !String(produto.sku || '').trim();
+  const cAmb = uiTone(t, 'amber');
+
+  // ⚠ O AVISO DE FALHA NÃO TEM TIMER, e é a mesma decisão da Entrada por NF-e: um toast que
+  //   some sozinho é exatamente o que deixa a peça ir para a prateleira sem identificação e
+  //   ninguém ver. Ele só sai quando o operador tenta de novo ou fecha a folha.
+  const onFlash = (kind, msg) => { if (kind === 'error') setAviso(msg); else setOkMsg(msg); };
+
+  const imprimir = async () => {
+    if (enviando || semSku) return;
+    setEnviando(true); setAviso(null); setOkMsg(null);
+    try {
+      await window.cfPrintIdentificacao(
+        [{ sku: produto.sku, nome: produto.nome, faltam: n }],
+        onFlash,
+        null,                                       // NÃO HÁ NF. O modo abaixo é quem manda.
+        new Date().toLocaleDateString('pt-BR'),
+        { semDocumento: true },                     // linha de info = só a data
+      );
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div data-fr="etiqueta-folha" style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '22px 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span style={{ width: 40, height: 40, borderRadius: 11, background: t.accent, color: t.onAccent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="printer" size={19} /></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 17, fontWeight: 850, color: t.text }}>Imprimir etiqueta</div>
+          <div style={{ fontSize: 12.5, color: t.muted, marginTop: 2 }}>Não movimenta estoque — só manda a etiqueta para a impressora.</div>
+        </div>
+        <button onClick={onFechar} style={{ all: 'unset', cursor: 'pointer', width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', color: t.muted }}><Icon name="x" size={16} /></button>
+      </div>
+
+      <div style={{ padding: '13px 15px', borderRadius: 12, background: t.elevated, border: `1px solid ${t.border}` }}>
+        <div style={{ fontSize: 14, fontWeight: 750, color: t.text, lineHeight: 1.35 }}>{produto.nome}</div>
+        <div style={{ fontSize: 12, color: t.faint, fontFamily: 'ui-monospace, monospace', marginTop: 3 }}>{produto.sku || '— sem SKU —'}</div>
+      </div>
+
+      {semSku && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 11, fontSize: 12.5, fontWeight: 700, background: cAmb.bg, color: cAmb.fg }}>
+          <Icon name="alert" size={15} style={{ flexShrink: 0 }} /> Produto sem SKU — a etiqueta não tem identificador para imprimir.
+        </div>
+      )}
+
+      {/* O TOGGLE GLOBAL do ET1. Mudar aqui muda na Conferência e nas duas Entradas. */}
+      <EtiquetaTamanhoToggle t={t} />
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 13.5, fontWeight: 800, color: t.text }}>Quantas etiquetas</div>
+          <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>Serão impressas <b style={{ color: t.text }}>{n}</b> {n === 1 ? 'etiqueta' : 'etiquetas'}.</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setQtd(String(Math.max(1, n - 1)))} style={{ all: 'unset', cursor: 'pointer', width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 20, color: t.text, border: `1px solid ${t.border}` }}>–</button>
+          <input value={qtd} onChange={(e) => setQtd(e.target.value)} inputMode="numeric" aria-label="Quantas etiquetas"
+            style={{ width: 74, height: 44, textAlign: 'center', borderRadius: 11, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 19, fontWeight: 850, fontFamily: 'inherit', outline: 'none' }} />
+          <button onClick={() => setQtd(String(n + 1))} style={{ all: 'unset', cursor: 'pointer', width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 20, color: t.accentText, border: `1px solid ${t.border}` }}>+</button>
+        </div>
+      </div>
+
+      {aviso && (
+        <div data-fr="etiqueta-aviso-falha" style={{ display: 'flex', alignItems: 'flex-start', gap: 11, padding: '13px 15px', borderRadius: 12, background: cAmb.bg, border: `1px solid ${cAmb.fg}` }}>
+          <span style={{ color: cAmb.fg, display: 'flex', paddingTop: 1 }}><Icon name="alert" size={17} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 850, color: cAmb.fg }}>A etiqueta NÃO saiu</div>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: t.text, marginTop: 4 }}>{aviso}</div>
+          </div>
+        </div>
+      )}
+      {okMsg && (
+        <div data-fr="etiqueta-ok" style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 12, fontSize: 12.5, fontWeight: 700, background: uiTone(t, 'green').bg, color: uiTone(t, 'green').fg }}>
+          <Icon name="check" size={15} /> {okMsg}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button data-fr="etiqueta-imprimir" onClick={imprimir} disabled={enviando || semSku} type="button"
+          style={{ all: 'unset', boxSizing: 'border-box', cursor: (enviando || semSku) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 9, height: 46, padding: '0 22px', borderRadius: 12, fontSize: 13.5, fontWeight: 800, background: t.accent, color: t.onAccent, opacity: (enviando || semSku) ? 0.45 : 1 }}>
+          <Icon name="printer" size={17} /> {enviando ? 'Enviando…' : aviso ? 'Reimprimir' : `Imprimir ${n} ${n === 1 ? 'etiqueta' : 'etiquetas'}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PageCatalogo({ t, brand, setActive }) {
   const [inv, setInv] = useStateM(false);
   // CONSULTA DE RESERVA (D-B4): produto aberto no painel lateral. `null` = fechado.
   const [reservaDe, setReservaDe] = useStateM(null);
   const focoReserva = useRefM(null);
+  // CAT-ET: produto aberto na folha de impressão de etiqueta. `null` = fechada.
+  const [etiquetaDe, setEtiquetaDe] = useStateM(null);
+  const focoEtiqueta = useRefM(null);
   const [rel, setRel] = useStateM(false);
   const [edit, setEdit] = useStateM(null);
   const [page, setPage] = useStateM(1);
@@ -1384,7 +1520,7 @@ function PageCatalogo({ t, brand, setActive }) {
               ? Array.from({ length: 8 }).map((_, i) => <ProdutoCardSkeleton key={`sk${i}`} t={t} />)
               : total === 0
               ? <div style={{ gridColumn: '1/-1' }}><Card t={t} style={{ padding: 10 }}><EmptyState t={t} title={ql || tagFiltro ? 'Nenhum resultado' : 'Nenhum produto'} sub={ql || tagFiltro ? 'Ajuste a busca ou o filtro de etiqueta.' : 'Nenhum produto ativo no catálogo.'} /></Card></div>
-              : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} onVerReservas={(np) => setReservaDe(np)} />)}
+              : pageItems.map((p) => <ProdutoCard key={p.product_id || p.sku} t={t} p={p} mobile={mobile} onEdit={(np) => setEdit(np)} onArchive={arquivar} onVerReservas={(np) => setReservaDe(np)} onImprimirEtiqueta={(np) => setEtiquetaDe(np)} />)}
           </div>
           {pagbar}
           </>
@@ -1398,6 +1534,15 @@ function PageCatalogo({ t, brand, setActive }) {
         <window.FRDrawer t={t} aoFechar={() => setReservaDe(null)} origemFoco={focoReserva} largura="min(560px,94vw)">
           <ReservaDoProduto t={t} produto={reservaDe} onFechar={() => setReservaDe(null)}
             onIr={(pagina) => { setReservaDe(null); if (setActive) setActive(pagina); }} />
+        </window.FRDrawer>
+      )}
+
+      {/* IMPRIMIR ETIQUETA (CAT-ET) — MESMA casca FRDrawer, pela MESMA razão que está escrita
+          logo acima: escrever overlay novo aqui seria a QUINTA cópia do mesmo ESC + foco +
+          trava de scroll. Só o conteúdo é novo. */}
+      {etiquetaDe && window.FRDrawer && (
+        <window.FRDrawer t={t} aoFechar={() => setEtiquetaDe(null)} origemFoco={focoEtiqueta} largura="min(520px,94vw)">
+          <EtiquetaDoProduto t={t} produto={etiquetaDe} onFechar={() => setEtiquetaDe(null)} />
         </window.FRDrawer>
       )}
 

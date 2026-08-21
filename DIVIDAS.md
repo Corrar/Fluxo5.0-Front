@@ -1727,3 +1727,110 @@ EMPRESA, não do operador.
 ⚠ **Onde o toggle aparece em cada tela não é o mesmo lugar, e é de propósito**: na Entrada
 ele fica na página (a decisão de imprimir é da página); na Conferência ele fica **dentro do
 modal de etiquetas** (é ali que a decisão é tomada). O estado é um só.
+
+---
+
+# CAT-ET — imprimir etiqueta direto do Catálogo (21/08/2026)
+
+Base: front `f1de696` (o ET1). Backend NÃO tocado. Até aqui a impressão só existia
+**atrelada a um movimento** — Conferência de Envio, Entrada por NF-e e Entrada por
+Reaproveitamento. O Catálogo imprime **sem movimento nenhum**: não chama backend, não toca
+saldo, não gera evento.
+
+## 1. O `NF null` — o caminho existia e estava DESPROTEGIDO
+
+`etColunaIdent` montava a linha de info com `NF ${nf} · ${data}`. Medido no bundle real do
+`f1de696`: **`nf = null` imprime literalmente `NF null · 21/08/2026` na etiqueta**.
+
+Não disparava porque os dois chamadores que passam `null` (`pages_admin.jsx:227` e `:287`)
+pareiam com `{reaproveitado:true}`, que substitui a linha inteira. Ou seja: **a proteção era
+DISCIPLINA DO CHAMADOR, não código**. O Catálogo — que não tem NF e não é reaproveitamento —
+seria o primeiro a cair nele.
+
+O guard agora é estrutural, em `cfPrintIdentificacao`: `nf` que não é texto não-vazio (nem
+`'-'`) derruba o modo para `'sem-documento'`. Nenhum chamador consegue mais, com ou sem
+disciplina.
+
+⚠ **RÉGUA: guard que depende da disciplina do chamador não é guard — é sorte com prazo.**
+Ele funcionou enquanto os dois únicos chamadores foram escritos pela mesma pessoa no mesmo
+dia. O terceiro chamador é sempre o que descobre.
+
+## 2. ⚠ MUDANÇA DE COMPORTAMENTO NA CONFERÊNCIA, declarada
+
+O `'-'` entrou na lista de "não é NF de verdade", e a **Conferência chama com o default
+`'-'`** (não há NF numa conferência de envio). Antes ela imprimia `NF - · data`; **passa a
+imprimir só a data**.
+
+A razão é a mesma que decidiu o modo `sem-documento`: um campo que afirma um documento
+inexistente é ruído que o operador aprende a ignorar, e **informação que se aprende a
+ignorar é pior que ausência**.
+
+**O veto é de uma cláusula**: tirar `&& nf.trim() !== '-'` da linha do `nfValida`. Mas aí
+Catálogo e Conferência deixam de emitir ZPL idêntico para o mesmo produto — e a prova de
+fonte única (§ 5) passa a acusar.
+
+## 3. A linha de info era um ternário DUPLICADO
+
+A expressão `reuse ? … : 'NF …'` existia **duas vezes** — média e grande, inline. Duas
+cópias de um ternário são duas cópias de uma REGRA: acrescentar o terceiro modo numa e
+esquecer a outra é exatamente a régua (f) do CO1. Virou `etLinhaInfo(modo, nf, data,
+tamanho)`, um lugar só, com os três modos e a assimetria grande/média explicada (a média não
+tem banner de REAPROVEITADO, então precisa da palavra na linha).
+
+## 4. SEM SELEÇÃO MÚLTIPLA — decisão do lote, com motivo
+
+O Catálogo **não tem seleção nenhuma hoje** (medido: nenhum checkbox, nenhum estado de
+multi-seleção; o único `sel` é de um item só, dentro do modal de Inventário). Introduzir N
+produtos × M etiquetas criaria **a superfície exata do incidente das 160 do Lote V**, e mais
+a pergunta "M é por produto ou global?", que não tem resposta óbvia. Um produto por vez
+cobre o pedido do Bruno ("imprimir a etiqueta de um material").
+
+## 5. Fonte única — o que o lote NÃO escreveu
+
+A régua (f) do CO1 diz: onde há comentário afirmando "a MESMA lógica de X", procure a cópia.
+Aqui o movimento é o inverso — o que `EtiquetaDoProduto` **não** tem:
+
+| não faz | quem faz |
+|---|---|
+| montar ZPL | `window.cfPrintIdentificacao` (conferencia.jsx) |
+| medir texto / quebrar linha | `window.FRZplTexto` (a tabela MEDIDA do ET1) |
+| escolher tamanho | `window.EtiquetaTamanhoToggle` + o toggle global lido pelo próprio `cfPrint` |
+| decidir barcode | o D2 vive em `etColunaIdent` — a pequena vem sem código **de graça** |
+| falar com a impressora | `frSendZplBrowserPrint`, por dentro do `cfPrint` |
+
+**Provado**: o ZPL emitido pelo Catálogo é **byte a byte idêntico** ao da Conferência para o
+mesmo produto e tamanho, nos três tamanhos (330, 277 e 173 caracteres). Se um dia divergir
+um caractere, alguém criou a cópia.
+
+## 6. Reuso da casca lateral — a QUINTA cópia que não foi escrita
+
+A folha usa `window.FRDrawer`, a casca que o C4 extraiu e que o `ReservaDoProduto` já usa.
+O comentário do lugar (`pages_main.jsx`, bloco da consulta de reserva) já avisava que overlay
+novo seria a **quarta** cópia do mesmo ESC + foco + trava de scroll. Este seria a quinta.
+
+## 7. RBAC — sem gate de tela, e por quê
+
+Medido: Catálogo, Conferência e as duas Entradas estão **todos no módulo `estoque`**, sem
+gate por item de nav. `conferencia.jsx` não chama `canAccess` nenhuma vez; os dois
+`canAccess` de `pages_main.jsx` são o mesmo — `estoque:edit` EXATO, gateando só o modal de
+Inventário. As ações do card (Editar, Arquivar) **não têm gate de tela**.
+
+Imprimir etiqueta não move saldo, não expõe custo e não chama backend. Fechá-la com
+`estoque:edit` seria **mais restritivo que "Arquivar produto"**, que é destrutivo e não tem
+gate. Segue a leitura do Catálogo.
+
+## 8. O que NÃO existe: popup
+
+O esboço deste lote pedia "o mesmo tratamento de popup bloqueado". **Não há popup no caminho
+de impressão desde o Lote V**, que migrou de `window.print()` para Browser Print. Os modos
+de falha são "Browser Print indisponível", "nenhuma impressora padrão" e HTTP não-ok, todos
+por `onFlash`. O que o Catálogo herdou foi o **aviso PERSISTENTE, sem timer**, da Entrada por
+NF-e — porque toast que some sozinho é exatamente o que deixa a peça ir para a prateleira sem
+identificação e ninguém ver.
+
+## 9. O alias morto `cat-etiquetas` — não havia nada a reusar
+
+Medido: `cat-etiquetas` aparece 3 vezes no repo e **duas são comentário**. A única ocorrência
+viva é um elemento do array de alias do roteador (`pages_admin.jsx`). Zero item de menu, zero
+componente, zero chave de RBAC. É cicatriz da unificação do Catálogo da rodada 16, não uma
+tela que alguém começou.
