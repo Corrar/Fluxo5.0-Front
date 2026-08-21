@@ -1490,6 +1490,12 @@ const fmtBRL = (n) => {
 };
 // Escape mínimo p/ os PDFs client-side (document.write com strings livres do banco).
 const cfEsc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+// PROMOVIDO A GLOBAL no lote PDF1: o "Exportar PDF" da aba Clientes e OPs também joga nome de
+// produto vindo do banco dentro de um document.write, e pages_clientes.jsx não tinha escape
+// nenhum. Expor o que já existe em vez de escrever a TERCEIRA cópia — é a mesma régua que fez
+// o custo da OP ter um dono só. Uso é em tempo de clique, então a ordem de import não importa
+// (pages_clientes carrega antes deste arquivo em main.jsx).
+if (typeof window !== 'undefined') window.frEscHtml = cfEsc;
 const cfData = (iso) => {
   if (!iso) return '—';
   const d = new Date(iso);

@@ -45,6 +45,130 @@ function frCliErr(e) {
   return g ? g(e) : (e && e.message) || 'Erro inesperado.';
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// EXPORTAR PDF DA OP — lote PDF1
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// Layout do ref21 (`ref21/pages_clientes.jsx:58`), DADOS do banco. O protótipo mostrava a OP
+// 26202 com "2 itens / 41 un / R$ 3.104,90"; a mesma OP em produção tem 21 linhas e
+// R$ 58.694,44. Aproveita-se o desenho, nunca os números.
+//
+// O caminho é o MESMO dos dois documentos que já rodam em produção (romaneio de viagem e
+// relatório de confronto, pages_rest.jsx): window.open + document.write + print(). ZERO
+// biblioteca nova — o projeto não tem nenhuma de PDF, e não é este lote que traz a primeira.
+//
+// ⚠ A JANELA ABRE ANTES DO FETCH, e isso é de propósito. Os dois documentos antigos já tinham
+// os dados em mãos e podiam abrir a janela depois. Aqui os itens vêm de uma rota nova, e
+// `window.open` depois de um `await` perde o gesto do usuário: o navegador bloqueia o popup.
+// Então abre-se primeiro (dentro do clique), escreve-se um "Gerando…", e o conteúdo real
+// substitui aquilo quando a resposta chega. Erro também é escrito NA JANELA — deixá-la em
+// branco seria a falha silenciosa que o resto da casa não aceita.
+const pdfBRL = (v) => {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+};
+// `frEscHtml` é o `cfEsc` de pages_rest.jsx promovido a global no PDF1 — nome de produto vem do
+// banco e entra num document.write. O fallback existe só para o caso de ordem de carga; ele
+// escapa igual, não é versão fraca.
+const pdfEsc = (s) => (window.frEscHtml
+  ? window.frEscHtml(s)
+  : String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])));
+const pdfData = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR');
+};
+
+// O CSS é o do romaneio/confronto que já sobrevive ao print em produção, mais o <tfoot> de
+// TOTAL do ref21. `@media print` reduz a margem; `thead{display:table-header-group}` repete o
+// cabeçalho a cada página — as OPs grandes passam de 200 linhas (a maior tem 238).
+const PDF_CSS = `
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',Arial,sans-serif;color:#14161c;padding:34px 38px;display:flex;flex-direction:column;min-height:96vh}
+  .top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:3px solid #2e3192;padding-bottom:16px;margin-bottom:20px}
+  .badge{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.06em;padding:5px 12px;border-radius:999px;color:#fff}
+  h1{font-size:22px;letter-spacing:-.02em;margin-top:8px}
+  .sub{font-size:13px;color:#5a5f6b;margin-top:3px}
+  .tot{text-align:right}
+  .tot .lbl{font-size:10px;font-weight:800;letter-spacing:.1em;color:#5a5f6b}
+  .tot .val{font-size:24px;font-weight:850;color:#2e3192;margin-top:3px;white-space:nowrap}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  thead{display:table-header-group}
+  th{text-align:left;font-size:10px;letter-spacing:.08em;color:#5a5f6b;border-bottom:2px solid #d8dbe4;padding:8px 10px}
+  td{padding:10px;border-bottom:1px solid #e8eaf0;vertical-align:top}
+  tr{break-inside:avoid;page-break-inside:avoid}
+  tbody tr:nth-child(even) td{background:#f7f8fb}
+  .num{text-align:right;white-space:nowrap}
+  .sku{font-size:10.5px;color:#8a8f9c;font-family:ui-monospace,monospace}
+  .fund{font-size:10px;color:#8a8f9c}
+  tfoot td{border-top:2px solid #2e3192;border-bottom:none;font-weight:850;font-size:14px;background:none!important}
+  .nota{margin-top:14px;font-size:10.5px;color:#5a5f6b;line-height:1.55;border-left:3px solid #d8dbe4;padding-left:10px}
+  .rodape{margin-top:auto;padding-top:26px;display:flex;align-items:center;justify-content:center;gap:10px;border-top:1px solid #e8eaf0}
+  .rodape img{height:28px}
+  .rodape span{font-size:10.5px;color:#8a8f9c}
+  @media print{body{padding:18px 22px}}
+`;
+
+function pdfDocumentoOP(dados) {
+  const op = dados.op || {};
+  const itens = Array.isArray(dados.items) ? dados.items : [];
+  const st = opStatusOf(op.status);
+  const corBadge = st.kind === 'green' ? '#0b8a4d' : '#2563eb';
+  const logo = window.__asset ? window.__asset('assets/logo-royale.png') : '/assets/logo-royale.png';
+  const emitido = dados.emitido_em ? new Date(dados.emitido_em) : new Date();
+  const emitidoTxt = emitido.toLocaleDateString('pt-BR') + ' às ' +
+    emitido.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const unidades = itens.reduce((a, x) => a + Number(x.quantidade || 0), 0);
+
+  const rows = itens.map((x, i) => {
+    // `movimentos > 1` = esta linha FUNDIU mais de um documento e a data mostrada é a do
+    // movimento MAIS RECENTE. Dizer isso na própria linha é o que impede o leitor de tomar
+    // a data por "a data da solicitação" — medido: 437 das 1.841 linhas fundem, até 20 docs.
+    const fundida = Number(x.movimentos || 1) > 1
+      ? ` <span class="fund">(${x.movimentos} mov.)</span>` : '';
+    return `<tr>
+      <td class="num">${i + 1}</td>
+      <td><b>${pdfEsc(x.produto)}</b><br><span class="sku">SKU ${pdfEsc(x.sku || '—')}</span></td>
+      <td class="num">${Number(x.quantidade || 0).toLocaleString('pt-BR')} ${pdfEsc(x.unit || 'un')}</td>
+      <td>${pdfData(x.movido_em)}${fundida}</td>
+      <td class="num">${pdfBRL(x.unit_price)}</td>
+      <td class="num"><b>${pdfBRL(x.subtotal)}</b></td>
+    </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+    <title>OP ${pdfEsc(op.op_code)} — ${pdfEsc(op.client_name || '')}</title><style>${PDF_CSS}</style></head><body>
+    <div class="top">
+      <div>
+        <div class="sub" style="font-size:15px;font-weight:800;color:#14161c">${pdfEsc(op.client_name || 'Sem cliente')}</div>
+        <h1>OP ${pdfEsc(op.op_code)}</h1>
+        <div class="sub"><span class="badge" style="background:${corBadge}">${pdfEsc(st.badge)}</span> · Emitido em ${pdfEsc(emitidoTxt)}</div>
+        ${op.description ? `<div class="sub">${pdfEsc(op.description)}</div>` : ''}
+      </div>
+      <div class="tot">
+        <div class="lbl">VALOR TOTAL DA OP</div>
+        <div class="val">${pdfBRL(op.total_cost)}</div>
+        <div class="sub">${itens.length} ${itens.length === 1 ? 'item' : 'itens'} · ${unidades.toLocaleString('pt-BR')} un</div>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th class="num">#</th><th>MATERIAL</th><th class="num">QTD</th><th>MOVIMENTO EM</th><th class="num">VALOR UNIT.</th><th class="num">SUBTOTAL</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#8a8f9c;padding:26px">Esta OP ainda não teve material entregue.</td></tr>'}</tbody>
+      ${itens.length ? `<tfoot><tr><td colspan="5" style="text-align:right">TOTAL</td><td class="num">${pdfBRL(op.total_cost)}</td></tr></tfoot>` : ''}
+    </table>
+    <!-- AS DUAS FRASES SÃO INCONDICIONAIS (decisão do Bruno, 21/08). A segunda não depende de
+         haver item a zero NESTE documento: ela ensina a convenção, e uma OP sem item a zero
+         hoje ganha um amanhã sem que ninguém reemita a regra. Medido: 542 de 2.611 linhas
+         (20,8%) saem a R$ 0,00, em 34 das 46 OPs.
+         A terceira frase é do grão agrupado — ver DIVIDAS. -->
+    <div class="nota">
+      Valores calculados com o preço de cadastro vigente em ${pdfEsc(emitidoTxt)}.
+      Itens sem preço cadastrado aparecem como R$&nbsp;0,00.
+      <br>Cada linha agrupa todas as movimentações do mesmo material nesta OP; onde há mais de uma (&ldquo;n&nbsp;mov.&rdquo;), a data exibida é a do movimento mais recente.
+    </div>
+    <div class="rodape"><img src="${logo}" alt="Fluxo Royale"><span>Fluxo Royale ERP · documento gerado automaticamente</span></div>
+  <\/body></html>`;
+}
+
 // ---- Adapter: cliente REAL (GET /clients) -> shape da tela ----
 // Backend: { id(uuid), code, name, services:[{ id(uuid), op_code, description, status, total_cost }] }
 // A tela usa: chave = UUID; code/op_code = display; status canônico; total_cost real.
@@ -177,6 +301,39 @@ function PageClientes({ t, readOnly }) {
   };
   // reload retorna void; embrulho em Promise pra dar await (a UI atualiza quando os items chegam)
   const reloadAsync = () => { reload(); return Promise.resolve(); };
+
+  // Exportar PDF da OP (lote PDF1). A janela abre DENTRO do clique — ver a nota longa em
+  // `pdfDocumentoOP`, acima: abrir depois do await perde o gesto e o popup é bloqueado.
+  const [pdfBusy, setPdfBusy] = useStateC(null);   // id da OP em geração (trava só aquele botão)
+  const exportarPDF = async (op) => {
+    if (pdfBusy) return;
+    const w = window.open('', '_blank');
+    if (!w) { setToast({ kind: 'err', msg: 'O navegador bloqueou a janela do PDF — libere pop-ups para este site e tente de novo.' }); return; }
+    w.document.write('<!DOCTYPE html><meta charset="utf-8"><title>Gerando…</title>'
+      + '<body style="font-family:\'Segoe UI\',Arial,sans-serif;color:#5a5f6b;padding:40px">Montando o documento da ' + pdfEsc(op.n) + '…</body>');
+    w.document.close();
+    setPdfBusy(op.id);
+    try {
+      const res = await window.FRApi.get('/clients/services/' + op.id + '/items', { skipLoading: true });
+      w.document.open();
+      w.document.write(pdfDocumentoOP(res && res.data));
+      w.document.close();
+      // Mesmo compasso dos dois documentos que já rodam em produção (pages_rest.jsx): dar ao
+      // layout o tempo de assentar antes de chamar o print.
+      w.onload = () => setTimeout(() => w.print(), 350);
+    } catch (e) {
+      // O erro vai PARA A JANELA e não só para o toast: uma aba em branco é falha silenciosa.
+      // O 403 é o caso esperado de quem não tem `clientes:edit` — a mensagem vem do backend.
+      const msg = frCliErr(e);
+      w.document.open();
+      w.document.write('<!DOCTYPE html><meta charset="utf-8"><title>Não foi possível gerar</title>'
+        + '<body style="font-family:\'Segoe UI\',Arial,sans-serif;color:#14161c;padding:40px">'
+        + '<h2 style="margin-bottom:8px">Não foi possível gerar o PDF</h2>'
+        + '<p style="color:#5a5f6b">' + pdfEsc(msg) + '</p></body>');
+      w.document.close();
+      setToast({ kind: 'err', msg: msg });
+    } finally { setPdfBusy(null); }
+  };
 
   const field = { boxSizing: 'border-box', height: 44, borderRadius: 11, border: `1px solid ${t.border}`, background: t.elevated, color: t.text, padding: '0 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none', width: '100%' };
   const initials = (n) => (n || '').replace(/[^A-Za-zÀ-ÿ0-9 ]/g, '').split(' ').filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
@@ -330,6 +487,20 @@ function PageClientes({ t, readOnly }) {
                               </select>
                               <Icon name="chevronDown" size={14} style={{ position: 'absolute', right: 11, top: 12, color: t.muted, pointerEvents: 'none' }} />
                             </div>
+                            {/* EXPORTAR PDF — lote PDF1.
+                                ⚠ Fica DENTRO do !readOnly de propósito, e isso é decisão do Bruno
+                                (21/08), não descuido: exportar exige `clientes:edit`, a mesma chave
+                                do Transferir e do Excluir logo abaixo. Consequência declarada — quem
+                                entra pela aba do módulo PRODUÇÃO não vê este botão, porque aquele
+                                módulo monta a tela em readOnly (pages_admin.jsx:2576). A exportação
+                                acontece pelo Estoque / Compras / Dev / Assistência / Financeiro.
+                                O botão sumir é conveniência; a trava de verdade é o
+                                requirePermission('clientes:edit') na rota. */}
+                            <button onClick={() => exportarPDF(o)} disabled={pdfBusy === o.id} title="Exportar a lista de materiais desta OP em PDF"
+                              style={{ all: 'unset', boxSizing: 'border-box', cursor: pdfBusy === o.id ? 'progress' : 'pointer', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 38, borderRadius: 9, fontSize: 12.5, fontWeight: 700, color: pdfBusy === o.id ? t.faint : t.accentText, border: `1px solid ${t.border}`, background: t.panel }}
+                              onMouseEnter={(e) => { if (pdfBusy !== o.id) e.currentTarget.style.background = t.hover; }} onMouseLeave={(e) => { e.currentTarget.style.background = t.panel; }}>
+                              <Icon name="download" size={15} /> {pdfBusy === o.id ? 'Gerando…' : 'Exportar PDF'}
+                            </button>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <button onClick={() => setXfer({ srcId: o.id, srcLabel: o.n })} title="Transferir todas as movimentações para outra OP"
                                 style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 38, borderRadius: 9, fontSize: 12.5, fontWeight: 700, color: t.accentText, border: `1px solid ${t.border}`, background: t.panel }}
